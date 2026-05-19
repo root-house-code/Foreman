@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 import { FmNavContext } from "./context/FmNavContext";
+import { migrateToEntityTypes } from "../lib/entityTypes.js";
+import { initRoomsFromCategories } from "../lib/rooms.js";
 import HomeMaintenanceTable from "../home-maintenance.jsx";
 import InventoryPage from "../inventory-page.jsx";
 import BoardPage from "../board-page.jsx";
@@ -9,6 +11,10 @@ import GuidePage from "../guide-page.jsx";
 import ChoresPage from "../chores-page.jsx";
 import CalendarPage from "../calendar-page.jsx";
 import PreferencesPage from "../preferences-page.jsx";
+
+// Run once at module load — idempotent, safe to re-run on HMR
+migrateToEntityTypes();
+initRoomsFromCategories();
 
 const PAGE_KEYS = {
   dashboard: "Dashboard",

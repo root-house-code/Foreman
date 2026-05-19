@@ -6,7 +6,7 @@ import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import {
   loadChores, saveChores, createChore,
   loadChoreNextDates, saveChoreNextDates,
-  computeNextOccurrenceFromStart,
+  computeNextOccurrenceFromStart, computeChoreNextDate,
 } from "./lib/chores.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
@@ -19,6 +19,7 @@ import {
 } from "./lib/maintenance.js";
 import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
+  saveChoreCompletionRecord,
 } from "./lib/choreCompletions.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -176,6 +177,39 @@ function checkMaintenanceCompleted(key, projectedDate, schedule, maintenanceDate
   return last > prevDue && last <= new Date(projectedDate.getTime() + 86400000);
 }
 
+function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter) {
+  const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+  const events = [];
+  for (const chore of chores) {
+    if (!chore.startDate || !chore.schedule) continue;
+    if (activeFilter !== "All" && chore.room !== activeFilter) continue;
+    const days = getChoreMonthOccurrences(chore.startDate, chore.schedule, chore.dayOfWeek, y, m);
+    if (days.has(d)) {
+      const dt = new Date(y, m, d);
+      events.push({ type: "chore", chore, date: dt, isCompleted: isChoreCompleted(choreCompletions, chore.id, dt) });
+    }
+  }
+  for (const row of maintenanceRows) {
+    const key = maintenanceKey(row);
+    const anchor = maintenanceStartDates[key];
+    if (activeFilter !== "All" && row.category !== activeFilter) continue;
+    if (anchor) {
+      const days = getMaintenanceMonthOccurrences(anchor, row.schedule, row.season, y, m);
+      if (days.has(d)) {
+        const dt = new Date(y, m, d);
+        events.push({ type: "maintenance", row, key, isCompleted: checkMaintenanceCompleted(key, dt, row.schedule, maintenanceDates) });
+      }
+    } else {
+      const nextStr = maintenanceNextDates[key];
+      if (!nextStr) continue;
+      const nextDate = new Date(nextStr);
+      if (nextDate.getFullYear() === y && nextDate.getMonth() === m && nextDate.getDate() === d)
+        events.push({ type: "maintenance", row, key, isCompleted: false });
+    }
+  }
+  return events;
+}
+
 // Next n upcoming chore occurrences from today.
 function getChoreUpcoming(chore, n = 3) {
   if (!chore.startDate || !chore.schedule) return [];
@@ -220,6 +254,24 @@ function getMaintenanceUpcoming(startDateStr, schedule, n = 3) {
   return results;
 }
 
+
+function buildRoomItemsMap() {
+  const deletedCats  = loadDeletedCategories();
+  const deletedItems = loadDeletedItems();
+  const rows = loadData().filter(r =>
+    r.category && r.item && !r._isBlankCategory &&
+    !deletedCats.has(r.category) &&
+    !deletedItems.has(`${r.category}|${r.item}`)
+  );
+  const map = {};
+  for (const r of rows) {
+    const room = r.room || r.category || "";
+    if (!room) continue;
+    if (!map[room]) map[room] = new Set();
+    map[room].add(r.item);
+  }
+  return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, [...v].sort()]));
+}
 
 // ─── CreateChoreModal ─────────────────────────────────────────────────────────
 
@@ -282,10 +334,16 @@ export default function CalendarPage({ navigate }) {
   const [view, setView]         = useState({ y: todayYear, m: todayMonth });
   const [createDate, setCreateDate]       = useState(null);
   const [selectedTaskKey, setSelectedTaskKey] = useState(null); // maintenance task awaiting start date
+  const [sidebarTab, setSidebarTab] = useState("month");
   const [activeFilter, setActiveFilter] = useState("All");
   const [roomOptions]           = useState(() => buildRoomOptions());
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [detailEvent, setDetailEvent] = useState(null); // { chore, date } | null
+  const [roomItemsMap] = useState(() => buildRoomItemsMap());
+  const [calView, setCalView] = useState("Month");
+  const [weekStart, setWeekStart] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - d.getDay()); d.setHours(0, 0, 0, 0); return d;
+  });
 
   const atYearStart = view.y === CURRENT_YEAR && view.m === 0;
   const atYearEnd   = view.y === CURRENT_YEAR && view.m === 11;
@@ -369,6 +427,42 @@ export default function CalendarPage({ navigate }) {
     ? maintenanceRows.find(r => maintenanceKey(r) === selectedTaskKey) ?? null
     : null;
 
+  // Week view: events for each of the 7 days starting at weekStart
+  const weekEvents = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
+      return { date: d, events: getEventsForDate(d, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter) };
+    });
+  }, [weekStart, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter]);
+
+  // Agenda view: next 90 days with events
+  const agendaEvents = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const result = [];
+    for (let i = 0; i < 90; i++) {
+      const d = new Date(today); d.setDate(today.getDate() + i);
+      const evts = getEventsForDate(d, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter);
+      if (evts.length > 0) result.push({ date: d, events: evts });
+    }
+    return result;
+  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter]);
+
+  // Year view: per-month event-day sets for the viewed year
+  const yearEventMap = useMemo(() => {
+    const map = {};
+    for (let m = 0; m < 12; m++) {
+      const daysInM = new Date(view.y, m + 1, 0).getDate();
+      const days = new Set();
+      for (let d = 1; d <= daysInM; d++) {
+        const dt = new Date(view.y, m, d);
+        const evts = getEventsForDate(dt, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, "All");
+        if (evts.length > 0) days.add(d);
+      }
+      map[m] = days;
+    }
+    return map;
+  }, [view.y, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions]);
+
   function handleCellClick(day) {
     const date = new Date(view.y, view.m, day);
     if (selectedTaskKey) {
@@ -390,6 +484,20 @@ export default function CalendarPage({ navigate }) {
       const next      = computeNextOccurrenceFromStart(date, newChore.schedule, newChore.dayOfWeek, newChore.timeOfDay);
       const nextDates = { ...loadChoreNextDates(), [newChore.id]: next.toISOString() };
       saveChoreNextDates(nextDates);
+    }
+  }
+
+  function handleMarkDoneWithDetails(choreId, date, details) {
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
+    const updatedCompletions = toggleChoreCompletion(choreCompletions, choreId, d);
+    saveChoreCompletions(updatedCompletions);
+    setChoreCompletions(updatedCompletions);
+    saveChoreCompletionRecord(choreId, d, details);
+    const chore = chores.find(c => c.id === choreId);
+    if (chore) {
+      const nextOcc = computeChoreNextDate(d, chore.schedule, chore.dayOfWeek, chore.timeOfDay);
+      const updated = { ...loadChoreNextDates(), [choreId]: nextOcc.toISOString() };
+      saveChoreNextDates(updated);
     }
   }
 
@@ -423,6 +531,8 @@ export default function CalendarPage({ navigate }) {
             saveChoreCompletions(next);
             setChoreCompletions(next);
           }}
+          onMarkDone={details => handleMarkDoneWithDetails(detailEvent.chore.id, detailEvent.date, details)}
+          roomItemsMap={roomItemsMap}
           onClose={() => setDetailEvent(null)}
         />
       )}
@@ -431,7 +541,8 @@ export default function CalendarPage({ navigate }) {
       <FmHeader active="Calendar" tagline="Calendar" />
       <FmSubnav
         tabs={["Month", "Week", "Agenda", "Year"]}
-        active="Month"
+        active={calView}
+        onTabChange={setCalView}
         stats={[
           { value: Object.values(eventsByDay).flat().filter(e => e.type === "maintenance").length, label: "tasks" },
           { value: Object.values(eventsByDay).flat().filter(e => e.type === "chore").length, label: "chores" },
@@ -439,205 +550,240 @@ export default function CalendarPage({ navigate }) {
         ]}
       />
 
-      {/* Controls + filter bar — mirrors stats-row → CategoryTabs pattern of Maintenance/Chores */}
-      <div style={{ flexShrink: 0, padding: "2rem 2rem 0" }}>
-
-        {/* Month nav */}
-        <div style={{ alignItems: "center", display: "flex", marginBottom: "1.25rem", minHeight: "36px" }}>
-          <button
-            style={navBtnStyle(atYearStart)} onClick={prevMonth}
-            onMouseEnter={e => { if (!atYearStart) e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { if (!atYearStart) e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >‹</button>
-          <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", letterSpacing: "0.02em", minWidth: "11rem", textAlign: "center" }}>
-            {CAL_MONTHS[view.m]} {view.y}
-          </span>
-          <button
-            style={navBtnStyle(atYearEnd)} onClick={nextMonth}
-            onMouseEnter={e => { if (!atYearEnd) e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { if (!atYearEnd) e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >›</button>
-        </div>
-
-        <CategoryTabs
-          special={["All"]}
-          groups={[
-            ...(choreRooms.length > 0     ? [{ type: "room",        label: "Rooms",       tabs: choreRooms      }] : []),
-            ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []),
-          ]}
-          active={activeFilter}
-          onSelect={setActiveFilter}
-        />
-      </div>
-
-      {/* Body */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-
-        {/* Calendar area */}
-        <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", padding: "0 1.25rem 0.75rem" }}>
-
-          {/* DOW headers */}
-          <div style={{ display: "grid", flexShrink: 0, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: "2px" }}>
-            {CAL_DOWS.map(d => (
-              <div key={d} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.15rem 0.4rem", textAlign: "center" }}>{d}</div>
-            ))}
+      {/* ── MONTH VIEW ─────────────────────────────────────────────────────── */}
+      {calView === "Month" && <>
+        <div style={{ flexShrink: 0, padding: "2rem 2rem 0" }}>
+          <div style={{ alignItems: "center", display: "flex", marginBottom: "1.25rem", minHeight: "36px" }}>
+            <button style={navBtnStyle(atYearStart)} onClick={prevMonth} onMouseEnter={e => { if (!atYearStart) e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { if (!atYearStart) e.currentTarget.style.color = "var(--fm-brass-dim)"; }}>‹</button>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", letterSpacing: "0.02em", minWidth: "11rem", textAlign: "center" }}>{CAL_MONTHS[view.m]} {view.y}</span>
+            <button style={navBtnStyle(atYearEnd)} onClick={nextMonth} onMouseEnter={e => { if (!atYearEnd) e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { if (!atYearEnd) e.currentTarget.style.color = "var(--fm-brass-dim)"; }}>›</button>
           </div>
-
-          {/* Grid */}
-          <div style={{ display: "grid", flex: 1, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", gridTemplateRows: `repeat(${numRows}, 1fr)`, overflow: "hidden" }}>
-
-            {/* Leading: prev-month days */}
-            {Array.from({ length: firstDow }, (_, i) => {
-              const day = prevMonthDays - firstDow + i + 1;
-              return (
-                <div key={`prev${i}`} style={{ border: "1px solid var(--fm-hairline)", borderRadius: "3px", opacity: 0.3, padding: "3px 4px 2px" }}>
-                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-serif)", fontSize: "0.75rem", textAlign: "center" }}>{day}</div>
-                </div>
-              );
-            })}
-
-            {/* Current month days */}
-            {Array.from({ length: daysInMonth }, (_, i) => {
-              const day        = i + 1;
-              const isToday    = view.y === todayYear && view.m === todayMonth && day === todayDay;
-              const dayEvents  = eventsByDay[day] ?? [];
-              const visible    = dayEvents.slice(0, MAX_CHIPS);
-              const overflow   = dayEvents.length - visible.length;
-              const awaitingDate = !!selectedTaskKey;
-              return (
-                <div
-                  key={day}
-                  onClick={() => handleCellClick(day)}
-                  style={{
-                    background: isToday ? "var(--fm-brass-bg)" : "transparent",
-                    border: `1px solid ${isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`,
-                    borderRadius: "3px", cursor: "pointer", overflow: "hidden",
-                    padding: "3px 4px 2px", transition: "background 0.1s",
-                  }}
-                  onMouseEnter={e => { if (!isToday) e.currentTarget.style.background = awaitingDate ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)"; }}
-                  onMouseLeave={e => { if (!isToday) e.currentTarget.style.background = "transparent"; }}
-                >
-                  {/* Day number */}
-                  <div style={{ fontFamily: "var(--fm-serif)", fontSize: "0.75rem", marginBottom: "2px", textAlign: "center" }}>
-                    {isToday ? (
-                      <span style={{ alignItems: "center", background: "var(--fm-brass)", borderRadius: "50%", color: "var(--fm-bg)", display: "inline-flex", height: "18px", justifyContent: "center", width: "18px" }}>{day}</span>
-                    ) : (
-                      <span style={{ color: "var(--fm-ink-dim)" }}>{day}</span>
-                    )}
+          <CategoryTabs special={["All"]} groups={[ ...(choreRooms.length > 0 ? [{ type: "room", label: "Rooms", tabs: choreRooms }] : []), ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []) ]} active={activeFilter} onSelect={setActiveFilter} />
+        </div>
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", padding: "0 1.25rem 0.75rem" }}>
+            <div style={{ display: "grid", flexShrink: 0, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: "2px" }}>
+              {CAL_DOWS.map(d => <div key={d} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.15rem 0.4rem", textAlign: "center" }}>{d}</div>)}
+            </div>
+            <div style={{ display: "grid", flex: 1, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", gridTemplateRows: `repeat(${numRows}, 1fr)`, overflow: "hidden" }}>
+              {Array.from({ length: firstDow }, (_, i) => {
+                const day = prevMonthDays - firstDow + i + 1;
+                return <div key={`prev${i}`} style={{ border: "1px solid var(--fm-hairline)", borderRadius: "3px", opacity: 0.3, padding: "3px 4px 2px" }}><div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-serif)", fontSize: "0.75rem", textAlign: "center" }}>{day}</div></div>;
+              })}
+              {Array.from({ length: daysInMonth }, (_, i) => {
+                const day = i + 1;
+                const isToday = view.y === todayYear && view.m === todayMonth && day === todayDay;
+                const dayEvents = eventsByDay[day] ?? [];
+                const visible = dayEvents.slice(0, MAX_CHIPS);
+                const overflow = dayEvents.length - visible.length;
+                const awaitingDate = !!selectedTaskKey;
+                return (
+                  <div key={day} onClick={() => handleCellClick(day)} style={{ background: isToday ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "3px", cursor: "pointer", overflow: "hidden", padding: "3px 4px 2px", transition: "background 0.1s" }} onMouseEnter={e => { if (!isToday) e.currentTarget.style.background = awaitingDate ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)"; }} onMouseLeave={e => { if (!isToday) e.currentTarget.style.background = "transparent"; }}>
+                    <div style={{ fontFamily: "var(--fm-serif)", fontSize: "0.75rem", marginBottom: "2px", textAlign: "center" }}>
+                      {isToday ? <span style={{ alignItems: "center", background: "var(--fm-brass)", borderRadius: "50%", color: "var(--fm-bg)", display: "inline-flex", height: "18px", justifyContent: "center", width: "18px" }}>{day}</span> : <span style={{ color: "var(--fm-ink-dim)" }}>{day}</span>}
+                    </div>
+                    {visible.map((evt, idx) => {
+                      const isMaint = evt.type === "maintenance";
+                      const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
+                      const label = isMaint ? evt.row.item : evt.chore.title;
+                      const clickable = !isMaint;
+                      return <div key={idx} onClick={clickable ? e => { e.stopPropagation(); setDetailEvent({ chore: evt.chore, date: evt.date }); } : undefined} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: clickable ? "pointer" : "default", marginBottom: "1px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "1px 3px" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "rgba(255,255,255,0.05)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}><span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span></div>;
+                    })}
+                    {overflow > 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", padding: "0 3px" }}>+{overflow} more</div>}
                   </div>
-                  {/* Event stripes */}
-                  {visible.map((evt, idx) => {
-                    const isMaint   = evt.type === "maintenance";
-                    const color     = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
-                    const label     = isMaint ? evt.row.item : evt.chore.title;
-                    const clickable = !isMaint;
-                    return (
-                      <div
-                        key={idx}
-                        onClick={clickable ? e => { e.stopPropagation(); setDetailEvent({ chore: evt.chore, date: evt.date }); } : undefined}
-                        style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: clickable ? "pointer" : "default", marginBottom: "1px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "1px 3px" }}
-                        onMouseEnter={clickable ? e => e.currentTarget.style.background = "rgba(255,255,255,0.05)" : undefined}
-                        onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}
-                      >
-                        <span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-                      </div>
-                    );
-                  })}
-                  {overflow > 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", padding: "0 3px" }}>+{overflow} more</div>}
+                );
+              })}
+              {Array.from({ length: trailingDays }, (_, i) => <div key={`next${i}`} style={{ border: "1px solid var(--fm-hairline)", borderRadius: "3px", opacity: 0.3, padding: "3px 4px 2px" }}><div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-serif)", fontSize: "0.75rem", textAlign: "center" }}>{i + 1}</div></div>)}
+            </div>
+          </div>
+          {/* Right panel */}
+          <div style={{ borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: "320px" }}>
+            {selectedTaskKey && selectedTaskRow && (
+              <div style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", flexShrink: 0, margin: "0.75rem", padding: "0.65rem 0.75rem" }}>
+                <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>Set Start Date</div>
+                <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", marginBottom: "0.25rem" }}>{selectedTaskRow.item} · {selectedTaskRow.task}</div>
+                <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginBottom: "0.4rem" }}>Click a date on the calendar.</div>
+                <button onClick={() => setSelectedTaskKey(null)} style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.63rem", padding: 0 }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>× cancel</button>
+              </div>
+            )}
+            <div style={{ borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0 }}>
+              {[{ id: "month", label: `${CAL_MONTHS[view.m]} ${view.y}` }, { id: "schedule", label: `To Schedule${unscheduledMaintenance.length ? ` (${unscheduledMaintenance.length})` : ""}` }].map(tab => (
+                <button key={tab.id} onClick={() => setSidebarTab(tab.id)} style={{ background: "transparent", border: "none", borderBottom: sidebarTab === tab.id ? "2px solid var(--fm-brass)" : "2px solid transparent", color: sidebarTab === tab.id ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", padding: "0.6rem 0.5rem", textTransform: "uppercase", transition: "color 0.12s" }}>{tab.label}</button>
+              ))}
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "0.75rem 1.25rem" }}>
+              {sidebarTab === "month" && (
+                <>
+                  {Object.keys(eventsByDay).length === 0 ? (
+                    <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.5rem 0" }}>No events this month</div>
+                  ) : (
+                    Object.keys(eventsByDay).map(Number).sort((a, b) => a - b).flatMap(day =>
+                      eventsByDay[day].map((evt, idx) => {
+                        const isMaint = evt.type === "maintenance";
+                        const tag = isMaint ? getSysTag(evt.row.category) : "CHORE";
+                        const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
+                        const label = isMaint ? `${evt.row.item} · ${evt.row.task}` : evt.chore.title;
+                        const clickable = !isMaint;
+                        return (
+                          <div key={`${day}-${idx}`} onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date: new Date(view.y, view.m, day) }) : undefined} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: clickable ? "pointer" : "default", display: "flex", gap: "0.5rem", padding: "0.32rem 0" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "var(--fm-bg-raised)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}>
+                            <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-serif)", fontSize: "0.88rem", minWidth: "20px", textAlign: "right" }}>{day}</span>
+                            <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: tagColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>{tag}</span>
+                            <span style={{ color: evt.isCompleted ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+                          </div>
+                        );
+                      })
+                    )
+                  )}
+                </>
+              )}
+              {sidebarTab === "schedule" && (
+                <>
+                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginBottom: "0.75rem" }}>Select a task, then click a date on the calendar.</div>
+                  {unscheduledMaintenance.length === 0 ? (
+                    <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>All tasks are scheduled.</div>
+                  ) : (
+                    unscheduledMaintenance.map(row => {
+                      const key = maintenanceKey(row);
+                      const isActive = selectedTaskKey === key;
+                      return (
+                        <div key={key} onClick={() => setSelectedTaskKey(prev => prev === key ? null : key)} style={{ background: isActive ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${isActive ? "var(--fm-brass)" : "transparent"}`, borderRadius: "var(--fm-radius)", cursor: "pointer", marginBottom: "0.3rem", padding: "0.3rem 0.4rem", transition: "all 0.1s" }} onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "var(--fm-bg-raised)"; }} onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
+                          <div style={{ color: isActive ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem" }}>{row.item} · {row.task}</div>
+                          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{row.category} · {row.schedule}</div>
+                        </div>
+                      );
+                    })
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </>}
+
+      {/* ── WEEK VIEW ──────────────────────────────────────────────────────── */}
+      {calView === "Week" && <>
+        <div style={{ flexShrink: 0, padding: "2rem 2rem 0" }}>
+          <div style={{ alignItems: "center", display: "flex", marginBottom: "1.25rem", minHeight: "36px" }}>
+            <button style={navBtnStyle(false)} onClick={() => setWeekStart(d => { const n = new Date(d); n.setDate(d.getDate() - 7); return n; })} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>‹</button>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", letterSpacing: "0.02em", minWidth: "16rem", textAlign: "center" }}>
+              {CAL_MONTHS_SHORT[weekStart.getMonth()]} {weekStart.getDate()} – {(() => { const e = new Date(weekStart); e.setDate(weekStart.getDate() + 6); return `${CAL_MONTHS_SHORT[e.getMonth()]} ${e.getDate()}, ${e.getFullYear()}`; })()}
+            </span>
+            <button style={navBtnStyle(false)} onClick={() => setWeekStart(d => { const n = new Date(d); n.setDate(d.getDate() + 7); return n; })} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>›</button>
+          </div>
+          <CategoryTabs special={["All"]} groups={[ ...(choreRooms.length > 0 ? [{ type: "room", label: "Rooms", tabs: choreRooms }] : []), ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []) ]} active={activeFilter} onSelect={setActiveFilter} />
+        </div>
+        <div style={{ display: "flex", flex: 1, overflow: "hidden", padding: "0 1.25rem 0.75rem" }}>
+          <div style={{ display: "grid", flex: 1, gap: "4px", gridTemplateColumns: "repeat(7, 1fr)", overflow: "hidden" }}>
+            {weekEvents.map(({ date, events }) => {
+              const isToday = date.getFullYear() === todayYear && date.getMonth() === todayMonth && date.getDate() === todayDay;
+              return (
+                <div key={date.toISOString()} style={{ border: `1px solid ${isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "4px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                  <div style={{ background: isToday ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)", borderBottom: "1px solid var(--fm-hairline)", flexShrink: 0, padding: "0.35rem 0.5rem", textAlign: "center" }}>
+                    <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>{CAL_DOWS[date.getDay()]}</div>
+                    <div style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1rem" }}>{date.getDate()}</div>
+                  </div>
+                  <div style={{ flex: 1, overflowY: "auto", padding: "0.3rem" }}>
+                    {events.length === 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", padding: "0.2rem 0.1rem" }}>—</div>}
+                    {events.map((evt, idx) => {
+                      const isMaint = evt.type === "maintenance";
+                      const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
+                      const label = isMaint ? evt.row.item : evt.chore.title;
+                      const clickable = !isMaint;
+                      return (
+                        <div key={idx} onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date }) : undefined} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: clickable ? "pointer" : "default", marginBottom: "2px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "2px 4px" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "rgba(255,255,255,0.05)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}>
+                          <span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ borderTop: "1px solid var(--fm-hairline)", flexShrink: 0, padding: "0.25rem" }}>
+                    <button onClick={() => setCreateDate(date)} style={{ background: "transparent", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", padding: "0.1rem 0.2rem", width: "100%" }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>+ chore</button>
+                  </div>
                 </div>
               );
             })}
-
-            {/* Trailing: next-month days */}
-            {Array.from({ length: trailingDays }, (_, i) => (
-              <div key={`next${i}`} style={{ border: "1px solid var(--fm-hairline)", borderRadius: "3px", opacity: 0.3, padding: "3px 4px 2px" }}>
-                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-serif)", fontSize: "0.75rem", textAlign: "center" }}>{i + 1}</div>
-              </div>
-            ))}
           </div>
         </div>
+      </>}
 
-        {/* Right panel — Agenda */}
-        <div style={{ borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: "320px" }}>
-
-          {/* Start-date-setting prompt */}
-          {selectedTaskKey && selectedTaskRow && (
-            <div style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", flexShrink: 0, margin: "0.75rem", padding: "0.65rem 0.75rem" }}>
-              <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>Set Start Date</div>
-              <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", marginBottom: "0.25rem" }}>{selectedTaskRow.item} · {selectedTaskRow.task}</div>
-              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginBottom: "0.4rem" }}>Click a date on the calendar.</div>
-              <button onClick={() => setSelectedTaskKey(null)} style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.63rem", padding: 0 }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>× cancel</button>
-            </div>
-          )}
-
-          <div style={{ flex: 1, overflowY: "auto", padding: "0.75rem 1.25rem" }}>
-
-            {/* Agenda header */}
-            <div style={{ borderBottom: "1px solid var(--fm-hairline)", marginBottom: "0.5rem", paddingBottom: "0.5rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                {CAL_MONTHS[view.m]} {view.y}
-              </span>
-            </div>
-
-            {/* Agenda events */}
-            {Object.keys(eventsByDay).length === 0 ? (
-              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.5rem 0" }}>No events this month</div>
+      {/* ── AGENDA VIEW ────────────────────────────────────────────────────── */}
+      {calView === "Agenda" && (
+        <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem" }}>
+          <CategoryTabs special={["All"]} groups={[ ...(choreRooms.length > 0 ? [{ type: "room", label: "Rooms", tabs: choreRooms }] : []), ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []) ]} active={activeFilter} onSelect={setActiveFilter} />
+          <div style={{ marginTop: "1.25rem" }}>
+            {agendaEvents.length === 0 ? (
+              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>No upcoming events in the next 90 days.</div>
             ) : (
-              Object.keys(eventsByDay).map(Number).sort((a, b) => a - b).flatMap(day =>
-                eventsByDay[day].map((evt, idx) => {
-                  const isMaint  = evt.type === "maintenance";
-                  const tag      = isMaint ? getSysTag(evt.row.category) : "CHORE";
-                  const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
-                  const label    = isMaint ? `${evt.row.item} · ${evt.row.task}` : evt.chore.title;
-                  const clickable = !isMaint;
-                  return (
-                    <div
-                      key={`${day}-${idx}`}
-                      onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date: new Date(view.y, view.m, day) }) : undefined}
-                      style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: clickable ? "pointer" : "default", display: "flex", gap: "0.5rem", padding: "0.32rem 0" }}
-                      onMouseEnter={clickable ? e => e.currentTarget.style.background = "var(--fm-bg-raised)" : undefined}
-                      onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}
-                    >
-                      <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-serif)", fontSize: "0.88rem", minWidth: "20px", textAlign: "right" }}>{day}</span>
-                      <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: tagColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>{tag}</span>
-                      <span style={{ color: evt.isCompleted ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+              agendaEvents.map(({ date, events }) => {
+                const isToday = date.getFullYear() === todayYear && date.getMonth() === todayMonth && date.getDate() === todayDay;
+                return (
+                  <div key={date.toISOString()} style={{ marginBottom: "1.25rem" }}>
+                    <div style={{ alignItems: "baseline", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
+                      <span style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1.3rem", minWidth: "2rem" }}>{date.getDate()}</span>
+                      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>{CAL_DOWS_LONG[date.getDay()]}, {CAL_MONTHS[date.getMonth()]} {date.getFullYear()}</span>
+                      {isToday && <span style={{ background: "var(--fm-brass)", borderRadius: "10px", color: "var(--fm-bg)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.08em", padding: "0.1rem 0.45rem", textTransform: "uppercase" }}>Today</span>}
                     </div>
-                  );
-                })
-              )
-            )}
-
-            {/* To Schedule */}
-            {unscheduledMaintenance.length > 0 && (
-              <>
-                <div style={{ borderTop: "1px solid var(--fm-hairline)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", marginTop: "1rem", paddingTop: "0.85rem", textTransform: "uppercase" }}>
-                  To Schedule ({unscheduledMaintenance.length})
-                </div>
-                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", margin: "0.4rem 0 0.6rem" }}>
-                  Select a task, then click a date.
-                </div>
-                {unscheduledMaintenance.map(row => {
-                  const key      = maintenanceKey(row);
-                  const isActive = selectedTaskKey === key;
-                  return (
-                    <div
-                      key={key}
-                      onClick={() => setSelectedTaskKey(prev => prev === key ? null : key)}
-                      style={{ background: isActive ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${isActive ? "var(--fm-brass)" : "transparent"}`, borderRadius: "var(--fm-radius)", cursor: "pointer", marginBottom: "0.3rem", padding: "0.3rem 0.4rem", transition: "all 0.1s" }}
-                      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "var(--fm-bg-raised)"; }}
-                      onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
-                    >
-                      <div style={{ color: isActive ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem" }}>{row.item} · {row.task}</div>
-                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{row.category} · {row.schedule}</div>
-                    </div>
-                  );
-                })}
-              </>
+                    {events.map((evt, idx) => {
+                      const isMaint = evt.type === "maintenance";
+                      const tag = isMaint ? getSysTag(evt.row.category) : "CHORE";
+                      const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
+                      const label = isMaint ? `${evt.row.item} · ${evt.row.task}` : evt.chore.title;
+                      const sub = isMaint ? evt.row.schedule : evt.chore.schedule;
+                      const clickable = !isMaint;
+                      return (
+                        <div key={idx} onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date }) : undefined} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: clickable ? "pointer" : "default", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", opacity: evt.isCompleted ? 0.45 : 1, padding: "0.35rem 0.3rem" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "var(--fm-bg-raised)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}>
+                          <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: tagColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>{tag}</span>
+                          <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", textDecoration: evt.isCompleted ? "line-through" : "none" }}>{label}</span>
+                          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{sub}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
+      )}
 
-      </div>
+      {/* ── YEAR VIEW ──────────────────────────────────────────────────────── */}
+      {calView === "Year" && (
+        <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem" }}>
+          <div style={{ alignItems: "center", display: "flex", marginBottom: "1.5rem" }}>
+            <button style={navBtnStyle(view.y <= CURRENT_YEAR)} onClick={() => setView(v => ({ ...v, y: v.y - 1 }))} onMouseEnter={e => { if (view.y > CURRENT_YEAR) e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>‹</button>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.15rem", minWidth: "5rem", textAlign: "center" }}>{view.y}</span>
+            <button style={navBtnStyle(false)} onClick={() => setView(v => ({ ...v, y: v.y + 1 }))} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>›</button>
+          </div>
+          <div style={{ display: "grid", gap: "1.5rem", gridTemplateColumns: "repeat(4, 1fr)" }}>
+            {Array.from({ length: 12 }, (_, m) => {
+              const dim = new Date(view.y, m + 1, 0).getDate();
+              const fdow = new Date(view.y, m, 1).getDay();
+              const eventDays = yearEventMap[m] ?? new Set();
+              const isCurrentMonth = view.y === todayYear && m === todayMonth;
+              return (
+                <div key={m} onClick={() => { setView({ y: view.y, m }); setCalView("Month"); }} style={{ background: isCurrentMonth ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)", border: `1px solid ${isCurrentMonth ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "6px", cursor: "pointer", padding: "0.75rem" }} onMouseEnter={e => { if (!isCurrentMonth) e.currentTarget.style.borderColor = "var(--fm-hairline2)"; }} onMouseLeave={e => { if (!isCurrentMonth) e.currentTarget.style.borderColor = "var(--fm-hairline)"; }}>
+                  <div style={{ color: isCurrentMonth ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "0.85rem", marginBottom: "0.5rem", textAlign: "center" }}>{CAL_MONTHS[m]}</div>
+                  <div style={{ display: "grid", gap: "1px", gridTemplateColumns: "repeat(7, 1fr)" }}>
+                    {CAL_DOWS.map(d => <div key={d} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.42rem", textAlign: "center" }}>{d[0]}</div>)}
+                    {Array.from({ length: fdow }, (_, i) => <div key={`p${i}`} />)}
+                    {Array.from({ length: dim }, (_, i) => {
+                      const day = i + 1;
+                      const isToday = isCurrentMonth && day === todayDay;
+                      const hasEvt = eventDays.has(day);
+                      return (
+                        <div key={day} style={{ alignItems: "center", display: "flex", flexDirection: "column", justifyContent: "center", padding: "1px 0" }}>
+                          <span style={{ alignItems: "center", background: isToday ? "var(--fm-brass)" : "transparent", borderRadius: "50%", color: isToday ? "var(--fm-bg)" : hasEvt ? "var(--fm-ink)" : "var(--fm-ink-mute)", display: "inline-flex", fontFamily: "var(--fm-mono)", fontSize: "0.48rem", height: "12px", justifyContent: "center", width: "12px" }}>{day}</span>
+                          {hasEvt && !isToday && <span style={{ background: "var(--fm-cyan)", borderRadius: "50%", display: "block", height: "3px", marginTop: "1px", width: "3px" }} />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -5,20 +5,60 @@ import AssigneeInput from "./AssigneeInput.jsx";
 import ImageAttachments from "./ImageAttachments.jsx";
 import { fieldLabel, fieldInput, fieldSelect, DueDateBtn, STATUS_COLUMNS, PRIORITY_LABELS } from "./ModalShared.jsx";
 
-export default function TodoModal({ todo, categories, categoryItems, projects, onSave, onClose, onDelete }) {
+function TaskCheckbox({ completed, onToggle }) {
+  return (
+    <button
+      onClick={onToggle}
+      style={{ alignItems: "center", background: completed ? "var(--fm-brass-bg)" : "transparent", border: completed ? "1px solid rgba(201,169,110,0.4)" : "1px solid #2b3140", borderRadius: "3px", cursor: "pointer", display: "flex", flexShrink: 0, height: 16, justifyContent: "center", padding: 0, width: 16 }}
+    >
+      {completed && <span style={{ color: "var(--fm-brass)", fontSize: "0.55rem", lineHeight: 1 }}>✓</span>}
+    </button>
+  );
+}
+
+export default function TodoModal({ todo, categories, categoryItems, spatialCategories, functionalCategories, projects, onSave, onClose, onDelete }) {
   const [form, setForm] = useState(todo ? {
     ...todo,
     labels: todo.labels || [],
     estimatedCost: todo.estimatedCost ?? "",
     images: todo.images || [],
+    tasks: todo.tasks || [],
+    linkedRoom: todo.linkedRoom || null,
+    linkedSystem: todo.linkedSystem || null,
   } : {
     title: "", description: "", status: "not-started", priority: "medium",
     dueDate: null, assignee: "", labels: [], estimatedCost: "",
-    linkedCategory: null, linkedItem: null, projectId: null, images: [],
+    linkedCategory: null, linkedItem: null, linkedRoom: null, linkedSystem: null,
+    projectId: null, images: [], tasks: [],
   });
+
+  // Derive spatial/functional lists from props or fall back to full categories list
+  const roomOptions = spatialCategories || categories || [];
+  const systemOptions = functionalCategories || [];
+
+  const [addingTask, setAddingTask] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
   const linkedItems = form.linkedCategory ? (categoryItems[form.linkedCategory] || []) : [];
+
+  function handleToggleTask(taskId) {
+    set("tasks", form.tasks.map(t => t.id === taskId ? { ...t, completed: !t.completed } : t));
+  }
+
+  function handleDeleteTask(taskId) {
+    set("tasks", form.tasks.filter(t => t.id !== taskId));
+  }
+
+  function handleAddTask() {
+    const title = newTaskTitle.trim();
+    if (title) {
+      const task = { id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, title, completed: false };
+      set("tasks", [...form.tasks, task]);
+    }
+    setAddingTask(false);
+    setNewTaskTitle("");
+  }
 
   return createPortal(
     <div
@@ -104,18 +144,41 @@ export default function TodoModal({ todo, categories, categoryItems, projects, o
 
         <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
           <div style={{ flex: 1 }}>
-            <label style={fieldLabel}>Category</label>
-            <select value={form.linkedCategory || ""} style={fieldSelect}
-              onChange={e => { set("linkedCategory", e.target.value || null); set("linkedItem", null); }}>
+            <label style={fieldLabel}>Room</label>
+            <select
+              value={form.linkedRoom || ""}
+              style={fieldSelect}
+              onChange={e => {
+                const val = e.target.value || null;
+                set("linkedRoom", val);
+                // Keep linkedCategory in sync: room takes priority
+                set("linkedCategory", val || form.linkedSystem || null);
+                set("linkedItem", null);
+              }}>
               <option value="">None</option>
-              {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              {roomOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={fieldLabel}>System</label>
+            <select
+              value={form.linkedSystem || ""}
+              style={fieldSelect}
+              onChange={e => {
+                const val = e.target.value || null;
+                set("linkedSystem", val);
+                // Keep linkedCategory in sync: room takes priority over system
+                if (!form.linkedRoom) set("linkedCategory", val);
+              }}>
+              <option value="">None</option>
+              {systemOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
             </select>
           </div>
           <div style={{ flex: 1 }}>
             <label style={fieldLabel}>Item</label>
             <select value={form.linkedItem || ""} onChange={e => set("linkedItem", e.target.value || null)}
               style={{ ...fieldSelect, opacity: !form.linkedCategory ? 0.4 : 1 }} disabled={!form.linkedCategory}>
-              <option value="">Category-level</option>
+              <option value="">—</option>
               {linkedItems.map(item => <option key={item} value={item}>{item}</option>)}
             </select>
           </div>
@@ -142,6 +205,39 @@ export default function TodoModal({ todo, categories, categoryItems, projects, o
           <span style={{ color: "#a8a29c", fontFamily: "monospace", fontSize: "0.6rem", marginTop: "0.25rem", display: "block" }}>
             Comma-separated
           </span>
+        </div>
+
+        {/* Checklist */}
+        <div style={{ borderTop: "1px solid #1e2330", marginBottom: "1rem", paddingTop: "0.85rem" }}>
+          <label style={{ ...fieldLabel, marginBottom: "0.5rem" }}>Checklist</label>
+          {form.tasks.map(task => (
+            <div key={task.id} style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>
+              <TaskCheckbox completed={task.completed} onToggle={() => handleToggleTask(task.id)} />
+              <span style={{ color: task.completed ? "#6b7280" : "#d1cfc9", flex: 1, fontFamily: "var(--fm-sans, system-ui, sans-serif)", fontSize: "0.75rem", textDecoration: task.completed ? "line-through" : "none" }}>{task.title}</span>
+              <button onClick={() => handleDeleteTask(task.id)} style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontFamily: "monospace", fontSize: "0.7rem", padding: "0 0.1rem", transition: "color 0.15s" }} onMouseEnter={e => { e.currentTarget.style.color = "#f87171"; }} onMouseLeave={e => { e.currentTarget.style.color = "#6b7280"; }}>×</button>
+            </div>
+          ))}
+          {addingTask ? (
+            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginTop: "0.3rem" }}>
+              <div style={{ border: "1px solid #2b3140", borderRadius: "3px", flexShrink: 0, height: 16, width: 16 }} />
+              <input
+                autoFocus
+                value={newTaskTitle}
+                onChange={e => setNewTaskTitle(e.target.value)}
+                placeholder="Title"
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleAddTask(); } if (e.key === "Escape") { setAddingTask(false); setNewTaskTitle(""); } }}
+                onBlur={handleAddTask}
+                style={{ ...fieldInput, flex: 1, fontSize: "0.72rem", padding: "0.2rem 0.4rem" }}
+              />
+            </div>
+          ) : (
+            <button
+              onClick={() => setAddingTask(true)}
+              style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontFamily: "monospace", fontSize: "0.65rem", letterSpacing: "0.05em", marginTop: "0.25rem", padding: "0.2rem 0", transition: "color 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.color = "#c9a96e"; }}
+              onMouseLeave={e => { e.currentTarget.style.color = "#6b7280"; }}
+            >+ Add</button>
+          )}
         </div>
 
         <div style={{ borderTop: "1px solid #1e2330", marginBottom: "1.75rem", paddingTop: "1rem" }}>

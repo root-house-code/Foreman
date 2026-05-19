@@ -15,6 +15,7 @@ import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
+import { loadEntityTypes, resolveTypeId, isSpatial } from "./lib/entityTypes.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 
 const DEFAULT_CAT_SET = new Set(defaultData.map(d => d.category));
@@ -69,8 +70,9 @@ function saveDates(key, dates) {
 export default function HomeMaintenanceTable({ navigate, navState }) {
   const [rows, setRows] = useState(() => loadData());
   const [activeStatus, setActiveStatus] = useState("ALL");
-  const [activeSystem, setActiveSystem] = useState("ALL");
-  const [activeRoom, setActiveRoom]   = useState("ALL");
+  const [systemFilter, setSystemFilter] = useState("ALL");
+  const [structureFilter, setStructureFilter] = useState("ALL");
+  const [roomFilter, setRoomFilter] = useState("ALL");
   const [search, setSearch] = useState("");
   const [activeFrequencies, setActiveFrequencies] = useState(new Set());
   const [activeSeasons, setActiveSeasons] = useState(new Set());
@@ -82,6 +84,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [deletedItems] = useState(() => loadDeletedItems());
   const [categoryTypeOverrides] = useState(() => loadCategoryTypeOverrides());
   const [roomSubtypes] = useState(() => loadRoomSubtypes());
+  const [entityTypeData] = useState(() => loadEntityTypes());
   const pageHeaderRef = useRef(null);
   const [pageHeaderHeight, setPageHeaderHeight] = useState(0);
 
@@ -100,13 +103,13 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   }, []);
 
   const categoryGroups = useMemo(() => {
-    // Scan ALL rows (including blank sentinels) so custom categories pick up
-    // the categoryType stored on their sentinel row.
+    // Build fallback type map ONLY from built-in (non-custom, non-blank) rows.
+    // Sentinel/custom rows are excluded so wrongly-tagged rows don't pollute the map.
     const catTypeMap = {};
     rows.forEach(row => {
       if (!row.category) return;
       if (!row._isCustom && deletedCategories.has(row.category)) return;
-      if (!catTypeMap[row.category] || row._isCustom) {
+      if (!catTypeMap[row.category] && !row._isCustom && !row._isBlankCategory) {
         if (row.categoryType) catTypeMap[row.category] = row.categoryType;
       }
     });
@@ -124,14 +127,25 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       catsWithContent.add(row.category);
     });
 
+    const groupTypeSet = new Set(GROUP_ORDER);
+
     return GROUP_ORDER.map(type => ({
       type,
       label: GROUP_LABELS[type],
       tabs: Array.from(catsWithContent)
-        .filter(cat => (categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "general") === type)
+        .filter(cat => {
+          const oldType = categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "general";
+          const typeId = resolveTypeId(cat, oldType);
+          // Map typeId to GROUP_ORDER bucket
+          if (groupTypeSet.has(typeId)) return typeId === type;
+          // User-created spatial types → "room" bucket
+          if (isSpatial(typeId, entityTypeData)) return type === "room";
+          // User-created functional subtypes → "system" bucket
+          return type === "system";
+        })
         .sort((a, b) => a.localeCompare(b)),
     }));
-  }, [rows, deletedCategories, categoryTypeOverrides]);
+  }, [rows, deletedCategories, categoryTypeOverrides, entityTypeData]);
 
   const categoryLabels = useMemo(() => {
     const labels = {};
@@ -145,17 +159,27 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     return labels;
   }, [categoryGroups, roomSubtypes]);
 
-  const systemCats = useMemo(() =>
-    categoryGroups.filter(g => g.type !== "room").flatMap(g => g.tabs),
-    [categoryGroups]
-  );
+  // Functional non-structure categories → Systems filter row
+  const systemCats = useMemo(() => {
+    return categoryGroups
+      .filter(g => g.type === "system" || g.type === "safety" || g.type === "general")
+      .flatMap(g => g.tabs)
+      .sort();
+  }, [categoryGroups]);
 
-  const roomCats = useMemo(() =>
-    categoryGroups.find(g => g.type === "room")?.tabs ?? [],
-    [categoryGroups]
-  );
+  // Structure-rooted categories → Structure filter row
+  const structureCats = useMemo(() => {
+    return categoryGroups.find(g => g.type === "structure")?.tabs ?? [];
+  }, [categoryGroups]);
 
-  const roomCatSet = useMemo(() => new Set(roomCats), [roomCats]);
+  // Spatial categories (room + exterior) → Rooms filter row
+  const roomCats = useMemo(() => {
+    return categoryGroups
+      .filter(g => g.type === "room" || g.type === "exterior")
+      .flatMap(g => g.tabs)
+      .sort();
+  }, [categoryGroups]);
+
 
   const activeTaskCount = useMemo(() => {
     let count = 0;
@@ -440,13 +464,9 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       if (deletedItems.has(`${row.category}|${row.item}`)) return false;
       if (deletedRows.has(key)) return false;
 
-      // System / room filter (mutually exclusive)
-      if (activeSystem !== "ALL") {
-        if (roomCatSet.has(row.category) || row.category !== activeSystem) return false;
-      }
-      if (activeRoom !== "ALL") {
-        if (!roomCatSet.has(row.category) || row.category !== activeRoom) return false;
-      }
+      if (systemFilter !== "ALL" && row.category !== systemFilter) return false;
+      if (structureFilter !== "ALL" && row.category !== structureFilter) return false;
+      if (roomFilter !== "ALL" && row.category !== roomFilter) return false;
 
       // Status filter
       if (activeStatus !== "ALL") {
@@ -488,7 +508,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       if (a._isCustom !== b._isCustom) return a._isCustom ? -1 : 1;
       return 0;
     });
-  }, [rows, activeStatus, activeSystem, activeRoom, activeFrequencies, activeSeasons, search, deletedRows, deletedCategories, deletedItems, sortCols, nextDates, roomCatSet]);
+  }, [rows, activeStatus, systemFilter, structureFilter, roomFilter, activeFrequencies, activeSeasons, search, deletedRows, deletedCategories, deletedItems, sortCols, nextDates]);
 
   const maintenanceStats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -615,24 +635,30 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
             ))}
           </div>
 
-          {/* System */}
           {systemCats.length > 0 && (
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>System</span>
-              <Pill active={activeSystem === "ALL"} onClick={() => setActiveSystem("ALL")}>All</Pill>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Systems</span>
+              <Pill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</Pill>
               {systemCats.map(cat => (
-                <Pill key={cat} active={activeSystem === cat} onClick={() => { setActiveSystem(cat); setActiveRoom("ALL"); }}>{cat}</Pill>
+                <Pill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</Pill>
               ))}
             </div>
           )}
-
-          {/* Room */}
+          {structureCats.length > 0 && (
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Structure</span>
+              <Pill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</Pill>
+              {structureCats.map(cat => (
+                <Pill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</Pill>
+              ))}
+            </div>
+          )}
           {roomCats.length > 0 && (
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Room</span>
-              <Pill active={activeRoom === "ALL"} onClick={() => setActiveRoom("ALL")}>All</Pill>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Rooms</span>
+              <Pill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</Pill>
               {roomCats.map(cat => (
-                <Pill key={cat} active={activeRoom === cat} onClick={() => { setActiveRoom(cat); setActiveSystem("ALL"); }}>{cat}</Pill>
+                <Pill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</Pill>
               ))}
             </div>
           )}

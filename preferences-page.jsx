@@ -19,6 +19,12 @@ import { storeImageFromDataUrl } from "./lib/images.js";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
 import { loadCategoryTypeOverrides, saveCategoryTypeOverrides } from "./lib/categoryTypes.js";
+import {
+  loadEntityTypes, saveEntityTypes,
+  createType, createSubtype, renameType, deleteType,
+  getBehaviorClass, getSubtypes, getRootTypesForClass, getLabelForType,
+  BUILT_IN_TYPES,
+} from "./lib/entityTypes.js";
 import InspectionReview from "./components/InspectionReview.jsx";
 import {
   getWebhookUrl, setWebhookUrl,
@@ -32,6 +38,7 @@ import {
 const NAV_ITEMS = [
   { key: "profile",        label: "Profile",           available: true  },
   { key: "household",      label: "Household",          available: true  },
+  { key: "categorytypes",  label: "Category Types",     available: true  },
   { key: "notifications",  label: "Notifications",      available: true  },
   { key: "integrations",   label: "Integrations",       available: true  },
   { key: "inspection",     label: "Upload Inspection",  available: true  },
@@ -1250,9 +1257,13 @@ function UploadInspectionSettings() {
     if (selected.appliances.length > 0) {
       const overrides = loadCategoryTypeOverrides();
       const updated = { ...overrides };
+      const defaultCatTypes = {};
+      defaultData.forEach(r => { if (r.category && r.categoryType) defaultCatTypes[r.category] = r.categoryType; });
       selected.appliances.forEach(a => {
         const resolved = resolveAppliance(a);
-        if (!updated[resolved.category]) updated[resolved.category] = "system";
+        if (!updated[resolved.category]) {
+          updated[resolved.category] = defaultCatTypes[resolved.category] || "system";
+        }
       });
       saveCategoryTypeOverrides(updated);
     }
@@ -1459,6 +1470,202 @@ function UploadInspectionSettings() {
   );
 }
 
+// ─── CategoryTypesSettings ───────────────────────────────────────────────────
+
+function TypeNode({ type, data, depth, onRename, onDelete, onAddSubtype }) {
+  const [editing, setEditing] = useState(false);
+  const [editLabel, setEditLabel] = useState(type.label);
+  const [addingChild, setAddingChild] = useState(false);
+  const [childLabel, setChildLabel] = useState("");
+  const children = getSubtypes(type.id, data);
+  const behaviorClass = getBehaviorClass(type.id, data);
+  const classColor = behaviorClass === "spatial" ? "var(--fm-cyan)" : "var(--fm-amber)";
+
+  function commitRename() {
+    const trimmed = editLabel.trim();
+    if (trimmed && trimmed !== type.label) onRename(type.id, trimmed);
+    setEditing(false);
+  }
+
+  function commitAddChild() {
+    const trimmed = childLabel.trim();
+    if (trimmed) onAddSubtype(type.id, trimmed);
+    setAddingChild(false);
+    setChildLabel("");
+  }
+
+  return (
+    <div style={{ marginLeft: depth > 0 ? "1.25rem" : 0 }}>
+      <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.45rem 0" }}>
+        {/* Indent line */}
+        {depth > 0 && <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}>└</span>}
+        {/* Class badge */}
+        <span style={{ background: `${classColor}18`, border: `1px solid ${classColor}40`, borderRadius: 3, color: classColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
+          {behaviorClass === "spatial" ? "Spatial" : "Functional"}
+        </span>
+        {/* Label / edit input */}
+        {editing ? (
+          <input
+            autoFocus
+            value={editLabel}
+            onChange={e => setEditLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") { setEditing(false); setEditLabel(type.label); } }}
+            onBlur={commitRename}
+            style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.15rem 0.4rem" }}
+          />
+        ) : (
+          <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }}>{type.label}</span>
+        )}
+        {/* Built-in badge */}
+        {type.builtIn && (
+          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.08em" }}>built-in</span>
+        )}
+        {/* Actions */}
+        {!editing && (
+          <div style={{ display: "flex", flexShrink: 0, gap: "0.35rem" }}>
+            <button
+              onClick={() => { setEditing(true); setEditLabel(type.label); }}
+              style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", padding: "0 0.2rem", transition: "color 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+              title="Rename"
+            >✎</button>
+            <button
+              onClick={() => setAddingChild(true)}
+              style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0 0.2rem", transition: "color 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+              title="Add subtype"
+            >+</button>
+            {!type.builtIn && (
+              <button
+                onClick={() => onDelete(type.id)}
+                style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0 0.2rem", transition: "color 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                title="Delete"
+              >×</button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Add subtype input */}
+      {addingChild && (
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginLeft: depth > 0 ? "1.25rem" : "0", padding: "0.3rem 0" }}>
+          <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}>└</span>
+          <input
+            autoFocus
+            value={childLabel}
+            onChange={e => setChildLabel(e.target.value)}
+            placeholder="New subtype name"
+            onKeyDown={e => { if (e.key === "Enter") commitAddChild(); if (e.key === "Escape") { setAddingChild(false); setChildLabel(""); } }}
+            onBlur={commitAddChild}
+            style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.15rem 0.4rem" }}
+          />
+        </div>
+      )}
+
+      {/* Children */}
+      {children.map(child => (
+        <TypeNode key={child.id} type={child} data={data} depth={depth + 1}
+          onRename={onRename} onDelete={onDelete} onAddSubtype={onAddSubtype} />
+      ))}
+    </div>
+  );
+}
+
+function CategoryTypesSettings() {
+  const [data, setData] = useState(() => loadEntityTypes());
+  const [addingClass, setAddingClass] = useState(null); // "spatial" | "functional" | null
+  const [newLabel, setNewLabel] = useState("");
+
+  function refresh() { setData(loadEntityTypes()); }
+
+  function handleRename(typeId, label) {
+    renameType(typeId, label);
+    refresh();
+  }
+
+  function handleDelete(typeId) {
+    try { deleteType(typeId); refresh(); } catch (e) { alert(e.message); }
+  }
+
+  function handleAddSubtype(parentId, label) {
+    createSubtype(label, parentId);
+    refresh();
+  }
+
+  function commitNewRoot() {
+    const trimmed = newLabel.trim();
+    if (trimmed && addingClass) createType(trimmed, addingClass, null);
+    setAddingClass(null);
+    setNewLabel("");
+    refresh();
+  }
+
+  const spatialRoots = getRootTypesForClass("spatial", data);
+  const functionalRoots = getRootTypesForClass("functional", data);
+
+  const sectionHead = (label, cls) => (
+    <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginTop: "1.5rem", paddingBottom: "0.4rem" }}>
+      <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1rem" }}>{label}</span>
+      <button
+        onClick={() => { setAddingClass(cls); setNewLabel(""); }}
+        style={{ background: "none", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", padding: "0.2rem 0.6rem", transition: "all 0.15s" }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+      >+ Add type</button>
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", lineHeight: 1.6, marginBottom: "0.5rem", marginTop: 0 }}>
+        Define how your categories are organized. <strong style={{ color: "var(--fm-cyan)" }}>Spatial</strong> types (rooms, exterior areas) can be drawn on the floor plan. <strong style={{ color: "var(--fm-amber)" }}>Functional</strong> types (systems, structures) are maintenance groupings.
+      </p>
+
+      {sectionHead("Spatial", "spatial")}
+      <div style={{ border: "1px solid var(--fm-hairline)", borderRadius: 4, padding: "0 0.75rem" }}>
+        {spatialRoots.map(t => (
+          <TypeNode key={t.id} type={t} data={data} depth={0}
+            onRename={handleRename} onDelete={handleDelete} onAddSubtype={handleAddSubtype} />
+        ))}
+        {addingClass === "spatial" && (
+          <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.45rem 0" }}>
+            <input
+              autoFocus value={newLabel} onChange={e => setNewLabel(e.target.value)}
+              placeholder="New spatial type name"
+              onKeyDown={e => { if (e.key === "Enter") commitNewRoot(); if (e.key === "Escape") { setAddingClass(null); } }}
+              onBlur={commitNewRoot}
+              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.15rem 0.4rem" }}
+            />
+          </div>
+        )}
+      </div>
+
+      {sectionHead("Functional", "functional")}
+      <div style={{ border: "1px solid var(--fm-hairline)", borderRadius: 4, padding: "0 0.75rem" }}>
+        {functionalRoots.map(t => (
+          <TypeNode key={t.id} type={t} data={data} depth={0}
+            onRename={handleRename} onDelete={handleDelete} onAddSubtype={handleAddSubtype} />
+        ))}
+        {addingClass === "functional" && (
+          <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.45rem 0" }}>
+            <input
+              autoFocus value={newLabel} onChange={e => setNewLabel(e.target.value)}
+              placeholder="New functional type name"
+              onKeyDown={e => { if (e.key === "Enter") commitNewRoot(); if (e.key === "Escape") { setAddingClass(null); } }}
+              onBlur={commitNewRoot}
+              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.15rem 0.4rem" }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── PreferencesPage ──────────────────────────────────────────────────────────
 
 export default function PreferencesPage({ navigate }) {
@@ -1511,8 +1718,9 @@ export default function PreferencesPage({ navigate }) {
 
         {/* Settings content */}
         <div style={{ flex: 1, overflowY: "auto", padding: "2rem 2.5rem" }}>
-          {activeSection === "profile"       && <ProfileSettings />}
+          {activeSection === "profile"        && <ProfileSettings />}
           {activeSection === "household"      && <HouseholdSettings />}
+          {activeSection === "categorytypes"  && <CategoryTypesSettings />}
           {activeSection === "notifications"  && <NotificationsSettings />}
           {activeSection === "integrations"   && <IntegrationsSettings />}
           {activeSection === "inspection"     && <UploadInspectionSettings />}

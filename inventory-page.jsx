@@ -27,13 +27,32 @@ import {
   ROOM_SUBTYPES,
   GROUP_ORDER,
   GROUP_LABELS,
+  loadCustomGroupTypes,
+  saveCustomGroupTypes,
+  loadGroupLabelOverrides,
+  saveGroupLabelOverrides,
 } from "./lib/categoryTypes.js";
+import {
+  loadEntityTypes,
+  getBehaviorClass,
+  isSpatial,
+  isFunctional,
+  getTypesForClass,
+  resolveTypeId,
+  getLabelForType,
+  getRootTypesForClass,
+  getSubtypes,
+} from "./lib/entityTypes.js";
+import { loadChores, saveChores } from "./lib/chores.js";
+import { getFloorsInOrder, loadFloors, saveFloors } from "./lib/floors.js";
+import { loadRooms, saveRooms, createRoom, updateRoom } from "./lib/rooms.js";
 import { getManufacturers } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
 import { SEASON_OPTIONS } from "./lib/scheduleOptions.js";
 import FollowButton from "./components/FollowButton.jsx";
 import SchedulePicker from "./components/SchedulePicker.jsx";
 import AddTaskModal from "./components/AddTaskModal.jsx";
+import ComboInput from "./components/ComboInput.jsx";
 
 const PRIORITY_COLORS = {
   low:    "var(--fm-green)",
@@ -233,67 +252,22 @@ function InlineComboInput({ placeholder = "", onCommit, onCancel, options = [] }
 }
 
 function ModelComboField({ value = "", models = [], fieldStyle, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos]   = useState(null);
-  const inputRef        = useRef(null);
-
-  const filtered = models.filter(m => !value || m.toLowerCase().includes(value.toLowerCase()));
-
-  function openDropdown() {
-    const r = inputRef.current?.getBoundingClientRect();
-    if (r) setPos({ top: r.bottom, left: r.left, width: r.width });
-    setOpen(true);
-  }
-
   return (
-    <div style={{ position: "relative" }}>
-      <input
-        ref={inputRef}
-        value={value}
-        placeholder="—"
-        onChange={e => { onChange(e.target.value); openDropdown(); }}
-        onFocus={openDropdown}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        style={{ ...fieldStyle }}
-        onMouseEnter={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
-        onMouseLeave={e => { if (document.activeElement !== e.currentTarget) e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; }}
-      />
-      {open && filtered.length > 0 && pos && createPortal(
-        <div style={{
-          background: "var(--fm-bg-raised)",
-          border: "1px solid var(--fm-hairline2)",
-          borderRadius: "0 0 2px 2px",
-          left: pos.left,
-          maxHeight: 200,
-          overflowY: "auto",
-          position: "fixed",
-          top: pos.top,
-          width: pos.width,
-          zIndex: 9998,
-        }}>
-          {filtered.map(m => (
-            <div
-              key={m}
-              onMouseDown={() => { onChange(m); setOpen(false); }}
-              style={{ color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", padding: "0.3rem 0.4rem" }}
-              onMouseEnter={e => { e.currentTarget.style.background = "var(--fm-ink-dim)30"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-            >
-              {m}
-            </div>
-          ))}
-        </div>,
-        document.body
-      )}
-    </div>
+    <ComboInput
+      value={value}
+      onChange={onChange}
+      options={models}
+      placeholder="—"
+      style={fieldStyle}
+    />
   );
 }
 
 // ── Floor Plan ────────────────────────────────────────────────────────────────
 
 const FP_GRID = 20;
-const FP_W = 1000;
-const FP_H = 680;
+const FP_W = 2000;
+const FP_H = 1360;
 
 const FP_FILL = {
   room:      "rgba(122,181,217,0.12)",
@@ -333,6 +307,15 @@ function polygonCentroid(points) {
   };
 }
 
+function pointInPolygon(pt, points) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const xi = points[i].x, yi = points[i].y, xj = points[j].x, yj = points[j].y;
+    if ((yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
 function migratePlacements(placements) {
   const result = {};
   for (const lvl of Object.keys(placements)) {
@@ -345,39 +328,173 @@ function migratePlacements(placements) {
   return result;
 }
 
+function migrateToV3(data) {
+  // 1. Migrate fpData.levels → lib/floors.js (only if floors store is empty)
+  const existingFloors = loadFloors();
+  if (existingFloors.length === 0 && Array.isArray(data.levels)) {
+    const migratedFloors = data.levels.map(level => {
+      const name = level.name || "Floor 1";
+      let kind = "floor", number = 1, glyph = "1";
+      if (name === "Basement") { kind = "basement"; glyph = "B"; number = null; }
+      else if (name === "Attic") { kind = "attic"; glyph = "A"; number = null; }
+      else if (name.toLowerCase().includes("yard") || name.toLowerCase().includes("exterior")) { kind = "yard"; glyph = "G"; number = null; }
+      else {
+        const m = name.match(/^Floor\s+(\d+)$/i);
+        number = m ? parseInt(m[1]) : 1;
+        glyph = String(number);
+      }
+      return { id: level.id, kind, number, label: name, glyph };
+    });
+    saveFloors(migratedFloors);
+  }
+
+  // 2. Rekey placements, zoneItems: catName → roomId using lib/rooms.js entities
+  let allRooms = loadRooms();
+  const newPlacements = {};
+  const newZoneItems = {};
+  const catToRoomMap = {};
+
+  for (const levelId of Object.keys(data.placements)) {
+    newPlacements[levelId] = {};
+    newZoneItems[levelId] = {};
+    catToRoomMap[levelId] = {};
+    for (const catName of Object.keys(data.placements[levelId])) {
+      // Find room matching this category on this floor (may have been seeded with floorId="lvl-1")
+      let room = Object.values(allRooms).find(r => r.floorId === levelId && (r.label === catName || r.categoryName === catName));
+      if (!room) room = Object.values(allRooms).find(r => r.label === catName || r.categoryName === catName);
+      if (!room) {
+        const id = `room-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        room = { id, floorId: levelId, label: catName, type: "room", points: [], items: [], categoryName: catName };
+        allRooms[id] = room;
+      } else if (room.floorId !== levelId) {
+        allRooms[room.id] = { ...room, floorId: levelId };
+        room = allRooms[room.id];
+      }
+      catToRoomMap[levelId][catName] = room.id;
+      newPlacements[levelId][room.id] = data.placements[levelId][catName];
+      const zi = data.zoneItems?.[levelId]?.[catName];
+      if (zi) newZoneItems[levelId][room.id] = zi;
+    }
+  }
+  saveRooms(allRooms);
+
+  // 3. Migrate pin zone refs: catName → roomId
+  const newPins = {};
+  for (const levelId of Object.keys(data.pins || {})) {
+    newPins[levelId] = (data.pins[levelId] || []).map(pin => ({
+      ...pin,
+      zone: catToRoomMap[levelId]?.[pin.zone] || pin.zone,
+    }));
+  }
+
+  const newData = { ...data, placements: newPlacements, zoneItems: newZoneItems, pins: newPins, version: 3 };
+  delete newData.levels;
+  saveFpData(newData);
+  return newData;
+}
+
 function loadFpData() {
   try {
     const raw = JSON.parse(localStorage.getItem("inventory-floor-plan-v2") || "null");
-    if (raw && Array.isArray(raw.levels) && raw.levels.length > 0) {
-      return { zoneItems: {}, ...raw, placements: migratePlacements(raw.placements || {}) };
+    const hasLevels = raw && Array.isArray(raw.levels) && raw.levels.length > 0;
+    const isV3 = raw && raw.version >= 3 && raw.placements;
+    if (hasLevels || isV3) {
+      let data = { zoneItems: {}, pins: {}, drawings: {}, ...raw, placements: migratePlacements(raw.placements || {}) };
+      // v1 → v2: Re-center legacy 1000×680 content into new 2000×1360 canvas
+      if (!raw.version || raw.version < 2) {
+        const DX = 500, DY = 340;
+        const newPlacements = {};
+        for (const lvl of Object.keys(data.placements)) {
+          newPlacements[lvl] = {};
+          for (const cat of Object.keys(data.placements[lvl])) {
+            newPlacements[lvl][cat] = { points: data.placements[lvl][cat].points.map(p => ({ x: p.x + DX, y: p.y + DY })) };
+          }
+        }
+        const newPins = {};
+        for (const lvl of Object.keys(data.pins || {})) {
+          newPins[lvl] = (data.pins[lvl] || []).map(p => ({ ...p, x: p.x + DX, y: p.y + DY }));
+        }
+        data = { ...data, placements: newPlacements, pins: newPins, version: 2 };
+        saveFpData(data);
+      }
+      // v2 → v3: Rekey from catName to roomId, migrate levels to lib/floors.js
+      if (data.version < 3) {
+        data = migrateToV3(data);
+      }
+      return data;
     }
   } catch {}
-  return { levels: [{ id: "lvl-1", name: "Floor 1" }], placements: {}, zoneItems: {} };
+  // Default: ensure lib/floors.js has at least one floor
+  if (loadFloors().length === 0) saveFloors([{ id: "lvl-1", kind: "floor", number: 1, label: "Floor 1", glyph: "1" }]);
+  return { placements: {}, zoneItems: {}, pins: {}, drawings: {}, version: 3 };
 }
 function saveFpData(data) {
   localStorage.setItem("inventory-floor-plan-v2", JSON.stringify(data));
 }
 function fpSnap(v) { return Math.round(v / FP_GRID) * FP_GRID; }
+// For pins: snap whichever of (center, leading edge, trailing edge) lands closest to the raw value.
+// This lets the pin edge sit flush with a zone border rather than center-snapping past it.
+function fpSnapPin(center, halfSize) {
+  const candidates = [
+    fpSnap(center),
+    fpSnap(center - halfSize) + halfSize,
+    fpSnap(center + halfSize) - halfSize,
+  ];
+  return candidates.reduce((best, v) => Math.abs(v - center) < Math.abs(best - center) ? v : best);
+}
+
+function pinAbbr(item) {
+  return item.replace(/\(.*?\)/g, "").trim().slice(0, 4).toUpperCase();
+}
 
 function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory, onRenameCategory, onDeleteCategory }) {
+  const entityTypeData = useMemo(() => loadEntityTypes(), []);
   const [fpData, setFpData] = useState(() => loadFpData());
-  const [activeLevel, setActiveLevel] = useState(() => loadFpData().levels[0].id);
+  const [floors, setFloors] = useState(() => getFloorsInOrder());
+  const [rooms, setRooms] = useState(() => loadRooms());
+  const [activeLevel, setActiveLevel] = useState(() => getFloorsInOrder()[0]?.id || "lvl-1");
   const [selected, setSelected] = useState(null);
   const [dragging, setDragging] = useState(null);
   const [editingLevelId, setEditingLevelId] = useState(null);
   const [editingPanelName, setEditingPanelName] = useState(false);
+  const [selectedPin, setSelectedPin] = useState(null);
+  const [ghostPin, setGhostPin] = useState(null);
+  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: FP_W, h: FP_H });
+  const [isPanning, setIsPanning] = useState(false);
   const svgRef = useRef(null);
   const draggingRef = useRef(null);
   const vertexDragRef = useRef(null);
   const fpDataRef = useRef(fpData);
   const activeLevelRef = useRef(activeLevel);
+  const sidebarDragRef = useRef(null);
+  const pinDragRef = useRef(null);
+  const viewBoxRef = useRef({ x: 0, y: 0, w: FP_W, h: FP_H });
+  const panDragRef = useRef(null);
+  const touchRef = useRef(null);
+  const [drawMode, setDrawMode] = useState("select");
+  const [inProgress, setInProgress] = useState(null);
+  const [cursorPt, setCursorPt] = useState(null);
+  const [pendingMarker, setPendingMarker] = useState(null);
+  const [markerLabel, setMarkerLabel] = useState("");
+  const [drawColor, setDrawColor] = useState("#c9a96e");
+  const [drawName, setDrawName] = useState("");
+  const drawModeRef = useRef("select");
+  const inProgressRef = useRef(null);
+  const drawColorRef = useRef("#c9a96e");
+  const drawNameRef = useRef("");
 
   useEffect(() => { fpDataRef.current = fpData; }, [fpData]);
   useEffect(() => { activeLevelRef.current = activeLevel; }, [activeLevel]);
+  useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
+  useEffect(() => { drawModeRef.current = drawMode; }, [drawMode]);
+  useEffect(() => { inProgressRef.current = inProgress; }, [inProgress]);
+  useEffect(() => { drawColorRef.current = drawColor; }, [drawColor]);
+  useEffect(() => { drawNameRef.current = drawName; }, [drawName]);
 
   const currentPlaced = fpData.placements[activeLevel] || {};
-  const unplaced = categories.filter(cat => !currentPlaced[cat]);
-  const placedList = categories.filter(cat => !!currentPlaced[cat]);
+  // Build roomId ↔ label maps for the active floor
+  const activeFloorRooms = useMemo(() => Object.values(rooms).filter(r => r.floorId === activeLevel), [rooms, activeLevel]);
+  const catToRoomId = useMemo(() => Object.fromEntries(activeFloorRooms.map(r => [r.label, r.id])), [activeFloorRooms]);
 
   function save(newData) {
     fpDataRef.current = newData;
@@ -385,21 +502,114 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
     saveFpData(newData);
   }
 
-  function renameInPlacements(oldName, newName) {
+  function commitDrawing(drawing) {
     const d = fpDataRef.current;
-    const newPlacements = {};
-    for (const lvl of Object.keys(d.placements)) {
-      newPlacements[lvl] = {};
-      for (const cat of Object.keys(d.placements[lvl])) {
-        newPlacements[lvl][cat === oldName ? newName : cat] = d.placements[lvl][cat];
-      }
+    const lvl = activeLevelRef.current;
+    const id = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const typeLabel = drawing.type === "marker" ? "Marker" : drawing.type === "line" ? "Line" : "Path";
+    const existing = (d.drawings?.[lvl] || []).filter(dr => dr.type === drawing.type);
+    const name = drawNameRef.current.trim() || `${typeLabel} ${existing.length + 1}`;
+    const newDrawing = { id, name, color: drawColorRef.current, visible: true, ...drawing };
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: [...(d.drawings?.[lvl] || []), newDrawing] } });
+    setDrawName("");
+  }
+
+  function deleteDrawing(drawId) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).filter(dr => dr.id !== drawId) } });
+  }
+
+  function toggleDrawingVisibility(drawId) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).map(dr => dr.id === drawId ? { ...dr, visible: !dr.visible } : dr) } });
+  }
+
+  function handleDrawClick(e) {
+    e.stopPropagation();
+    const rect = svgRef.current.getBoundingClientRect();
+    const vb = viewBoxRef.current;
+    const x = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - rect.left) / rect.width * vb.w)));
+    const y = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - rect.top) / rect.height * vb.h)));
+    const mode = drawModeRef.current;
+    if (mode === "marker") { setPendingMarker({ x, y }); setMarkerLabel(""); return; }
+    if (mode === "path") { setInProgress(p => p ? { ...p, points: [...p.points, { x, y }] } : { type: "path", points: [{ x, y }] }); return; }
+    if (mode === "line") {
+      const ip = inProgressRef.current;
+      if (!ip) { setInProgress({ type: "line", points: [{ x, y }] }); }
+      else { commitDrawing({ ...ip, points: [...ip.points, { x, y }] }); setInProgress(null); setDrawMode("select"); }
     }
-    save({ ...d, placements: newPlacements });
-    if (selected === oldName) setSelected(newName); setEditingPanelName(false);
+  }
+
+  function handleDrawDoubleClick(e) {
+    if (drawModeRef.current !== "path") return;
+    e.stopPropagation();
+    const ip = inProgressRef.current;
+    if (!ip) return;
+    const pts = ip.points.slice(0, -1);
+    if (pts.length >= 2) commitDrawing({ ...ip, points: pts });
+    setInProgress(null);
+    setDrawMode("select");
+    setDrawName("");
+  }
+
+  function commitMarkerLabel() {
+    if (!pendingMarker) return;
+    commitDrawing({ type: "marker", x: pendingMarker.x, y: pendingMarker.y, label: markerLabel.trim() || "PT" });
+    setPendingMarker(null);
+    setMarkerLabel("");
+    setDrawMode("select");
+  }
+
+  function cancelDraw() {
+    setDrawMode("select");
+    setInProgress(null);
+    setCursorPt(null);
+    setPendingMarker(null);
+    setMarkerLabel("");
+  }
+
+  function addPin(cat, item, zone, x, y) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const id = `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const levelPins = [...(d.pins?.[lvl] || []), { id, zone, cat, item, x, y }];
+    const currentZoneItems = d.zoneItems?.[lvl]?.[zone] || [];
+    const inZone = currentZoneItems.some(z => z.cat === cat && z.item === item);
+    const newZoneItems = inZone ? currentZoneItems : [...currentZoneItems, { cat, item }];
+    save({
+      ...d,
+      pins: { ...(d.pins || {}), [lvl]: levelPins },
+      zoneItems: { ...(d.zoneItems || {}), [lvl]: { ...(d.zoneItems?.[lvl] || {}), [zone]: newZoneItems } },
+    });
+  }
+
+  function deletePin(pinId) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    save({ ...d, pins: { ...(d.pins || {}), [lvl]: (d.pins?.[lvl] || []).filter(p => p.id !== pinId) } });
+    setSelectedPin(null);
+  }
+
+  function handlePinMouseDown(e, pinId) {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedPin(pinId);
+    const pin = (fpDataRef.current.pins?.[activeLevelRef.current] || []).find(p => p.id === pinId);
+    if (!pin) return;
+    pinDragRef.current = { id: pinId, origX: pin.x, origY: pin.y, startClientX: e.clientX, startClientY: e.clientY };
+  }
+
+  function renameRoom(roomId, newLabel) {
+    updateRoom(roomId, { label: newLabel });
+    setRooms(loadRooms());
+    setEditingPanelName(false);
   }
 
   function addToCanvas(cat) {
-    const existing = fpDataRef.current.placements[activeLevelRef.current] || {};
+    const floorId = activeLevelRef.current;
+    const existing = fpDataRef.current.placements[floorId] || {};
     const taken = Object.values(existing);
     let x = FP_GRID * 4, y = FP_GRID * 4;
     const W = 200, H = 120;
@@ -416,88 +626,109 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
         if (!overlaps) { x = tx; y = ty; break outer; }
       }
     }
+    // Find or create Room entity for this category on this floor
+    const allRooms = loadRooms();
+    let room = Object.values(allRooms).find(r => r.floorId === floorId && (r.label === cat || r.categoryName === cat));
+    if (!room) room = Object.values(allRooms).find(r => r.label === cat || r.categoryName === cat);
+    let roomId;
+    if (room) {
+      if (room.floorId !== floorId) { updateRoom(room.id, { floorId }); }
+      roomId = room.id;
+    } else {
+      const newRoom = createRoom(floorId, cat);
+      roomId = newRoom.id;
+    }
+    setRooms(loadRooms());
     const d = fpDataRef.current;
     save({
       ...d,
-      placements: { ...d.placements, [activeLevelRef.current]: { ...existing, [cat]: rectToPolygon({ x, y, w: W, h: H }) } },
+      placements: { ...d.placements, [floorId]: { ...existing, [roomId]: rectToPolygon({ x, y, w: W, h: H }) } },
     });
-    setSelected(cat); setEditingPanelName(false);
+    setSelected(roomId); setEditingPanelName(false);
   }
 
-  function removeFromCanvas(cat) {
+  function removeFromCanvas(roomId) {
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
-    const { [cat]: _, ...rest } = d.placements[lvl] || {};
+    const { [roomId]: _, ...rest } = d.placements[lvl] || {};
     save({ ...d, placements: { ...d.placements, [lvl]: rest } });
-    if (selected === cat) setSelected(null);
+    if (selected === roomId) setSelected(null);
   }
 
-  function handleRoomMouseDown(e, cat) {
+  function handleRoomMouseDown(e, roomId) {
     e.preventDefault();
     e.stopPropagation();
-    setSelected(cat); setEditingPanelName(false);
+    setSelected(roomId); setEditingPanelName(false);
     const svgRect = svgRef.current.getBoundingClientRect();
-    const scaleX = FP_W / svgRect.width;
-    const scaleY = FP_H / svgRect.height;
-    const room = (fpDataRef.current.placements[activeLevelRef.current] || {})[cat];
+    const vb = viewBoxRef.current;
+    const zonePoly = (fpDataRef.current.placements[activeLevelRef.current] || {})[roomId];
     draggingRef.current = {
-      cat,
-      startSVGX: (e.clientX - svgRect.left) * scaleX,
-      startSVGY: (e.clientY - svgRect.top) * scaleY,
-      startPoints: room.points.map(p => ({ ...p })),
+      roomId,
+      startSVGX: vb.x + (e.clientX - svgRect.left) / svgRect.width * vb.w,
+      startSVGY: vb.y + (e.clientY - svgRect.top) / svgRect.height * vb.h,
+      startPoints: zonePoly.points.map(p => ({ ...p })),
     };
-    setDragging(cat);
+    setDragging(roomId);
   }
 
-  function handleVertexMouseDown(e, cat, vi) {
+  function handleVertexMouseDown(e, roomId, vi) {
     e.preventDefault();
     e.stopPropagation();
-    vertexDragRef.current = { cat, vi, startX: e.clientX, startY: e.clientY };
+    vertexDragRef.current = { roomId, vi, startX: e.clientX, startY: e.clientY };
   }
 
-  function handleEdgeClick(e, cat, edgeStartIdx) {
+  function handleEdgeClick(e, roomId, edgeStartIdx) {
     e.preventDefault();
     e.stopPropagation();
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
-    const room = (d.placements[lvl] || {})[cat];
+    const zonePoly = (d.placements[lvl] || {})[roomId];
     const svgRect = svgRef.current.getBoundingClientRect();
+    const vb = viewBoxRef.current;
     const newPt = {
-      x: fpSnap(Math.max(0, Math.min(FP_W, (e.clientX - svgRect.left) * (FP_W / svgRect.width)))),
-      y: fpSnap(Math.max(0, Math.min(FP_H, (e.clientY - svgRect.top) * (FP_H / svgRect.height)))),
+      x: fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) / svgRect.width * vb.w))),
+      y: fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) / svgRect.height * vb.h))),
     };
-    const newPoints = [...room.points];
+    const newPoints = [...zonePoly.points];
     newPoints.splice(edgeStartIdx + 1, 0, newPt);
-    save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [cat]: { points: newPoints } } } });
+    save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } });
   }
 
   useEffect(() => {
     function onMove(e) {
       if (!svgRef.current) return;
       const svgRect = svgRef.current.getBoundingClientRect();
-      const scaleX = FP_W / svgRect.width;
-      const scaleY = FP_H / svgRect.height;
+      const vb = viewBoxRef.current;
+      const scaleX = vb.w / svgRect.width;
+      const scaleY = vb.h / svgRect.height;
+
+      // Update draw cursor ghost
+      if (drawModeRef.current !== "select") {
+        const rawX = vb.x + (e.clientX - svgRect.left) * scaleX;
+        const rawY = vb.y + (e.clientY - svgRect.top) * scaleY;
+        setCursorPt({ x: fpSnap(Math.max(0, Math.min(FP_W, rawX))), y: fpSnap(Math.max(0, Math.min(FP_H, rawY))) });
+      }
 
       if (vertexDragRef.current) {
-        const { cat, vi } = vertexDragRef.current;
+        const { roomId, vi } = vertexDragRef.current;
         const d = fpDataRef.current;
         const lvl = activeLevelRef.current;
-        const room = (d.placements[lvl] || {})[cat];
-        const nx = fpSnap(Math.max(0, Math.min(FP_W, (e.clientX - svgRect.left) * scaleX)));
-        const ny = fpSnap(Math.max(0, Math.min(FP_H, (e.clientY - svgRect.top) * scaleY)));
-        const newPoints = room.points.map((p, i) => i === vi ? { x: nx, y: ny } : p);
-        const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [cat]: { points: newPoints } } } };
+        const zonePoly = (d.placements[lvl] || {})[roomId];
+        const nx = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) * scaleX)));
+        const ny = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) * scaleY)));
+        const newPoints = zonePoly.points.map((p, i) => i === vi ? { x: nx, y: ny } : p);
+        const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } };
         fpDataRef.current = next;
         setFpData({ ...next });
         return;
       }
 
       if (draggingRef.current) {
-        const { cat, startSVGX, startSVGY, startPoints } = draggingRef.current;
+        const { roomId, startSVGX, startSVGY, startPoints } = draggingRef.current;
         const d = fpDataRef.current;
         const lvl = activeLevelRef.current;
-        const svgX = (e.clientX - svgRect.left) * scaleX;
-        const svgY = (e.clientY - svgRect.top) * scaleY;
+        const svgX = vb.x + (e.clientX - svgRect.left) * scaleX;
+        const svgY = vb.y + (e.clientY - svgRect.top) * scaleY;
         const dx = fpSnap(svgX - startSVGX);
         const dy = fpSnap(svgY - startSVGY);
         const minX = Math.min(...startPoints.map(p => p.x));
@@ -507,7 +738,46 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
         const cdx = Math.max(-minX, Math.min(FP_W - maxX, dx));
         const cdy = Math.max(-minY, Math.min(FP_H - maxY, dy));
         const newPoints = startPoints.map(p => ({ x: p.x + cdx, y: p.y + cdy }));
-        const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [cat]: { points: newPoints } } } };
+        const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } };
+        fpDataRef.current = next;
+        setFpData({ ...next });
+        return;
+      }
+
+      // Pan drag
+      if (panDragRef.current) {
+        const { startX, startY, startVbX, startVbY } = panDragRef.current;
+        const dx = (startX - e.clientX) * scaleX;
+        const dy = (startY - e.clientY) * scaleY;
+        const nx = Math.max(0, Math.min(FP_W - vb.w, startVbX + dx));
+        const ny = Math.max(0, Math.min(FP_H - vb.h, startVbY + dy));
+        const newVb = { ...vb, x: nx, y: ny };
+        viewBoxRef.current = newVb;
+        setViewBox(newVb);
+        return;
+      }
+
+      // Ghost pin during sidebar drag
+      if (sidebarDragRef.current) {
+        const rawX = vb.x + (e.clientX - svgRect.left) * scaleX;
+        const rawY = vb.y + (e.clientY - svgRect.top) * scaleY;
+        const svgX = fpSnapPin(Math.max(18, Math.min(FP_W - 18, rawX)), 18);
+        const svgY = fpSnapPin(Math.max(9, Math.min(FP_H - 9, rawY)), 9);
+        setGhostPin({ ...sidebarDragRef.current, x: svgX, y: svgY });
+        return;
+      }
+
+      // Pin reposition drag
+      if (pinDragRef.current) {
+        const { id, origX, origY, startClientX, startClientY } = pinDragRef.current;
+        const dx = (e.clientX - startClientX) * scaleX;
+        const dy = (e.clientY - startClientY) * scaleY;
+        const nx = fpSnapPin(Math.max(18, Math.min(FP_W - 18, origX + dx)), 18);
+        const ny = fpSnapPin(Math.max(9, Math.min(FP_H - 9, origY + dy)), 9);
+        const d = fpDataRef.current;
+        const lvl = activeLevelRef.current;
+        const newPins = (d.pins?.[lvl] || []).map(p => p.id === id ? { ...p, x: nx, y: ny } : p);
+        const next = { ...d, pins: { ...(d.pins || {}), [lvl]: newPins } };
         fpDataRef.current = next;
         setFpData({ ...next });
       }
@@ -515,7 +785,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
 
     function onUp(e) {
       if (vertexDragRef.current) {
-        const { cat, vi, startX, startY } = vertexDragRef.current;
+        const { roomId, vi, startX, startY } = vertexDragRef.current;
         vertexDragRef.current = null;
         const moved = Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4;
         if (moved) {
@@ -523,17 +793,71 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
         } else {
           const d = fpDataRef.current;
           const lvl = activeLevelRef.current;
-          const room = (d.placements[lvl] || {})[cat];
-          if (room && room.points.length > 3) {
-            const newPoints = room.points.filter((_, i) => i !== vi);
-            save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [cat]: { points: newPoints } } } });
+          const zonePoly = (d.placements[lvl] || {})[roomId];
+          if (zonePoly && zonePoly.points.length > 3) {
+            const newPoints = zonePoly.points.filter((_, i) => i !== vi);
+            save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } });
           } else {
             saveFpData(d);
           }
         }
         return;
       }
-      if (draggingRef.current) { saveFpData(fpDataRef.current); draggingRef.current = null; setDragging(null); }
+      if (draggingRef.current) { saveFpData(fpDataRef.current); draggingRef.current = null; setDragging(null); return; }
+
+      // End pan drag
+      if (panDragRef.current) {
+        const { startX, startY } = panDragRef.current;
+        panDragRef.current = null;
+        setIsPanning(false);
+        if (Math.abs(e.clientX - startX) <= 4 && Math.abs(e.clientY - startY) <= 4) {
+          setSelected(null); setSelectedPin(null);
+        }
+        return;
+      }
+
+      // Drop pin from sidebar onto canvas
+      if (sidebarDragRef.current) {
+        const { cat, item } = sidebarDragRef.current;
+        sidebarDragRef.current = null;
+        setGhostPin(null);
+        if (svgRef.current) {
+          const r = svgRef.current.getBoundingClientRect();
+          if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+            const vb2 = viewBoxRef.current;
+            const rawPx = vb2.x + (e.clientX - r.left) / r.width * vb2.w;
+            const rawPy = vb2.y + (e.clientY - r.top) / r.height * vb2.h;
+            const px = fpSnapPin(Math.max(18, Math.min(FP_W - 18, rawPx)), 18);
+            const py = fpSnapPin(Math.max(9, Math.min(FP_H - 9, rawPy)), 9);
+            const d = fpDataRef.current;
+            const lvl = activeLevelRef.current;
+            const placements = d.placements[lvl] || {};
+            let zoneRoomId = null;
+            for (const [rId, zData] of Object.entries(placements)) {
+              if (pointInPolygon({ x: px, y: py }, zData.points)) { zoneRoomId = rId; break; }
+            }
+            if (zoneRoomId) {
+              const id = `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+              const levelPins = [...(d.pins?.[lvl] || []), { id, zone: zoneRoomId, cat, item, x: px, y: py }];
+              const curZI = d.zoneItems?.[lvl]?.[zoneRoomId] || [];
+              const inZone = curZI.some(z => z.cat === cat && z.item === item);
+              const newZI = inZone ? curZI : [...curZI, { cat, item }];
+              const newData = {
+                ...d,
+                pins: { ...(d.pins || {}), [lvl]: levelPins },
+                zoneItems: { ...(d.zoneItems || {}), [lvl]: { ...(d.zoneItems?.[lvl] || {}), [zoneRoomId]: newZI } },
+              };
+              fpDataRef.current = newData;
+              setFpData(newData);
+              saveFpData(newData);
+            }
+          }
+        }
+        return;
+      }
+
+      // Persist pin reposition
+      if (pinDragRef.current) { saveFpData(fpDataRef.current); pinDragRef.current = null; }
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -542,6 +866,49 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
       window.removeEventListener("mouseup", onUp);
     };
   }, []);
+
+  // Wheel zoom — must be non-passive to call preventDefault()
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    function onWheel(e) {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const vb = viewBoxRef.current;
+      const factor = e.deltaY > 0 ? 1.12 : (1 / 1.12);
+      const cx = vb.x + (e.clientX - rect.left) / rect.width * vb.w;
+      const cy = vb.y + (e.clientY - rect.top) / rect.height * vb.h;
+      const nw = Math.max(200, Math.min(FP_W, vb.w * factor));
+      const nh = nw * (FP_H / FP_W);
+      const nx = Math.max(0, Math.min(FP_W - nw, cx - (cx - vb.x) / vb.w * nw));
+      const ny = Math.max(0, Math.min(FP_H - nh, cy - (cy - vb.y) / vb.h * nh));
+      const newVb = { x: nx, y: ny, w: nw, h: nh };
+      viewBoxRef.current = newVb;
+      setViewBox(newVb);
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Keydown: Escape cancels draw, Enter commits path
+  useEffect(() => {
+    if (drawMode === "select") return;
+    function onKeyDown(e) {
+      if (e.key === "Escape") { cancelDraw(); return; }
+      if (e.key === "Enter" && drawMode === "path" && inProgress && inProgress.points.length >= 2) {
+        const d = fpDataRef.current;
+        const lvl = activeLevelRef.current;
+        const id = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+        const name = drawNameRef.current.trim() || `Path ${(d.drawings?.[lvl] || []).filter(dr => dr.type === "path").length + 1}`;
+        save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: [...(d.drawings?.[lvl] || []), { id, name, type: "path", color: drawColorRef.current, visible: true, points: inProgress.points }] } });
+        setDrawName("");
+        setInProgress(null);
+        setDrawMode("select");
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawMode, inProgress]);
 
   const [showLevelPicker, setShowLevelPicker] = useState(false);
   const [addedItemsExpanded, setAddedItemsExpanded] = useState(true);
@@ -556,43 +923,68 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
 
   function handleLevelReorder(fromIdx, toIdx) {
     if (fromIdx === toIdx || fromIdx == null) return;
-    const levels = [...fpDataRef.current.levels];
-    const [moved] = levels.splice(fromIdx, 1);
-    levels.splice(toIdx, 0, moved);
-    save({ ...fpDataRef.current, levels });
+    // Assign custom sort orders so manual order is preserved
+    const ordered = [...floors];
+    const [moved] = ordered.splice(fromIdx, 1);
+    ordered.splice(toIdx, 0, moved);
+    const updatedFloors = loadFloors().map(f => {
+      const idx = ordered.findIndex(o => o.id === f.id);
+      return { ...f, customOrder: idx >= 0 ? idx : 999 };
+    });
+    saveFloors(updatedFloors);
+    setFloors(getFloorsInOrder());
   }
 
   function deleteLevel(id) {
+    const allFloors = loadFloors();
+    if (allFloors.length <= 1) return;
     const d = fpDataRef.current;
-    if (d.levels.length <= 1) return;
-    const next = { ...d, levels: d.levels.filter(l => l.id !== id), placements: { ...d.placements }, zoneItems: { ...(d.zoneItems || {}) } };
+    const next = { ...d, placements: { ...d.placements }, zoneItems: { ...(d.zoneItems || {}) } };
     delete next.placements[id];
     delete next.zoneItems[id];
+    saveFloors(allFloors.filter(f => f.id !== id));
     save(next);
-    if (activeLevel === id) { setActiveLevel(next.levels[0].id); setSelected(null); }
+    const remaining = getFloorsInOrder();
+    setFloors(remaining);
+    if (activeLevel === id) { setActiveLevel(remaining[0]?.id || ""); setSelected(null); }
   }
 
   function addLevelOfType(type) {
     setShowLevelPicker(false);
-    const newId = `lvl-${Date.now()}`;
-    let name;
-    if (type === "Floor") {
-      const floorCount = fpData.levels.filter(l => l.name.startsWith("Floor")).length;
-      name = `Floor ${floorCount + 1}`;
-    } else {
-      name = type;
-    }
-    save({ ...fpDataRef.current, levels: [...fpDataRef.current.levels, { id: newId, name }] });
-    setActiveLevel(newId);
+    const kindMap = { "Floor": "floor", "Basement": "basement", "Attic": "attic", "Yard / Exterior": "yard" };
+    const kind = kindMap[type] || "floor";
+    let newFloorId;
+    try {
+      const allFloors = loadFloors();
+      const existsUnique = (kind !== "floor") && allFloors.some(f => f.kind === kind);
+      if (existsUnique) return; // unique floor already exists
+      const id = `lvl-${Date.now()}`;
+      let label = type;
+      let number = null;
+      let glyph = type[0].toUpperCase();
+      if (kind === "floor") {
+        number = allFloors.filter(f => f.kind === "floor").length + 1;
+        label = `Floor ${number}`;
+        glyph = String(number);
+      }
+      const newFloor = { id, kind, number, label, glyph };
+      saveFloors([...allFloors, newFloor]);
+      newFloorId = id;
+    } catch { return; }
+    const newFloors = getFloorsInOrder();
+    setFloors(newFloors);
+    setActiveLevel(newFloorId);
     setSelected(null);
-    setEditingLevelId(newId);
+    setEditingLevelId(newFloorId);
   }
 
   function renameLevel(id, name) {
     const trimmed = name.trim();
     setEditingLevelId(null);
     if (!trimmed) return;
-    save({ ...fpDataRef.current, levels: fpDataRef.current.levels.map(l => l.id === id ? { ...l, name: trimmed } : l) });
+    const allFloors = loadFloors();
+    saveFloors(allFloors.map(f => f.id === id ? { ...f, label: trimmed } : f));
+    setFloors(getFloorsInOrder());
   }
 
   const [zoneSearch, setZoneSearch] = useState("");
@@ -601,11 +993,6 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
     Object.entries(categoryItems).flatMap(([cat, items]) => items.map(item => ({ cat, item }))),
     [categoryItems]
   );
-
-  const selZoneItems = useMemo(() => {
-    if (!selected) return [];
-    return (fpData.zoneItems?.[activeLevel]?.[selected]) || [];
-  }, [fpData, activeLevel, selected]);
 
   const searchResults = useMemo(() => {
     const q = zoneSearch.trim().toLowerCase();
@@ -616,10 +1003,15 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
     return pool;
   }, [allInventoryItems, zoneSearch]);
 
+  const selZoneItems = useMemo(() => {
+    if (!selected) return [];
+    return (fpData.zoneItems?.[activeLevel]?.[selected]) || [];
+  }, [fpData, activeLevel, selected]);
+
   function toggleZoneItem(cat, item) {
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
-    const sel = selected;
+    const sel = selected; // roomId
     if (!sel) return;
     const current = d.zoneItems?.[lvl]?.[sel] || [];
     const exists = current.some(z => z.cat === cat && z.item === item);
@@ -632,28 +1024,33 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
     });
   }
 
-  const activeLevelName = fpData.levels.find(l => l.id === activeLevel)?.name || "";
-  const selType = selected ? (categoryTypes[selected] || "general") : null;
+  const activeLevelName = floors.find(f => f.id === activeLevel)?.label || "";
+  const selectedRoom = selected ? rooms[selected] : null;
+  const selType = selectedRoom ? (categoryTypes[selectedRoom.label] || "general") : null;
   const selRoom = selected ? currentPlaced[selected] : null;
 
   const placedOnAnyLevel = useMemo(() => {
     const set = new Set();
-    fpData.levels.forEach(level => {
-      Object.keys(fpData.placements[level.id] || {}).forEach(cat => set.add(cat));
+    Object.values(rooms).forEach(room => {
+      if (fpData.placements[room.floorId]?.[room.id]) set.add(room.label);
     });
     return set;
-  }, [fpData]);
+  }, [fpData, rooms]);
 
   const sortedCategories = useMemo(() => {
     return [...categories]
-      .filter(cat => !placedOnAnyLevel.has(cat))
+      .filter(cat => {
+        if (placedOnAnyLevel.has(cat)) return false;
+        // Only Spatial categories can be drawn as floor plan zones
+        return isSpatial(resolveTypeId(cat, categoryTypes[cat] || "general"), entityTypeData);
+      })
       .sort((a, b) => {
         const ga = GROUP_ORDER.indexOf(categoryTypes[a] || "general");
         const gb = GROUP_ORDER.indexOf(categoryTypes[b] || "general");
         if (ga !== gb) return ga - gb;
         return a.localeCompare(b);
       });
-  }, [categories, categoryTypes, placedOnAnyLevel]);
+  }, [categories, categoryTypes, placedOnAnyLevel, entityTypeData]);
 
   return (
     <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
@@ -664,7 +1061,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
         {/* Add to canvas */}
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
           <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", flexShrink: 0, letterSpacing: "0.14em", padding: "1rem 1rem 0.4rem", textTransform: "uppercase" }}>
-            Add to canvas
+            Add to Floor Plan
           </div>
 
           <div style={{ flex: 1, overflowY: "auto" }}>
@@ -705,9 +1102,9 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                     <input
                       autoFocus
                       defaultValue={cat}
-                      onBlur={e => { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); renameInPlacements(cat, v); } setEditingCatId(null); }}
+                      onBlur={e => { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); const rid = catToRoomId[cat]; if (rid) renameRoom(rid, v); } setEditingCatId(null); }}
                       onKeyDown={e => {
-                        if (e.key === "Enter") { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); renameInPlacements(cat, v); } setEditingCatId(null); }
+                        if (e.key === "Enter") { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); const rid = catToRoomId[cat]; if (rid) renameRoom(rid, v); } setEditingCatId(null); }
                         if (e.key === "Escape") { setEditingCatId(null); }
                       }}
                       onClick={e => e.stopPropagation()}
@@ -753,15 +1150,18 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
               <>
                 <div onClick={() => setShowCatTypePicker(false)} style={{ bottom: 0, left: 0, position: "fixed", right: 0, top: 0, zIndex: 10 }} />
                 <div style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: 4, bottom: "100%", boxShadow: "0 -4px 16px rgba(0,0,0,0.4)", left: 0, position: "absolute", right: 0, zIndex: 11 }}>
-                  {[["Room", "room"], ["System", "system"], ["Structure", "structure"]].map(([label, type]) => (
+                  {[
+                    ...getRootTypesForClass("spatial", entityTypeData),
+                    ...getRootTypesForClass("functional", entityTypeData),
+                  ].map(t => (
                     <div
-                      key={type}
-                      onClick={() => { setShowCatTypePicker(false); setNewCatType(type); setNewCatName(""); }}
+                      key={t.id}
+                      onClick={() => { setShowCatTypePicker(false); setNewCatType(t.id); setNewCatName(""); }}
                       style={{ color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.5rem 1rem", transition: "background 0.1s, color 0.1s" }}
                       onMouseEnter={e => { e.currentTarget.style.background = "var(--fm-bg-raised)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
                       onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
                     >
-                      {label}
+                      {t.label}
                     </div>
                   ))}
                 </div>
@@ -780,15 +1180,15 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
         <div style={{ borderTop: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0 }}>
           <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.55rem 1rem 0.35rem" }}>
             <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>Levels</span>
-            <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{fpData.levels.length}</span>
+            <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{floors.length}</span>
           </div>
 
           <div style={{ maxHeight: 220, overflowY: "auto" }}>
-            {fpData.levels.map((level, idx) => {
+            {floors.map((level, idx) => {
               const isActive = level.id === activeLevel;
               const lvlPlaced = fpData.placements[level.id] || {};
               const zoneCount = Object.keys(lvlPlaced).length;
-              const itemCount = Object.keys(lvlPlaced).reduce((n, cat) => n + (categoryItems[cat]?.length || 0), 0);
+              const itemCount = Object.keys(lvlPlaced).reduce((n, rid) => n + (categoryItems[rooms[rid]?.label]?.length || 0), 0);
               const isEditing = editingLevelId === level.id;
               const isHovered = hoveredLevelId === level.id;
               const isDragOver = levelDragOverIdx === idx;
@@ -814,7 +1214,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                     {isEditing ? (
                       <input
                         autoFocus
-                        defaultValue={level.name}
+                        defaultValue={level.label}
                         onBlur={e => renameLevel(level.id, e.target.value)}
                         onKeyDown={e => {
                           if (e.key === "Enter") { e.preventDefault(); renameLevel(level.id, e.target.value); }
@@ -827,7 +1227,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                       <span
                         style={{ color: isActive ? "var(--fm-ink)" : "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", fontWeight: isActive ? 500 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       >
-                        {level.name}
+                        {level.label}
                       </span>
                     )}
                     {isHovered && !isEditing && (
@@ -837,7 +1237,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                           style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontSize: "0.7rem", lineHeight: 1, padding: "0 0.1rem" }}
                           title="Rename"
                         >✎</button>
-                        {fpData.levels.length > 1 && (
+                        {floors.length > 1 && (
                           <button
                             onClick={e => { e.stopPropagation(); deleteLevel(level.id); }}
                             style={{ background: "transparent", border: "none", color: "var(--fm-red)", cursor: "pointer", flexShrink: 0, fontSize: "0.75rem", lineHeight: 1, padding: "0 0.1rem" }}
@@ -885,12 +1285,103 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
       </div>
 
       {/* SVG canvas */}
-      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+      <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", position: "relative" }}>
+        {/* Draw toolbar */}
+        <div style={{ alignItems: "center", background: "var(--fm-bg)", borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0, gap: "0.4rem", padding: "0.35rem 0.75rem", flexWrap: "wrap" }}>
+          {[
+            ["select", "↖ Select", null],
+            ["path", "✏ Path", "Trace multi-point routes across the plan — e.g. HVAC duct runs, supply/return lines, electrical conduit, or irrigation pipe paths between zones"],
+            ["line", "╱ Line", "Mark a single straight segment — e.g. a gas shutoff run, a fence boundary, a wall opening, or the span of a beam between two points"],
+            ["marker", "● Marker", "Drop a labeled point — e.g. main water shutoff, circuit breaker location, cleanout access, camera coverage, or any single-location fixture"],
+          ].map(([mode, label, tip]) => (
+            <button key={mode} onClick={() => { setDrawMode(mode); setInProgress(null); setCursorPt(null); setPendingMarker(null); }}
+              title={tip || undefined}
+              style={{ background: drawMode === mode ? "var(--fm-bg-panel)" : "transparent", border: `1px solid ${drawMode === mode ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: drawMode === mode ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em", padding: "0.18rem 0.5rem", transition: "all 0.1s" }}>
+              {label}
+            </button>
+          ))}
+          {drawMode !== "select" && (
+            <>
+              <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+              <input value={drawName} onChange={e => setDrawName(e.target.value)}
+                placeholder={drawMode === "path" ? "Path name…" : drawMode === "line" ? "Line name…" : "Marker name…"}
+                style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.68rem", outline: "none", padding: "0.15rem 0.45rem", width: 130 }} />
+              {["#c9a96e", "#7ab5d9", "#7fb087", "#e07b6a", "#9b8ec4", "#a8a29c"].map(c => (
+                <div key={c} onClick={() => setDrawColor(c)}
+                  style={{ border: drawColor === c ? `2px solid ${c}` : "2px solid transparent", borderRadius: "50%", cursor: "pointer", flexShrink: 0, height: 14, outline: `1px solid ${c}`, outlineOffset: 1, width: 14, background: c }} />
+              ))}
+              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem" }}>
+                {drawMode === "path" ? "click · dblclick or ↵ to finish" : drawMode === "line" ? "click start · click end" : "click to place"}
+              </span>
+              <button onClick={cancelDraw} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", padding: "0.1rem 0.3rem" }}>esc ×</button>
+            </>
+          )}
+          {(() => {
+            const isRoomZone = (roomId) => {
+              const lbl = rooms[roomId]?.label;
+              const typeId = resolveTypeId(lbl, categoryTypes[lbl] || "general");
+              return isSpatial(typeId, entityTypeData);
+            };
+            const totalSqFt = Object.entries(currentPlaced).reduce((sum, [rid, zone]) => isRoomZone(rid) ? sum + polygonArea(zone.points) / (FP_GRID * FP_GRID) : sum, 0);
+            const houseSqFt = Object.values(fpData.placements).reduce((sum, lvl) => sum + Object.entries(lvl).reduce((s, [rid, zone]) => isRoomZone(rid) ? s + polygonArea(zone.points) / (FP_GRID * FP_GRID) : s, 0), 0);
+            if (houseSqFt === 0) return null;
+            const floorName = floors.find(f => f.id === activeLevel)?.label ?? "floor";
+            const floorLabel = `${floorName}${floorName.endsWith("s") ? "'" : "'s"} room sq ft:`;
+            return (
+              <div style={{ alignItems: "center", display: "flex", gap: "1.25rem", marginLeft: "auto" }}>
+                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>
+                  {"House's room sq ft:"} {Math.round(houseSqFt).toLocaleString()}
+                </span>
+                {totalSqFt > 0 && (
+                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>
+                    {floorLabel} {Math.round(totalSqFt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+
         <svg
           ref={svgRef}
-          viewBox={`0 0 ${FP_W} ${FP_H}`}
-          style={{ cursor: dragging ? "grabbing" : "default", display: "block", height: "100%", userSelect: "none", width: "100%", touchAction: "none" }}
-          onMouseDown={() => setSelected(null)}
+          viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
+          style={{ cursor: dragging ? "grabbing" : isPanning ? "grabbing" : drawMode !== "select" ? "crosshair" : "grab", display: "block", flex: 1, userSelect: "none", width: "100%", touchAction: "none" }}
+          onMouseDown={e => {
+            if (e.button !== 0) return;
+            if (drawMode !== "select") return; // draw clicks handled via onClick
+            panDragRef.current = { startX: e.clientX, startY: e.clientY, startVbX: viewBoxRef.current.x, startVbY: viewBoxRef.current.y };
+            setIsPanning(true);
+          }}
+          onClick={e => { if (drawMode !== "select") handleDrawClick(e); }}
+          onDoubleClick={e => { if (drawMode === "path") handleDrawDoubleClick(e); }}
+          onTouchStart={e => {
+            if (e.touches.length !== 2) return;
+            e.preventDefault();
+            touchRef.current = {
+              dist: Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY),
+              midX: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+              midY: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+              startVb: { ...viewBoxRef.current },
+            };
+          }}
+          onTouchMove={e => {
+            if (!touchRef.current || e.touches.length !== 2) return;
+            e.preventDefault();
+            const rect = svgRef.current.getBoundingClientRect();
+            const newDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            const scale = touchRef.current.dist / newDist;
+            const { startVb, midX, midY } = touchRef.current;
+            const cx = startVb.x + (midX - rect.left) / rect.width * startVb.w;
+            const cy = startVb.y + (midY - rect.top) / rect.height * startVb.h;
+            const nw = Math.max(200, Math.min(FP_W, startVb.w * scale));
+            const nh = nw * (FP_H / FP_W);
+            const nx = Math.max(0, Math.min(FP_W - nw, cx - (cx - startVb.x) / startVb.w * nw));
+            const ny = Math.max(0, Math.min(FP_H - nh, cy - (cy - startVb.y) / startVb.h * nh));
+            const newVb = { x: nx, y: ny, w: nw, h: nh };
+            viewBoxRef.current = newVb;
+            setViewBox(newVb);
+          }}
+          onTouchEnd={() => { touchRef.current = null; }}
         >
           <defs>
             <pattern id="fp-sm" width={FP_GRID} height={FP_GRID} patternUnits="userSpaceOnUse">
@@ -904,17 +1395,18 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
           <rect width={FP_W} height={FP_H} fill="var(--fm-bg-sunk)" />
           <rect width={FP_W} height={FP_H} fill="url(#fp-lg)" />
 
-          {placedList.map(cat => {
-            const room = currentPlaced[cat];
-            const type = categoryTypes[cat] || "general";
-            const isSel = selected === cat;
-            const isDrag = dragging === cat;
-            const itemCount = categoryItems[cat]?.length || 0;
-            const pts = room.points;
+          {Object.entries(currentPlaced).map(([roomId, zonePoly]) => {
+            const zoneRoom = rooms[roomId];
+            if (!zoneRoom) return null;
+            const type = categoryTypes[zoneRoom.label] || "general";
+            const isSel = selected === roomId;
+            const isDrag = dragging === roomId;
+            const itemCount = categoryItems[zoneRoom.label]?.length || 0;
+            const pts = zonePoly.points;
             const ptStr = pts.map(p => `${p.x},${p.y}`).join(" ");
             const { cx, cy } = polygonCentroid(pts);
             return (
-              <g key={cat}>
+              <g key={roomId}>
                 <polygon
                   points={ptStr}
                   fill={FP_FILL[type]}
@@ -922,10 +1414,10 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                   strokeWidth={isSel ? 1.5 : 1}
                   opacity={isDrag ? 0.7 : 1}
                   style={{ cursor: "grab" }}
-                  onMouseDown={e => handleRoomMouseDown(e, cat)}
+                  onMouseDown={e => handleRoomMouseDown(e, roomId)}
                 />
                 <text x={cx} y={cy + 5} textAnchor="middle" fill={isSel ? "var(--fm-brass)" : "var(--fm-ink)"} fontSize={11} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
-                  {cat}
+                  {zoneRoom.label}
                 </text>
                 <text x={cx} y={cy + 18} textAnchor="middle" fill="var(--fm-ink-dim)" fontSize={9} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
                   {itemCount} {itemCount === 1 ? "item" : "items"}
@@ -942,7 +1434,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                           stroke="transparent"
                           strokeWidth={12}
                           style={{ cursor: "cell" }}
-                          onMouseDown={e => { e.stopPropagation(); handleEdgeClick(e, cat, vi); }}
+                          onMouseDown={e => { e.stopPropagation(); handleEdgeClick(e, roomId, vi); }}
                         />
                       );
                     })}
@@ -955,18 +1447,181 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                         stroke="var(--fm-brass)"
                         strokeWidth={1.5}
                         style={{ cursor: pts.length > 3 ? "crosshair" : "grab" }}
-                        onMouseDown={e => handleVertexMouseDown(e, cat, vi)}
+                        onMouseDown={e => handleVertexMouseDown(e, roomId, vi)}
                         title={pts.length > 3 ? "Drag to move · Click to remove" : "Drag to move"}
                       />
                     ))}
+                    {/* Edge dimension labels */}
+                    {pts.map((p0, vi) => {
+                      const p1 = pts[(vi + 1) % pts.length];
+                      const dx = p1.x - p0.x;
+                      const dy = p1.y - p0.y;
+                      const edgeLen = Math.hypot(dx, dy);
+                      const feet = edgeLen / FP_GRID;
+                      if (feet < 1) return null;
+                      const mx = (p0.x + p1.x) / 2;
+                      const my = (p0.y + p1.y) / 2;
+                      const n1x = -dy / edgeLen;
+                      const n1y = dx / edgeLen;
+                      const dot = (cx - mx) * n1x + (cy - my) * n1y;
+                      const outNx = dot > 0 ? -n1x : n1x;
+                      const outNy = dot > 0 ? -n1y : n1y;
+                      const lx = mx + outNx * 14;
+                      const ly = my + outNy * 14;
+                      const rawAngle = Math.atan2(dy, dx) * 180 / Math.PI;
+                      const textAngle = (rawAngle > 90 || rawAngle < -90) ? rawAngle + 180 : rawAngle;
+                      const label = Number.isInteger(feet) ? `${feet} ft` : `${feet.toFixed(1)} ft`;
+                      return (
+                        <text
+                          key={`dim-${vi}`}
+                          x={lx} y={ly}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="var(--fm-brass)"
+                          fontSize={9}
+                          fontFamily="var(--fm-mono)"
+                          transform={`rotate(${textAngle}, ${lx}, ${ly})`}
+                          style={{ pointerEvents: "none" }}
+                        >
+                          {label}
+                        </text>
+                      );
+                    })}
                   </>
                 )}
               </g>
             );
           })}
+
+          {/* Item pins */}
+          {(fpData.pins?.[activeLevel] || []).map(pin => {
+            const isSelected = selectedPin === pin.id;
+            const stroke = FP_STROKE[categoryTypes[pin.cat] || "general"];
+            return (
+              <g
+                key={pin.id}
+                transform={`translate(${pin.x},${pin.y})`}
+                style={{ cursor: isSelected ? "grab" : "pointer" }}
+                onMouseDown={e => handlePinMouseDown(e, pin.id)}
+                onClick={e => { e.stopPropagation(); setSelectedPin(isSelected ? null : pin.id); }}
+              >
+                <rect x={-18} y={-9} width={36} height={18} rx={3}
+                  fill="var(--fm-bg-panel)" stroke={isSelected ? "var(--fm-brass)" : stroke} strokeWidth={1.5} />
+                <text textAnchor="middle" dominantBaseline="central"
+                  style={{ fill: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "7px", letterSpacing: "0.06em", pointerEvents: "none" }}>
+                  {pinAbbr(pin.item)}
+                </text>
+                {isSelected && (
+                  <text x={21} y={-8}
+                    style={{ cursor: "pointer", fill: "var(--fm-red)", fontSize: "11px", pointerEvents: "all" }}
+                    onMouseDown={e => { e.stopPropagation(); deletePin(pin.id); }}>×</text>
+                )}
+              </g>
+            );
+          })}
+
+          {/* Ghost pin during sidebar drag */}
+          {ghostPin && (
+            <g transform={`translate(${ghostPin.x},${ghostPin.y})`} style={{ pointerEvents: "none" }} opacity={0.5}>
+              <rect x={-18} y={-9} width={36} height={18} rx={3}
+                fill="var(--fm-bg-panel)" stroke="var(--fm-brass)" strokeWidth={1.5} />
+              <text textAnchor="middle" dominantBaseline="central"
+                style={{ fill: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "7px", letterSpacing: "0.06em" }}>
+                {pinAbbr(ghostPin.item)}
+              </text>
+            </g>
+          )}
+
+          {/* Committed drawings */}
+          {(fpData.drawings?.[activeLevel] || []).filter(dr => dr.visible !== false).map(dr => {
+            if (dr.type === "path" && dr.points?.length >= 2) return (
+              <polyline key={dr.id} points={dr.points.map(p => `${p.x},${p.y}`).join(" ")}
+                stroke={dr.color} strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+            );
+            if (dr.type === "line" && dr.points?.length >= 2) return (
+              <line key={dr.id} x1={dr.points[0].x} y1={dr.points[0].y} x2={dr.points[1].x} y2={dr.points[1].y}
+                stroke={dr.color} strokeWidth={2.5} strokeLinecap="round" style={{ pointerEvents: "none" }} />
+            );
+            if (dr.type === "marker") return (
+              <g key={dr.id} style={{ pointerEvents: "none" }}>
+                <circle cx={dr.x} cy={dr.y} r={5} fill={dr.color} />
+                <text x={dr.x} y={dr.y - 9} textAnchor="middle"
+                  style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "8px", letterSpacing: "0.04em" }}>
+                  {dr.label || dr.name}
+                </text>
+              </g>
+            );
+            return null;
+          })}
+
+          {/* In-progress drawing ghost */}
+          {inProgress && cursorPt && (
+            <g style={{ pointerEvents: "none" }}>
+              {inProgress.type === "path" && (
+                <polyline
+                  points={[...inProgress.points, cursorPt].map(p => `${p.x},${p.y}`).join(" ")}
+                  stroke={drawColor} strokeWidth={2.5} fill="none" strokeDasharray="6 3" strokeLinecap="round" opacity={0.7} />
+              )}
+              {inProgress.type === "line" && inProgress.points.length === 1 && (
+                <line x1={inProgress.points[0].x} y1={inProgress.points[0].y} x2={cursorPt.x} y2={cursorPt.y}
+                  stroke={drawColor} strokeWidth={2.5} strokeDasharray="6 3" strokeLinecap="round" opacity={0.7} />
+              )}
+              {(inProgress.points || []).map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r={3.5} fill={drawColor} />
+              ))}
+            </g>
+          )}
+
+          {/* Crosshair cursor in draw mode */}
+          {cursorPt && drawMode !== "select" && !pendingMarker && (
+            <g style={{ pointerEvents: "none" }}>
+              <circle cx={cursorPt.x} cy={cursorPt.y} r={4} fill="none" stroke={drawColor} strokeWidth={1.5} opacity={0.8} />
+              <line x1={cursorPt.x - 10} y1={cursorPt.y} x2={cursorPt.x + 10} y2={cursorPt.y} stroke={drawColor} strokeWidth={1} opacity={0.5} />
+              <line x1={cursorPt.x} y1={cursorPt.y - 10} x2={cursorPt.x} y2={cursorPt.y + 10} stroke={drawColor} strokeWidth={1} opacity={0.5} />
+            </g>
+          )}
+
+          {/* Scale bar */}
+          {(() => {
+            const NICE = [1, 2, 5, 10, 20, 25, 50, 100, 200];
+            const targetFt = viewBox.w * 0.12 / FP_GRID;
+            const niceFt = NICE.reduce((best, n) => Math.abs(n - targetFt) < Math.abs(best - targetFt) ? n : best);
+            const barW = niceFt * FP_GRID;
+            const bx = viewBox.x + 20;
+            const by = viewBox.y + viewBox.h - 20;
+            const tick = viewBox.h * 0.012;
+            const fs = Math.max(7, viewBox.h * 0.014);
+            return (
+              <g style={{ pointerEvents: "none" }} opacity={0.75}>
+                <line x1={bx} y1={by} x2={bx + barW} y2={by} stroke="var(--fm-ink)" strokeWidth={1.5} />
+                <line x1={bx} y1={by - tick} x2={bx} y2={by + tick} stroke="var(--fm-ink)" strokeWidth={1.5} />
+                <line x1={bx + barW} y1={by - tick} x2={bx + barW} y2={by + tick} stroke="var(--fm-ink)" strokeWidth={1.5} />
+                <text x={bx + barW / 2} y={by - tick - 3} textAnchor="middle" dominantBaseline="auto" fill="var(--fm-ink-dim)" fontSize={fs} fontFamily="var(--fm-mono)">
+                  {niceFt} ft
+                </text>
+              </g>
+            );
+          })()}
         </svg>
 
-        {placedList.length === 0 && (
+        {/* Pending marker label input */}
+        {pendingMarker && svgRef.current && (() => {
+          const rect = svgRef.current.getBoundingClientRect();
+          const vb = viewBoxRef.current;
+          const cssX = (pendingMarker.x - vb.x) / vb.w * rect.width;
+          const cssY = (pendingMarker.y - vb.y) / vb.h * rect.height;
+          return (
+            <div style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-brass)", borderRadius: 4, boxShadow: "0 2px 8px rgba(0,0,0,0.4)", left: cssX + 8, padding: "0.35rem 0.5rem", position: "absolute", top: cssY - 30, zIndex: 20 }}>
+              <input autoFocus value={markerLabel} onChange={e => setMarkerLabel(e.target.value)}
+                placeholder="Label…"
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commitMarkerLabel(); } if (e.key === "Escape") { setPendingMarker(null); setMarkerLabel(""); } }}
+                style={{ background: "transparent", border: "none", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", outline: "none", width: 100 }} />
+              <button onClick={commitMarkerLabel} style={{ background: "var(--fm-brass)", border: "none", borderRadius: 2, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.3rem", padding: "0.15rem 0.4rem" }}>OK</button>
+            </div>
+          );
+        })()}
+
+        {Object.keys(currentPlaced).length === 0 && (
           <div style={{ alignItems: "center", display: "flex", height: "100%", justifyContent: "center", left: 0, pointerEvents: "none", position: "absolute", top: 0, width: "100%" }}>
             <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.08em" }}>Click items in the sidebar to place them on this level</div>
           </div>
@@ -985,10 +1640,10 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
               {editingPanelName ? (
                 <input
                   autoFocus
-                  defaultValue={selected}
-                  onBlur={e => { const v = e.target.value.trim(); if (v && v !== selected) { onRenameCategory?.(selected, v); renameInPlacements(selected, v); } else setEditingPanelName(false); }}
+                  defaultValue={selectedRoom?.label}
+                  onBlur={e => { const v = e.target.value.trim(); const cur = selectedRoom?.label; if (v && v !== cur) { onRenameCategory?.(cur, v); renameRoom(selected, v); } else setEditingPanelName(false); }}
                   onKeyDown={e => {
-                    if (e.key === "Enter") { const v = e.target.value.trim(); if (v && v !== selected) { onRenameCategory?.(selected, v); renameInPlacements(selected, v); } else setEditingPanelName(false); }
+                    if (e.key === "Enter") { const v = e.target.value.trim(); const cur = selectedRoom?.label; if (v && v !== cur) { onRenameCategory?.(cur, v); renameRoom(selected, v); } else setEditingPanelName(false); }
                     if (e.key === "Escape") setEditingPanelName(false);
                   }}
                   style={{ background: "transparent", border: "none", borderBottom: "1px solid var(--fm-brass)", color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.55rem", fontWeight: 400, lineHeight: 1.1, outline: "none", padding: "0 0 2px", width: "100%" }}
@@ -999,7 +1654,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                   onDoubleClick={() => setEditingPanelName(true)}
                   title="Double-click to rename"
                 >
-                  {selected}
+                  {selectedRoom?.label}
                 </div>
               )}
             </div>
@@ -1009,8 +1664,8 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
             {/* Stats */}
             <div style={{ display: "flex" }}>
               {[
-                { label: "Area", value: `${Math.round(polygonArea(selRoom.points) / (FP_GRID * FP_GRID))} u²` },
-                { label: "Items", value: selZoneItems.length },
+                { label: "Area", value: `${Math.round(polygonArea(selRoom.points) / (FP_GRID * FP_GRID))} sq ft` },
+                { label: "Items", value: categoryItems[selectedRoom?.label]?.length || 0 },
               ].map(({ label, value }, i) => (
                 <div key={label} style={{ borderRight: i < 1 ? "1px solid var(--fm-hairline)" : "none", flex: 1, padding: "0.6rem 0.75rem" }}>
                   <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.54rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>{label}</div>
@@ -1025,7 +1680,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
               {/* Section header */}
               <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.45rem 0.75rem 0.4rem" }}>
                 <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  Items · {selZoneItems.length}
+                  Items · {(categoryItems[selectedRoom?.label]?.length || 0) + selZoneItems.filter(z => !(z.cat === selectedRoom?.label)).length}
                 </span>
                 <button
                   onClick={() => setSelected(null)}
@@ -1035,50 +1690,80 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                 >— Close</button>
               </div>
 
-              {/* Collapsible: Added items */}
-              <div style={{ borderBottom: "1px solid var(--fm-hairline)", borderTop: "1px solid var(--fm-hairline)" }}>
-                <div
-                  onClick={() => setAddedItemsExpanded(p => !p)}
-                  style={{ alignItems: "center", cursor: "pointer", display: "flex", justifyContent: "space-between", padding: "0.4rem 0.75rem" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
-                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                >
-                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                    Added{selZoneItems.length > 0 ? ` · ${selZoneItems.length}` : ""}
-                  </span>
-                  <span style={{ color: "var(--fm-ink-dim)", fontSize: "0.55rem" }}>{addedItemsExpanded ? "▲" : "▼"}</span>
-                </div>
-                {addedItemsExpanded && (
-                  <div style={{ paddingBottom: "0.35rem" }}>
-                    {selZoneItems.length === 0 ? (
-                      <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
-                        No items assigned yet.
+              {/* Items in this category */}
+              {(() => {
+                const nativeItems = categoryItems[selectedRoom?.label] || [];
+                const crossItems = selZoneItems.filter(z => z.cat !== selectedRoom?.label);
+                const totalAssigned = nativeItems.length + crossItems.length;
+                return (
+                  <div style={{ borderBottom: "1px solid var(--fm-hairline)", borderTop: "1px solid var(--fm-hairline)" }}>
+                    <div
+                      onClick={() => setAddedItemsExpanded(p => !p)}
+                      style={{ alignItems: "center", cursor: "pointer", display: "flex", justifyContent: "space-between", padding: "0.4rem 0.75rem" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    >
+                      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                        Assigned · {totalAssigned}
+                      </span>
+                      <span style={{ color: "var(--fm-ink-dim)", fontSize: "0.55rem" }}>{addedItemsExpanded ? "▲" : "▼"}</span>
+                    </div>
+                    {addedItemsExpanded && (
+                      <div style={{ paddingBottom: "0.35rem" }}>
+                        {totalAssigned === 0 ? (
+                          <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
+                            No items assigned. Search below to add.
+                          </div>
+                        ) : (
+                          <>
+                            {nativeItems.map(item => (
+                              <div key={`native|${item}`} style={{ alignItems: "center", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
+                                onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
+                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                              >
+                                <span
+                                  title="Drag to place pin on floor plan"
+                                  style={{ color: "var(--fm-ink-dim)", cursor: "grab", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1, paddingRight: "0.1rem", userSelect: "none" }}
+                                  onMouseDown={e => { e.preventDefault(); sidebarDragRef.current = { cat: selectedRoom?.label, item }; }}
+                                >⠿</span>
+                                <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
+                              </div>
+                            ))}
+                            {crossItems.map(({ cat, item }) => (
+                              <div key={`cross|${cat}|${item}`} style={{ alignItems: "center", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
+                                onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
+                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                              >
+                                <span
+                                  title="Drag to place pin on floor plan"
+                                  style={{ color: "var(--fm-ink-dim)", cursor: "grab", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1, paddingRight: "0.1rem", userSelect: "none" }}
+                                  onMouseDown={e => { e.preventDefault(); sidebarDragRef.current = { cat, item }; }}
+                                >⠿</span>
+                                <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
+                                <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.05em" }}>{cat.slice(0, 3).toUpperCase()}</span>
+                                <button
+                                  onClick={() => toggleZoneItem(cat, item)}
+                                  title="Remove from zone"
+                                  style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1, padding: "0 0.1rem", transition: "color 0.1s" }}
+                                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                                >×</button>
+                              </div>
+                            ))}
+                          </>
+                        )}
                       </div>
-                    ) : selZoneItems.map(({ cat, item }) => (
-                      <div key={`${cat}|${item}`} style={{ alignItems: "center", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
-                        onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                      >
-                        <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
-                        <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.04em" }}>{cat.slice(0, 3).toUpperCase()}</span>
-                        <button
-                          onClick={e => { e.stopPropagation(); toggleZoneItem(cat, item); }}
-                          style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.1rem", transition: "color 0.1s" }}
-                          onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                          onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                        >×</button>
-                      </div>
-                    ))}
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
 
               {/* Search */}
               <div style={{ padding: "0.5rem 0.75rem 0.4rem" }}>
                 <input
                   value={zoneSearch}
                   onChange={e => setZoneSearch(e.target.value)}
-                  placeholder="Search items…"
+                  placeholder="Search items to add…"
                   style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", outline: "none", padding: "0.35rem 0.6rem", width: "100%" }}
                   onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
                   onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
@@ -1090,18 +1775,19 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
                 {searchResults.length === 0 ? (
                   <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.5rem 0.75rem" }}>No matches</div>
                 ) : searchResults.map(({ cat, item }) => {
-                  const isAdded = selZoneItems.some(z => z.cat === cat && z.item === item);
+                  const isNative = cat === selectedRoom?.label && (categoryItems[selectedRoom?.label] || []).includes(item);
+                  const isAdded = isNative || selZoneItems.some(z => z.cat === cat && z.item === item);
                   return (
                     <div
                       key={`${cat}|${item}`}
-                      onClick={() => toggleZoneItem(cat, item)}
-                      style={{ alignItems: "center", cursor: "pointer", display: "flex", gap: "0.4rem", padding: "0.3rem 0.75rem", transition: "background 0.1s" }}
-                      onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
+                      onClick={() => { if (!isNative) toggleZoneItem(cat, item); }}
+                      style={{ alignItems: "center", cursor: isNative ? "default" : "pointer", display: "flex", gap: "0.4rem", padding: "0.3rem 0.75rem", transition: "background 0.1s" }}
+                      onMouseEnter={e => { if (!isNative) e.currentTarget.style.background = "var(--fm-bg-panel)"; }}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
                       <span style={{ color: isAdded ? "var(--fm-ink)" : "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
                       <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.05em" }}>{cat.slice(0, 3).toUpperCase()}</span>
-                      <span style={{ color: isAdded ? "var(--fm-green)" : "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.72rem", width: "0.8rem" }}>
+                      <span style={{ color: isNative ? "var(--fm-ink-dim)" : isAdded ? "var(--fm-green)" : "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.72rem", width: "0.8rem" }}>
                         {isAdded ? "✓" : "+"}
                       </span>
                     </div>
@@ -1121,8 +1807,37 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
             </div>
           </>
         ) : (
-          <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2.5rem 1rem", textAlign: "center" }}>
-            Click a zone on the canvas to view details
+          <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", fontStyle: "italic", padding: "0.85rem 1rem 0.6rem", textAlign: "center" }}>
+              Click a zone to view details
+            </div>
+            <div style={{ borderTop: "1px solid var(--fm-hairline)", flex: 1, overflowY: "auto" }}>
+              <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
+                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                  Drawings · {(fpData.drawings?.[activeLevel] || []).length}
+                </span>
+              </div>
+              {(fpData.drawings?.[activeLevel] || []).length === 0 ? (
+                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
+                  Use the toolbar to draw paths, lines, and markers.
+                </div>
+              ) : (fpData.drawings?.[activeLevel] || []).map(dr => (
+                <div key={dr.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem" }}>
+                  <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, width: 10 }} />
+                  <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
+                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{dr.type}</span>
+                  <button onClick={() => toggleDrawingVisibility(dr.id)}
+                    title={dr.visible !== false ? "Hide" : "Show"}
+                    style={{ background: "none", border: "none", color: dr.visible !== false ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontSize: "0.75rem", padding: "0 0.1rem" }}>
+                    {dr.visible !== false ? "👁" : "○"}
+                  </button>
+                  <button onClick={() => deleteDrawing(dr.id)}
+                    style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -1199,6 +1914,16 @@ function getInvItemStatus(itemDetails, cat, item) {
   return "empty";
 }
 
+const INV_SYS_ABBR = {
+  "HVAC": "HVAC", "Plumbing": "PLM", "Electrical": "ELEC",
+  "Appliances": "APPL", "Exterior": "EXT", "Structure": "STRC",
+  "Safety": "SAF", "General": "GEN", "Roofing": "ROOF",
+  "Landscaping": "LAND", "Pool": "POOL", "Irrigation": "IRR",
+};
+function getInvSysTag(cat) {
+  return INV_SYS_ABBR[cat] || (cat || "").slice(0, 4).toUpperCase();
+}
+
 function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange }) {
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -1207,14 +1932,20 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
   const [hoveredRow, setHoveredRow] = useState(null);
   const [editingRow, setEditingRow] = useState(null);
   const [editingTypeRow, setEditingTypeRow] = useState(null);
+  const [editingTypeDraft, setEditingTypeDraft] = useState("");
   const [editingRoomRow, setEditingRoomRow] = useState(null);
+  const [editingRoomDraft, setEditingRoomDraft] = useState("");
   const [editingSystemRow, setEditingSystemRow] = useState(null);
+  const [editingSystemDraft, setEditingSystemDraft] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [systemFilter, setSystemFilter] = useState("ALL");
+  const [structureFilter, setStructureFilter] = useState("ALL");
   const [roomFilter, setRoomFilter] = useState("ALL");
   const [levelFilter, setLevelFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [fpData] = useState(() => loadFpData());
+  const [invFloors] = useState(() => getFloorsInOrder());
+  const [invRooms] = useState(() => loadRooms());
   const [sortCol, setSortCol] = useState({ col: "system", dir: 1 });
 
   const allRows = useMemo(() =>
@@ -1222,22 +1953,58 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
       (categoryItems[cat] || []).map(item => ({ cat, item, key: `${cat}|${item}` }))
     ), [categories, categoryItems]);
 
-  const systemCats = useMemo(() =>
-    [...new Set(allRows.map(r => r.cat))].filter(c => categoryTypes?.[c] !== "room").sort(),
-    [allRows, categoryTypes]);
+  const entityTypeData = useMemo(() => loadEntityTypes(), []);
 
-  const roomCats = useMemo(() =>
-    [...new Set(allRows.map(r => r.cat))].filter(c => categoryTypes?.[c] === "room").sort(),
-    [allRows, categoryTypes]);
+  // Walk up parent chain to check if a typeId is rooted at "structure"
+  const isStructureType = useMemo(() => (typeId) => {
+    let id = typeId;
+    const visited = new Set();
+    while (id) {
+      if (visited.has(id)) break;
+      visited.add(id);
+      if (id === "structure") return true;
+      const type = entityTypeData.types.find(t => t.id === id);
+      if (!type) break;
+      id = type.parentId;
+    }
+    return false;
+  }, [entityTypeData]);
+
+  // System categories: functional but NOT structure-rooted
+  const systemCats = useMemo(() => {
+    return categories.filter(c => {
+      const oldType = categoryTypes?.[c] || "general";
+      const typeId = resolveTypeId(c, oldType);
+      return isFunctional(typeId, entityTypeData) && !isStructureType(typeId);
+    }).sort();
+  }, [categories, categoryTypes, entityTypeData, isStructureType]);
+
+  // Structure categories: functional AND structure-rooted
+  const structureCats = useMemo(() => {
+    return categories.filter(c => {
+      const oldType = categoryTypes?.[c] || "general";
+      return isStructureType(resolveTypeId(c, oldType));
+    }).sort();
+  }, [categories, categoryTypes, isStructureType]);
+
+  // All Spatial categories (Room, Exterior, custom spatial)
+  const roomCats = useMemo(() => {
+    return [...new Set(allRows.map(r => r.cat))].filter(c => {
+      const oldType = categoryTypes?.[c] || "general";
+      return isSpatial(resolveTypeId(c, oldType), entityTypeData);
+    }).sort();
+  }, [allRows, categoryTypes, entityTypeData]);
 
   const filtered = useMemo(() => {
     let rows = allRows;
     if (statusFilter !== "ALL") rows = rows.filter(r => getInvItemStatus(itemDetails, r.cat, r.item) === statusFilter.toLowerCase());
     if (systemFilter !== "ALL") rows = rows.filter(r => r.cat === systemFilter);
+    if (structureFilter !== "ALL") rows = rows.filter(r => r.cat === structureFilter);
     if (roomFilter !== "ALL") rows = rows.filter(r => r.cat === roomFilter);
     if (levelFilter !== "ALL") {
-      const placedCats = new Set(Object.keys(fpData.placements[levelFilter] || {}));
-      rows = rows.filter(r => placedCats.has(r.cat));
+      const placedRoomIds = Object.keys(fpData.placements[levelFilter] || {});
+      const placedLabels = new Set(placedRoomIds.map(rid => invRooms[rid]?.label).filter(Boolean));
+      rows = rows.filter(r => placedLabels.has(r.cat));
     }
     if (typeFilter !== "ALL") rows = rows.filter(r => (customFieldValues?.[r.key]?.item_type || "") === typeFilter);
     if (search.trim()) {
@@ -1262,8 +2029,10 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
       } else if (sortCol.col === "type") {
         cmp = (customFieldValues?.[a.key]?.item_type || "").localeCompare(customFieldValues?.[b.key]?.item_type || "") || a.item.localeCompare(b.item);
       } else if (sortCol.col === "room") {
-        const ra = customFieldValues?.[a.key]?.room || (categoryTypes?.[a.cat] === "room" ? a.cat : "");
-        const rb = customFieldValues?.[b.key]?.room || (categoryTypes?.[b.cat] === "room" ? b.cat : "");
+        const aOldType = categoryTypes?.[a.cat] || "general";
+        const bOldType = categoryTypes?.[b.cat] || "general";
+        const ra = customFieldValues?.[a.key]?.room || (isSpatial(resolveTypeId(a.cat, aOldType), entityTypeData) ? a.cat : "");
+        const rb = customFieldValues?.[b.key]?.room || (isSpatial(resolveTypeId(b.cat, bOldType), entityTypeData) ? b.cat : "");
         cmp = ra.localeCompare(rb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "system") {
         const sa = customFieldValues?.[a.key]?.system || a.cat;
@@ -1272,7 +2041,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
       }
       return cmp * sortCol.dir;
     });
-  }, [allRows, statusFilter, systemFilter, roomFilter, levelFilter, typeFilter, fpData, search, sortCol, itemDetails, customFieldValues]);
+  }, [allRows, statusFilter, systemFilter, structureFilter, roomFilter, levelFilter, typeFilter, fpData, invRooms, search, sortCol, itemDetails, customFieldValues]);
 
   function handleHeaderClick(col) {
     setSortCol(prev => prev.col === col ? { col, dir: prev.dir * -1 } : { col, dir: 1 });
@@ -1369,6 +2138,22 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
           ))}
         </div>
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Systems</span>
+          <ItemInvPill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</ItemInvPill>
+          {systemCats.map(cat => (
+            <ItemInvPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</ItemInvPill>
+          ))}
+        </div>
+        {structureCats.length > 0 && (
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Structure</span>
+            <ItemInvPill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</ItemInvPill>
+            {structureCats.map(cat => (
+              <ItemInvPill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</ItemInvPill>
+            ))}
+          </div>
+        )}
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
           <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Room</span>
           <ItemInvPill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</ItemInvPill>
           {roomCats.map(cat => (
@@ -1378,8 +2163,8 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
           <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Level</span>
           <ItemInvPill active={levelFilter === "ALL"} onClick={() => setLevelFilter("ALL")}>All</ItemInvPill>
-          {fpData.levels.map(lvl => (
-            <ItemInvPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.name}</ItemInvPill>
+          {invFloors.map(lvl => (
+            <ItemInvPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.label}</ItemInvPill>
           ))}
         </div>
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
@@ -1397,6 +2182,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
           <tr>
             {[
               { label: "Status",       col: "status",       width: "110px" },
+              { label: "System",       col: "system",       width: "65px"  },
               { label: "Type",         col: "type",         width: "100px" },
               { label: "Room",         col: "room",         width: "130px" },
               { label: "Item",         col: "item",         width: "200px" },
@@ -1425,18 +2211,28 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
             const hasDetail = !!(itemDetails?.[key]);
             const existingTypes = [...new Set(Object.values(customFieldValues || {}).map(v => v?.item_type).filter(Boolean))].sort();
             const typeListId = `itypes-${key}`;
-            const existingRooms = [...new Set([
-              ...roomCats,
-              ...Object.values(customFieldValues || {}).map(v => v?.room).filter(Boolean),
-            ])].sort();
             const roomListId = `irooms-${key}`;
-            const resolvedRoom = customFieldValues?.[key]?.room || (categoryTypes?.[cat] === "room" ? cat : "");
-            const existingSystems = [...new Set([
-              ...categories,
-              ...Object.values(customFieldValues || {}).map(v => v?.system).filter(Boolean),
-            ])].sort();
+            // Determine behavioral class for this item's own category
+            const catOldType = categoryTypes?.[cat] || "general";
+            const catTypeId = resolveTypeId(cat, catOldType);
+            const catIsSpatial = isSpatial(catTypeId, entityTypeData);
+            const catIsFunctional = isFunctional(catTypeId, entityTypeData);
+
+            // Room: if item's category is already Spatial, the category IS the room (read-only)
+            // Otherwise, user picks which Spatial category this item lives in
+            const resolvedRoom = catIsSpatial
+              ? cat
+              : (customFieldValues?.[key]?.roomLabel || customFieldValues?.[key]?.room || "");
+
+            // System: if item's category is already Functional, the category IS the system (read-only)
+            // Otherwise, user picks which Functional category this item belongs to
+            const resolvedSystem = catIsFunctional
+              ? cat
+              : (customFieldValues?.[key]?.systemCategory || customFieldValues?.[key]?.system || "");
+
+            const roomOptions = roomCats; // Spatial categories
+            const systemOptions = systemCats; // Functional categories
             const systemListId = `isys-${key}`;
-            const resolvedSystem = customFieldValues?.[key]?.system || cat;
             const noteColor = hasDetail ? "var(--fm-brass)" : "var(--fm-ink-mute)";
             const isHov = hoveredRow === key;
             return (
@@ -1451,27 +2247,58 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
                   </div>
                 </td>
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
+                  {catIsFunctional ? (
+                    <span style={{
+                      background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)",
+                      borderRadius: "var(--fm-radius)", color: "var(--fm-ink-dim)", display: "inline-block",
+                      fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em",
+                      padding: "0.1rem 0.35rem", textTransform: "uppercase",
+                    }} title="Category is a system — functional type is the category itself">{getInvSysTag(cat)}</span>
+                  ) : editingSystemRow === key ? (
+                    <ComboInput
+                      autoFocus
+                      value={editingSystemDraft}
+                      onChange={v => setEditingSystemDraft(v)}
+                      onBlur={() => { onFieldChange?.(cat, item, "systemCategory", editingSystemDraft.trim()); setEditingSystemRow(null); }}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") { onFieldChange?.(cat, item, "systemCategory", editingSystemDraft.trim()); setEditingSystemRow(null); }
+                        if (e.key === "Escape") setEditingSystemRow(null);
+                      }}
+                      options={systemOptions}
+                      style={{ border: "1px solid var(--fm-brass)", fontSize: "0.67rem", padding: "0.15rem 0.3rem" }}
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        background: resolvedSystem ? "var(--fm-bg-sunk)" : "transparent",
+                        border: `1px solid ${resolvedSystem ? "var(--fm-hairline2)" : "var(--fm-hairline)"}`,
+                        borderRadius: "var(--fm-radius)", color: resolvedSystem ? "var(--fm-ink-dim)" : "var(--fm-hairline2)",
+                        cursor: "text", display: "inline-block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem",
+                        letterSpacing: "0.08em", minWidth: "1.5rem", padding: "0.1rem 0.35rem", textTransform: "uppercase",
+                      }}
+                      onDoubleClick={() => { setEditingSystemDraft(resolvedSystem || ""); setEditingSystemRow(key); }}
+                      title="Double-click to set system"
+                    >{resolvedSystem ? getInvSysTag(resolvedSystem) : "—"}</span>
+                  )}
+                </td>
+                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
                   {editingTypeRow === key ? (
-                    <>
-                      <datalist id={typeListId}>
-                        {existingTypes.map(t => <option key={t} value={t} />)}
-                      </datalist>
-                      <input
-                        autoFocus
-                        list={typeListId}
-                        defaultValue={customFieldValues?.[key]?.item_type || ""}
-                        onBlur={e => { onFieldChange?.(cat, item, "item_type", e.target.value.trim()); setEditingTypeRow(null); }}
-                        onKeyDown={e => {
-                          if (e.key === "Enter") { onFieldChange?.(cat, item, "item_type", e.target.value.trim()); setEditingTypeRow(null); }
-                          if (e.key === "Escape") setEditingTypeRow(null);
-                        }}
-                        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", outline: "none", padding: "0.15rem 0.3rem", width: "100%" }}
-                      />
-                    </>
+                    <ComboInput
+                      autoFocus
+                      value={editingTypeDraft}
+                      onChange={v => setEditingTypeDraft(v)}
+                      onBlur={() => { onFieldChange?.(cat, item, "item_type", editingTypeDraft.trim()); setEditingTypeRow(null); }}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") { onFieldChange?.(cat, item, "item_type", editingTypeDraft.trim()); setEditingTypeRow(null); }
+                        if (e.key === "Escape") setEditingTypeRow(null);
+                      }}
+                      options={existingTypes}
+                      style={{ border: "1px solid var(--fm-brass)", fontSize: "0.67rem", padding: "0.15rem 0.3rem" }}
+                    />
                   ) : (
                     <span
                       style={{ color: customFieldValues?.[key]?.item_type ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", letterSpacing: "0.06em", minHeight: "1.2em", minWidth: "2rem", textTransform: "uppercase" }}
-                      onDoubleClick={() => setEditingTypeRow(key)}
+                      onDoubleClick={() => { setEditingTypeDraft(customFieldValues?.[key]?.item_type || ""); setEditingTypeRow(key); }}
                       title="Double-click to set type"
                     >
                       {customFieldValues?.[key]?.item_type || "—"}
@@ -1479,28 +2306,26 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
                   )}
                 </td>
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
-                  {editingRoomRow === key ? (
-                    <>
-                      <datalist id={roomListId}>
-                        {existingRooms.map(r => <option key={r} value={r} />)}
-                      </datalist>
-                      <input
-                        autoFocus
-                        list={roomListId}
-                        defaultValue={resolvedRoom}
-                        onBlur={e => { onFieldChange?.(cat, item, "room", e.target.value.trim()); setEditingRoomRow(null); }}
-                        onKeyDown={e => {
-                          if (e.key === "Enter") { onFieldChange?.(cat, item, "room", e.target.value.trim()); setEditingRoomRow(null); }
-                          if (e.key === "Escape") setEditingRoomRow(null);
-                        }}
-                        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.15rem 0.4rem", width: "100%" }}
-                      />
-                    </>
+                  {catIsSpatial ? (
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }} title="Category is a room — location is the category itself">{cat}</span>
+                  ) : editingRoomRow === key ? (
+                    <ComboInput
+                      autoFocus
+                      value={editingRoomDraft}
+                      onChange={v => setEditingRoomDraft(v)}
+                      onBlur={() => { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim()); setEditingRoomRow(null); }}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim()); setEditingRoomRow(null); }
+                        if (e.key === "Escape") setEditingRoomRow(null);
+                      }}
+                      options={roomOptions}
+                      style={{ border: "1px solid var(--fm-brass)", fontSize: "0.78rem", padding: "0.15rem 0.4rem" }}
+                    />
                   ) : (
                     <span
                       style={{ color: resolvedRoom ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minHeight: "1.2em", minWidth: "2rem" }}
-                      onDoubleClick={() => setEditingRoomRow(key)}
-                      title="Double-click to set room"
+                      onDoubleClick={() => { setEditingRoomDraft(resolvedRoom || ""); setEditingRoomRow(key); }}
+                      title="Double-click to set room location"
                     >
                       {resolvedRoom || "—"}
                     </span>
@@ -1592,6 +2417,9 @@ export default function InventoryPage({ navigate, navState }) {
   const [editingItemName, setEditingItemName] = useState(null); // { category, item }
   const [editingTask, setEditingTask] = useState(null); // row being edited, or null
   const [pendingNewCategory, setPendingNewCategory] = useState(null); // { id, groupType }
+  const [showAddCategoryForm, setShowAddCategoryForm] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatGroupType, setNewCatGroupType] = useState("room");
 
   const CATEGORY_ITEMS = useMemo(() => {
     const map = {};
@@ -1626,6 +2454,16 @@ export default function InventoryPage({ navigate, navState }) {
   }, [rows]);
 
   const [categoryTypeOverrides, setCategoryTypeOverridesState] = useState(() => loadCategoryTypeOverrides());
+  const [activeTab, setActiveTab] = useState("Item List");
+  const [groupFilter, setGroupFilter] = useState("all");
+  const [customGroupTypes, setCustomGroupTypes] = useState(() => loadCustomGroupTypes());
+  const [viewMode, setViewMode] = useState("byType"); // "byType" | "az"
+  const [azDir, setAzDir] = useState(1); // 1 = A→Z, -1 = Z→A
+  const [groupLabelOverrides, setGroupLabelOverrides] = useState(() => loadGroupLabelOverrides());
+  const [editingGroupType, setEditingGroupType] = useState(null); // id of type being renamed
+  const [editingGroupDraft, setEditingGroupDraft] = useState("");
+  const [deleteGroupPrompt, setDeleteGroupPrompt] = useState(null); // { groupType, label, counts }
+
 
   const effectiveCategoryTypes = useMemo(() => {
     const result = {};
@@ -1636,14 +2474,15 @@ export default function InventoryPage({ navigate, navState }) {
   }, [CATEGORIES, categoryTypeOverrides, defaultCategoryTypes]);
 
   const groupedCategories = useMemo(() => {
+    const fullOrder = [...GROUP_ORDER, ...customGroupTypes.map(t => t.id)];
     const groups = {};
-    GROUP_ORDER.forEach(type => { groups[type] = []; });
+    fullOrder.forEach(type => { groups[type] = []; });
     CATEGORIES.forEach(cat => {
       const type = effectiveCategoryTypes[cat];
       (groups[type] ?? groups["general"]).push(cat);
     });
     return groups;
-  }, [CATEGORIES, effectiveCategoryTypes]);
+  }, [CATEGORIES, effectiveCategoryTypes, customGroupTypes]);
 
   const totalItems = useMemo(() =>
     CATEGORIES.reduce((n, cat) => n + (CATEGORY_ITEMS[cat]?.length || 0), 0),
@@ -1657,13 +2496,27 @@ export default function InventoryPage({ navigate, navState }) {
     CATEGORIES.filter(c => effectiveCategoryTypes[c] === "room").length,
     [CATEGORIES, effectiveCategoryTypes]
   );
-  const [activeTab, setActiveTab] = useState("Item Inventory");
 
-  const filteredGroupOrder = useMemo(() => {
-    if (activeTab === "By system") return GROUP_ORDER.filter(g => g !== "room");
-    if (activeTab === "By room")   return GROUP_ORDER.filter(g => g === "room");
-    return GROUP_ORDER;
-  }, [activeTab]);
+  const allGroupOrder = useMemo(() =>
+    [...GROUP_ORDER, ...customGroupTypes.map(t => t.id)],
+    [customGroupTypes]
+  );
+
+  const allGroupLabels = useMemo(() => ({
+    ...GROUP_LABELS,
+    ...Object.fromEntries(customGroupTypes.map(t => [t.id, t.label])),
+    ...groupLabelOverrides,
+  }), [customGroupTypes, groupLabelOverrides]);
+
+  const filteredGroupOrder = useMemo(() =>
+    activeTab === "Groups" ? allGroupOrder.filter(g => !["room", "system", "structure", "exterior", "safety", "general"].includes(g)) : allGroupOrder,
+    [allGroupOrder, activeTab]
+  );
+
+  const visibleGroups = useMemo(() =>
+    groupFilter === "all" ? filteredGroupOrder : filteredGroupOrder.filter(g => g === groupFilter),
+    [filteredGroupOrder, groupFilter]
+  );
 
   const newItemRowsByCategory = useMemo(() => {
     const map = {};
@@ -1681,7 +2534,7 @@ export default function InventoryPage({ navigate, navState }) {
   );
   const [collapsedGroups, setCollapsedGroups] = useState(() =>
     Object.fromEntries(GROUP_ORDER.map(g => [g, true]))
-  );
+  ); // custom group types default to undefined (falsy = expanded) — intentional
   const [sortedGroups, setSortedGroups] = useState(() => new Set());
   const [navHovered, setNavHovered] = useState(null);
   const [dragging, setDragging] = useState(null);
@@ -1691,6 +2544,7 @@ export default function InventoryPage({ navigate, navState }) {
   const [duplicateItemPopup, setDuplicateItemPopup] = useState(null); // { item, fromCategory, x, y }
   const [itemDetails, setItemDetails] = useState(() => loadItemDetails());
   const [selectedItem, setSelectedItem] = useState(null); // { category, item }
+  const [detailTab, setDetailTab] = useState("details");
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(0);
   const [todos, setTodos] = useState(() => loadTodos());
@@ -2035,7 +2889,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
   useEffect(() => {
     if (!navState?.expandAll) return;
     setCollapsed(Object.fromEntries(CATEGORIES.map(cat => [cat, false])));
-    setCollapsedGroups(Object.fromEntries(GROUP_ORDER.map(g => [g, false])));
+    setCollapsedGroups(Object.fromEntries(allGroupOrder.map(g => [g, false])));
   }, []);
 
   useEffect(() => {
@@ -2053,20 +2907,20 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     setCollapsedGroups(prev => ({ ...prev, [groupType]: !prev[groupType] }));
   }
 
-  const allGroupsCollapsed = GROUP_ORDER.every(g => collapsedGroups[g]);
+  const allGroupsCollapsed = allGroupOrder.every(g => collapsedGroups[g]);
   const allCatsCollapsed   = CATEGORIES.every(cat => collapsed[cat]);
   // 0 = fully collapsed, 1 = groups open + categories closed, 2 = fully open
   const expandLevel = (allGroupsCollapsed && allCatsCollapsed) ? 0 : allCatsCollapsed ? 1 : 2;
 
   function cycleExpand() {
     if (expandLevel === 0) {
-      setCollapsedGroups(Object.fromEntries(GROUP_ORDER.map(g => [g, false])));
+      setCollapsedGroups(Object.fromEntries(allGroupOrder.map(g => [g, false])));
       setCollapsed(Object.fromEntries(CATEGORIES.map(cat => [cat, true])));
     } else if (expandLevel === 1) {
-      setCollapsedGroups(Object.fromEntries(GROUP_ORDER.map(g => [g, false])));
+      setCollapsedGroups(Object.fromEntries(allGroupOrder.map(g => [g, false])));
       setCollapsed(Object.fromEntries(CATEGORIES.map(cat => [cat, false])));
     } else {
-      setCollapsedGroups(Object.fromEntries(GROUP_ORDER.map(g => [g, true])));
+      setCollapsedGroups(Object.fromEntries(allGroupOrder.map(g => [g, true])));
       setCollapsed(Object.fromEntries(CATEGORIES.map(cat => [cat, true])));
     }
   }
@@ -2189,6 +3043,31 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       // case and any user-created rows that co-exist with a same-named default.
       const customs = loadCustomData();
       saveCustomData(customs.filter(r => r.category !== category));
+
+      // Phase 4: null out chore.room / todo.linkedRoom / project.linkedRoom references
+      const chores = loadChores();
+      const updatedChores = chores.map(c => c.room === category ? { ...c, room: null, roomId: null } : c);
+      if (updatedChores.some((c, i) => c !== chores[i])) saveChores(updatedChores);
+
+      const todos = loadTodos();
+      const updatedTodos = todos.map(t => {
+        const updates = {};
+        if (t.linkedRoom === category) updates.linkedRoom = null;
+        if (t.linkedSystem === category) updates.linkedSystem = null;
+        if (t.linkedCategory === category) updates.linkedCategory = null;
+        return Object.keys(updates).length ? { ...t, ...updates } : t;
+      });
+      if (updatedTodos.some((t, i) => t !== todos[i])) saveTodos(updatedTodos);
+
+      const projects = loadProjects();
+      const updatedProjects = projects.map(p => {
+        const updates = {};
+        if (p.linkedRoom === category) updates.linkedRoom = null;
+        if (p.linkedSystem === category) updates.linkedSystem = null;
+        return Object.keys(updates).length ? { ...p, ...updates } : p;
+      });
+      if (updatedProjects.some((p, i) => p !== projects[i])) saveProjects(updatedProjects);
+
       reload();
     }
   }
@@ -2232,6 +3111,32 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       saveCategoryTypeOverrides(next);
       setCategoryTypeOverridesState(next);
     }
+
+    // Phase 4: cascade rename to chores, todos, projects
+    const etData = loadEntityTypes();
+    const typeId = resolveTypeId(oldName, effectiveCategoryTypes[oldName] || "general");
+    const isRoomRename = isSpatial(typeId, etData);
+
+    const chores = loadChores();
+    const updatedChores = chores.map(c => c.room === oldName ? { ...c, room: trimmed } : c);
+    if (updatedChores.some((c, i) => c.room !== chores[i].room)) saveChores(updatedChores);
+
+    const todos = loadTodos();
+    const updatedTodos = todos.map(t => {
+      if (isRoomRename && t.linkedRoom === oldName) return { ...t, linkedRoom: trimmed };
+      if (!isRoomRename && t.linkedSystem === oldName) return { ...t, linkedSystem: trimmed };
+      if (t.linkedCategory === oldName) return { ...t, linkedCategory: trimmed };
+      return t;
+    });
+    if (updatedTodos.some((t, i) => t !== todos[i])) saveTodos(updatedTodos);
+
+    const projects = loadProjects();
+    const updatedProjects = projects.map(p => {
+      if (isRoomRename && p.linkedRoom === oldName) return { ...p, linkedRoom: trimmed };
+      if (!isRoomRename && p.linkedSystem === oldName) return { ...p, linkedSystem: trimmed };
+      return p;
+    });
+    if (updatedProjects.some((p, i) => p !== projects[i])) saveProjects(updatedProjects);
 
     reload();
   }
@@ -2303,6 +3208,83 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     setEditingTask(null);
     setAddingTask(false);
     setNewTask({ task: "", schedule: "", season: null, lastCompleted: null, nextDate: null, followSchedule: false, notes: "" });
+  }
+
+  function handleAddCategoryDirect(name, groupType) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const customs = loadCustomData();
+    saveCustomData([...customs, {
+      _id: `custom-${Date.now()}`, _isCustom: true, _defaultKey: null, _isBlankCategory: true,
+      category: trimmed, item: "", task: "", schedule: "", season: null, categoryType: groupType,
+    }]);
+    reload();
+    setCollapsedGroups(prev => ({ ...prev, [groupType]: false }));
+    setGroupFilter(groupType);
+    setShowAddCategoryForm(false);
+    setNewCatName("");
+  }
+
+  function handleRenameGroupType(groupType, newLabel) {
+    const trimmed = newLabel.trim();
+    if (!trimmed) { setEditingGroupType(null); return; }
+    const isCustom = customGroupTypes.some(t => t.id === groupType);
+    if (isCustom) {
+      const updated = customGroupTypes.map(t => t.id === groupType ? { ...t, label: trimmed } : t);
+      saveCustomGroupTypes(updated);
+      setCustomGroupTypes(updated);
+    } else {
+      const updated = { ...groupLabelOverrides, [groupType]: trimmed };
+      saveGroupLabelOverrides(updated);
+      setGroupLabelOverrides(updated);
+    }
+    setEditingGroupType(null);
+  }
+
+  function handleDeleteGroupTypeClick(groupType) {
+    const cats = groupedCategories[groupType] ?? [];
+    const itemCount = cats.reduce((n, cat) => n + (CATEGORY_ITEMS[cat]?.length || 0), 0);
+    const taskCount = rows.filter(r => cats.includes(r.category) && r.task && !r._isBlankCategory).length;
+    const allChores = loadChores();
+    const choreCount = allChores.filter(c => cats.includes(c.room)).length;
+    const allTodos = loadTodos();
+    const todoCount = allTodos.filter(t => cats.includes(t.linkedCategory)).length;
+    const allProjects = loadProjects();
+    const projectCount = allProjects.filter(p =>
+      allTodos.some(t => t.projectId === p.id && cats.includes(t.linkedCategory))
+    ).length;
+    setDeleteGroupPrompt({
+      groupType,
+      label: allGroupLabels[groupType],
+      counts: { categories: cats.length, items: itemCount, tasks: taskCount, chores: choreCount, todos: todoCount, projects: projectCount },
+    });
+  }
+
+  function handleConfirmDeleteGroupType() {
+    if (!deleteGroupPrompt) return;
+    const { groupType } = deleteGroupPrompt;
+    const cats = groupedCategories[groupType] ?? [];
+    // Reassign all categories in this type to "general"
+    if (cats.length > 0) {
+      const updated = { ...loadCategoryTypeOverrides() };
+      cats.forEach(cat => { updated[cat] = "general"; });
+      saveCategoryTypeOverrides(updated);
+      setCategoryTypeOverridesState(updated);
+    }
+    // Remove from custom types or label overrides
+    const isCustom = customGroupTypes.some(t => t.id === groupType);
+    if (isCustom) {
+      const updated = customGroupTypes.filter(t => t.id !== groupType);
+      saveCustomGroupTypes(updated);
+      setCustomGroupTypes(updated);
+    } else {
+      const updated = { ...groupLabelOverrides };
+      delete updated[groupType];
+      saveGroupLabelOverrides(updated);
+      setGroupLabelOverrides(updated);
+    }
+    if (groupFilter === groupType) setGroupFilter("all");
+    setDeleteGroupPrompt(null);
   }
 
   function handleAddCategory(groupType) {
@@ -2881,6 +3863,38 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
         </div>
       )}
 
+      {deleteGroupPrompt && (
+        <div onClick={() => setDeleteGroupPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1100 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 480, padding: "2rem", width: "90%" }}>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", marginBottom: "0.6rem" }}>
+              Delete "{deleteGroupPrompt.label}"?
+            </div>
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.8, margin: "0 0 0.5rem" }}>
+              This category type will be removed. All linked categories will be moved to <strong style={{ color: "var(--fm-ink)" }}>General</strong>.
+            </p>
+            <div style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", display: "grid", gap: "0.3rem 1.5rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1.75rem", padding: "0.85rem 1rem" }}>
+              {[
+                ["Categories", deleteGroupPrompt.counts.categories],
+                ["Items",      deleteGroupPrompt.counts.items],
+                ["Tasks",      deleteGroupPrompt.counts.tasks],
+                ["Chores",     deleteGroupPrompt.counts.chores],
+                ["To Dos",     deleteGroupPrompt.counts.todos],
+                ["Projects",   deleteGroupPrompt.counts.projects],
+              ].map(([label, n]) => (
+                <div key={label} style={{ alignItems: "baseline", display: "flex", gap: "0.4rem" }}>
+                  <span style={{ color: n > 0 ? "var(--fm-amber)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", fontWeight: 600 }}>{n}</span>
+                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>{label}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+              <button onClick={() => setDeleteGroupPrompt(null)} style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", padding: "0.4rem 0.9rem" }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>Cancel</button>
+              <button onClick={handleConfirmDeleteGroupType} style={{ background: "var(--fm-red)18", border: "1px solid var(--fm-red)40", borderRadius: "3px", color: "var(--fm-red)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", padding: "0.4rem 0.9rem" }} onMouseEnter={e => { e.currentTarget.style.background = "var(--fm-red)30"; e.currentTarget.style.borderColor = "var(--fm-red)"; }} onMouseLeave={e => { e.currentTarget.style.background = "var(--fm-red)18"; e.currentTarget.style.borderColor = "var(--fm-red)40"; }}>Delete Type</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {addingTask && selectedItem && createPortal(
         <div
           onClick={() => { setAddingTask(false); setEditingTask(null); setNewTask({ task: "", schedule: "", season: null, lastCompleted: null, nextDate: null, followSchedule: false, notes: "" }); }}
@@ -3131,9 +4145,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <FmHeader active="Inventory" tagline="Inventory" />
       <FmSubnav
-        tabs={["All items", "By system", "By room", "Item Inventory", "Floor plan"]}
+        tabs={["Item List", "Floor Plan", "Rooms", "Systems", "Structure", "Exterior", "Groups"]}
         active={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={tab => { setActiveTab(tab); setGroupFilter("all"); }}
         stats={[
           { value: totalItems, label: "items" },
           { value: systemCatCount, label: "systems" },
@@ -3141,7 +4155,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
         ]}
       />
 
-      {activeTab === "Floor plan" ? (
+      {activeTab === "Floor Plan" ? (
         <FloorPlan
           categories={CATEGORIES}
           categoryTypes={effectiveCategoryTypes}
@@ -3153,9 +4167,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       ) : (
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "2rem 2rem 0" }}>
-        <div style={{ flex: "0 0 58%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={{ flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
-        {activeTab === "Item Inventory" ? (
+        {activeTab === "Item List" ? (
           <ItemInventoryView
             categories={CATEGORIES}
             categoryItems={CATEGORY_ITEMS}
@@ -3170,31 +4184,324 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           />
         ) : null}
 
-        {activeTab !== "Item Inventory" && <>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "2rem" }}>
+        {activeTab === "Rooms" && (() => {
+          const roomCats = groupedCategories["room"] ?? [];
+          const bySubtype = {};
+          roomCats.forEach(cat => {
+            const sub = roomSubtypes[cat] || null;
+            const sortKey = sub ?? "\xff";
+            if (!bySubtype[sortKey]) bySubtype[sortKey] = { label: sub, cats: [] };
+            bySubtype[sortKey].cats.push(cat);
+          });
+          return (
+            <div>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
+                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
+                  {roomCats.length} rooms
+                </p>
+                <button onClick={() => handleAddCategory("room")} style={{ background: "transparent", border: "1px solid var(--fm-ink-dim)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", marginLeft: "auto", padding: "0.4rem 0.9rem", transition: "all 0.15s", whiteSpace: "nowrap" }} onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}>+ ADD ROOM</button>
+              </div>
+              {Object.keys(bySubtype).sort((a, b) => a.localeCompare(b)).map(key => {
+                const { label, cats: groupCats } = bySubtype[key];
+                const sortedCats = [...groupCats].sort((a, b) => a.localeCompare(b));
+                return (
+                  <div key={key}>
+                    {label && (
+                      <div style={{ color: "#4a5060", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.14em", margin: "0.6rem 0 0.3rem 0.25rem", textTransform: "uppercase" }}>{label}</div>
+                    )}
+                    {sortedCats.map(category => renderCategory(category))}
+                  </div>
+                );
+              })}
+              {roomCats.length === 0 && (
+                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No rooms yet</div>
+              )}
+            </div>
+          );
+        })()}
+
+        {activeTab === "Systems" && (() => {
+          const systemCats = groupedCategories["system"] ?? [];
+          const displayCats = viewMode === "az"
+            ? [...systemCats].sort((a, b) => azDir * a.localeCompare(b))
+            : systemCats;
+          return (
+            <div>
+              {/* Toolbar */}
+              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
+                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
+                  {systemCats.length} {systemCats.length === 1 ? "category" : "categories"}
+                </p>
+                <div style={{ display: "flex", gap: "0.3rem", marginLeft: "auto" }}>
+                  <button
+                    onClick={() => {
+                      if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
+                      else setAzDir(d => d * -1);
+                    }}
+                    style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
+                  >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
+                  <button
+                    onClick={cycleExpand}
+                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
+                </div>
+              </div>
+              {displayCats.length === 0 ? (
+                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No systems yet</div>
+              ) : (
+                displayCats.map(cat => renderCategory(cat))
+              )}
+              {pendingNewCategory?.groupType === "system" && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.75rem", padding: "0.8rem 1rem" }}>
+                    <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
+                    <InlineComboInput
+                      placeholder="System name..."
+                      options={getCategoriesForGroup("system").filter(c => !new Set(CATEGORIES).has(c))}
+                      onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
+                      onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
+                    />
+                  </div>
+                </div>
+              )}
+              <div style={{ paddingTop: "0.25rem" }}>
+                <button
+                  onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  onClick={() => handleAddCategory("system")}
+                  style={addBtnStyle(false)}
+                >+ ADD SYSTEM</button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {activeTab === "Structure" && (() => {
+          const structureCats = groupedCategories["structure"] ?? [];
+          const displayCats = viewMode === "az"
+            ? [...structureCats].sort((a, b) => azDir * a.localeCompare(b))
+            : structureCats;
+          return (
+            <div>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
+                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
+                  {structureCats.length} {structureCats.length === 1 ? "category" : "categories"}
+                </p>
+                <div style={{ display: "flex", gap: "0.3rem", marginLeft: "auto" }}>
+                  <button
+                    onClick={() => {
+                      if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
+                      else setAzDir(d => d * -1);
+                    }}
+                    style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
+                  >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
+                  <button
+                    onClick={cycleExpand}
+                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
+                </div>
+              </div>
+              {displayCats.length === 0 ? (
+                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No structure categories yet</div>
+              ) : (
+                displayCats.map(cat => renderCategory(cat))
+              )}
+              {pendingNewCategory?.groupType === "structure" && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.75rem", padding: "0.8rem 1rem" }}>
+                    <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
+                    <InlineComboInput
+                      placeholder="Category name..."
+                      options={getCategoriesForGroup("structure").filter(c => !new Set(CATEGORIES).has(c))}
+                      onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
+                      onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
+                    />
+                  </div>
+                </div>
+              )}
+              <div style={{ paddingTop: "0.25rem" }}>
+                <button
+                  onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  onClick={() => handleAddCategory("structure")}
+                  style={addBtnStyle(false)}
+                >+ ADD CATEGORY</button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {activeTab === "Exterior" && (() => {
+          const exteriorCats = groupedCategories["exterior"] ?? [];
+          const displayCats = viewMode === "az"
+            ? [...exteriorCats].sort((a, b) => azDir * a.localeCompare(b))
+            : exteriorCats;
+          return (
+            <div>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
+                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
+                  {exteriorCats.length} {exteriorCats.length === 1 ? "category" : "categories"}
+                </p>
+                <div style={{ display: "flex", gap: "0.3rem", marginLeft: "auto" }}>
+                  <button
+                    onClick={() => {
+                      if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
+                      else setAzDir(d => d * -1);
+                    }}
+                    style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
+                  >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
+                  <button
+                    onClick={cycleExpand}
+                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
+                </div>
+              </div>
+              {displayCats.length === 0 ? (
+                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No exterior categories yet</div>
+              ) : (
+                displayCats.map(cat => renderCategory(cat))
+              )}
+              {pendingNewCategory?.groupType === "exterior" && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.75rem", padding: "0.8rem 1rem" }}>
+                    <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
+                    <InlineComboInput
+                      placeholder="Category name..."
+                      options={getCategoriesForGroup("exterior").filter(c => !new Set(CATEGORIES).has(c))}
+                      onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
+                      onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
+                    />
+                  </div>
+                </div>
+              )}
+              <div style={{ paddingTop: "0.25rem" }}>
+                <button
+                  onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  onClick={() => handleAddCategory("exterior")}
+                  style={addBtnStyle(false)}
+                >+ ADD CATEGORY</button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {activeTab === "Groups" && <>
+        {/* Toolbar */}
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1.25rem" }}>
+          <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
+            {filteredGroupOrder.reduce((n, g) => n + (groupedCategories[g]?.length ?? 0), 0)} categories
+          </p>
           <button
-            onClick={cycleExpand}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--fm-hairline2)",
-              borderRadius: "3px",
-              color: "var(--fm-brass-dim)",
-              cursor: "pointer",
-              fontFamily: "var(--fm-mono)",
-              fontSize: "0.65rem",
-              letterSpacing: "0.08em",
-              padding: "0.3rem 0.7rem",
-              transition: "all 0.15s",
-              width: "5.5rem",
-            }}
+            onClick={() => { setShowAddCategoryForm(true); setNewCatName(""); }}
+            style={{ background: "transparent", border: "1px solid var(--fm-ink-dim)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", marginLeft: "auto", padding: "0.4rem 0.9rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >
-            {expandLevel === 2 ? "Collapse" : "Expand"}
-          </button>
+          >+ ADD CATEGORY TYPE</button>
+          {/* View toggle */}
+          <div style={{ display: "flex", gap: "0.3rem" }}>
+            <button
+              onClick={() => setViewMode("byType")}
+              style={{ background: viewMode === "byType" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "byType" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "byType" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
+            >By Type</button>
+            <button
+              onClick={() => {
+                if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
+                else setAzDir(d => d * -1);
+              }}
+              style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
+            >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
+            <button
+              onClick={cycleExpand}
+              style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+            >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
+          </div>
         </div>
 
-        {filteredGroupOrder.map(groupType => {
+        {/* Inline add category type form */}
+        {showAddCategoryForm && (
+          <div style={{ alignItems: "center", background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "4px", display: "flex", gap: "0.6rem", marginBottom: "0.75rem", padding: "0.6rem 0.75rem" }}>
+            <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", whiteSpace: "nowrap" }}>New type</span>
+            <input
+              autoFocus
+              value={newCatName}
+              onChange={e => setNewCatName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  const trimmed = newCatName.trim();
+                  if (!trimmed) return;
+                  const id = trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+                  const label = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+                  const updated = [...customGroupTypes, { id, label }];
+                  saveCustomGroupTypes(updated);
+                  setCustomGroupTypes(updated);
+                  setGroupFilter(id);
+                  setShowAddCategoryForm(false);
+                  setNewCatName("");
+                }
+                if (e.key === "Escape") { setShowAddCategoryForm(false); setNewCatName(""); }
+              }}
+              placeholder="e.g. Workshop, Pool, Garage…"
+              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.35rem 0.6rem" }}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
+            />
+            <button
+              onClick={() => {
+                const trimmed = newCatName.trim();
+                if (!trimmed) return;
+                const id = trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+                const label = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+                const updated = [...customGroupTypes, { id, label }];
+                saveCustomGroupTypes(updated);
+                setCustomGroupTypes(updated);
+                setGroupFilter(id);
+                setShowAddCategoryForm(false);
+                setNewCatName("");
+              }}
+              disabled={!newCatName.trim()}
+              style={{ background: newCatName.trim() ? "var(--fm-brass)18" : "transparent", border: `1px solid ${newCatName.trim() ? "var(--fm-brass)40" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: newCatName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: newCatName.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.35rem 0.75rem", transition: "all 0.12s" }}
+            >Add</button>
+            <button
+              onClick={() => { setShowAddCategoryForm(false); setNewCatName(""); }}
+              style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.35rem 0.3rem", transition: "color 0.12s" }}
+              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+            >Cancel</button>
+          </div>
+        )}
+
+        {/* Group filter pills */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "1rem" }}>
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Group</span>
+            <ItemInvPill active={groupFilter === "all"} onClick={() => setGroupFilter("all")}>All</ItemInvPill>
+            {filteredGroupOrder.map(g => (
+              <ItemInvPill key={g} active={groupFilter === g} onClick={() => setGroupFilter(g)}>
+                {allGroupLabels[g]}
+              </ItemInvPill>
+            ))}
+          </div>
+        </div>
+
+        {viewMode === "az" && (
+          <div>
+            {[...CATEGORIES].sort((a, b) => azDir * a.localeCompare(b)).map(category => renderCategory(category))}
+          </div>
+        )}
+
+        {viewMode === "byType" && visibleGroups.map(groupType => {
           const rawCats = groupedCategories[groupType];
           const isSorted = sortedGroups.has(groupType);
           const cats = isSorted ? [...rawCats].sort((a, b) => a.localeCompare(b)) : rawCats;
@@ -3221,11 +4528,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
               }}
             >
               <div
-                onClick={() => toggleGroup(groupType)}
                 style={{
                   alignItems: "center",
                   borderBottom: `1px solid ${isTarget ? "var(--fm-brass)30" : "var(--fm-ink-dim)"}`,
-                  cursor: "pointer",
                   display: "flex",
                   gap: "0.5rem",
                   marginBottom: isGroupCollapsed ? "0" : "0.75rem",
@@ -3233,39 +4538,44 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   userSelect: "none",
                 }}
               >
-                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>
+                <span onClick={() => toggleGroup(groupType)} style={{ color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>
                   {isGroupCollapsed ? "▶" : "▼"}
                 </span>
-                <span style={{
-                  color: "var(--fm-brass)",
-                  fontFamily: "var(--fm-mono)",
-                  fontSize: "0.65rem",
-                  letterSpacing: "0.15em",
-                  textTransform: "uppercase",
-                }}>
-                  {GROUP_LABELS[groupType]}
-                </span>
-                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
+                {editingGroupType === groupType ? (
+                  <input
+                    autoFocus
+                    value={editingGroupDraft}
+                    onChange={e => setEditingGroupDraft(e.target.value)}
+                    onBlur={() => handleRenameGroupType(groupType, editingGroupDraft)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") { e.preventDefault(); handleRenameGroupType(groupType, editingGroupDraft); }
+                      if (e.key === "Escape") setEditingGroupType(null);
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: "3px", color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.15em", outline: "none", padding: "0.1rem 0.4rem", textTransform: "uppercase", width: "10rem" }}
+                  />
+                ) : (
+                  <span
+                    onClick={() => toggleGroup(groupType)}
+                    onDoubleClick={e => { e.stopPropagation(); setEditingGroupType(groupType); setEditingGroupDraft(allGroupLabels[groupType]); }}
+                    title="Double-click to rename"
+                    style={{ color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.15em", textTransform: "uppercase" }}
+                  >
+                    {allGroupLabels[groupType]}
+                  </span>
+                )}
+                <span onClick={() => toggleGroup(groupType)} style={{ color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
                   · {cats.length}
                 </span>
-                <button
-                  onClick={e => { e.stopPropagation(); setSortedGroups(prev => { const next = new Set(prev); isSorted ? next.delete(groupType) : next.add(groupType); return next; }); }}
-                  style={{
-                    background: "transparent",
-                    border: `1px solid ${isSorted ? "var(--fm-brass)" : "#3a3548"}`,
-                    borderRadius: "3px",
-                    color: isSorted ? "var(--fm-brass)" : "#5a5468",
-                    cursor: "pointer",
-                    fontFamily: "var(--fm-mono)",
-                    fontSize: "0.55rem",
-                    letterSpacing: "0.08em",
-                    marginLeft: "auto",
-                    padding: "0.15rem 0.4rem",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  A→Z
-                </button>
+                {groupType !== "general" && (
+                  <button
+                    onClick={e => { e.stopPropagation(); handleDeleteGroupTypeClick(groupType); }}
+                    title="Delete category type"
+                    style={{ background: "transparent", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1, marginLeft: "auto", padding: "0 0.2rem", transition: "color 0.12s" }}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                  >×</button>
+                )}
               </div>
 
               {!isGroupCollapsed && (
@@ -3358,14 +4668,13 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           display: "flex",
           flex: 1,
           flexDirection: "column",
-          gap: "2rem",
           minWidth: 0,
-          overflowY: "auto",
-          paddingBottom: "4rem",
+          overflow: "hidden",
         }}>
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px" }}>
-          {/* Panel header */}
-          <div style={{ borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 1rem 0.6rem" }}>
+          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+
+          {/* Panel header — item name */}
+          <div style={{ borderBottom: "1px solid var(--fm-hairline)", flexShrink: 0, padding: "0.75rem 1rem 0.6rem" }}>
             {selectedItem ? (
               <>
                 <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>Item</div>
@@ -3379,7 +4688,39 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
             )}
           </div>
 
-          {!selectedItem ? (
+          {/* Tab strip */}
+          <div style={{ borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0 }}>
+            {[
+              { id: "details",     label: "Details"     },
+              { id: "maintenance", label: "Maintenance" },
+              { id: "projects",    label: "Projects"    },
+              { id: "todos",       label: "To Dos"      },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setDetailTab(tab.id)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: detailTab === tab.id ? "2px solid var(--fm-brass)" : "2px solid transparent",
+                  color: detailTab === tab.id ? "var(--fm-brass)" : "var(--fm-ink-dim)",
+                  cursor: "pointer",
+                  flex: 1,
+                  fontFamily: "var(--fm-mono)",
+                  fontSize: "0.58rem",
+                  letterSpacing: "0.1em",
+                  padding: "0.55rem 0.25rem",
+                  textTransform: "uppercase",
+                  transition: "color 0.12s",
+                }}
+              >{tab.label}</button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: "2rem" }}>
+
+          {detailTab === "details" && (!selectedItem ? (
             <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2.5rem 1rem", textAlign: "center" }}>
               Select an item to view details
             </div>
@@ -3390,7 +4731,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                 const itmFields = itemFieldSchemas[cfKey] || [];
                 const vals = customFieldValues[cfKey] || {};
                 const itemTypeField = UNIVERSAL_FIELDS.find(f => f.id === "item_type");
-                const addedIds = new Set([...itmFields.map(f => f.id), "item_type"]);
+                const addedIds = new Set([...itmFields.map(f => f.id), "item_type", "system"]);
                 const svgArrow = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5460'/%3E%3C/svg%3E")`;
                 const fieldStyle = { background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", outline: "none", padding: "0.3rem 0.5rem", width: "100%" };
                 const labelStyle = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
@@ -3403,6 +4744,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   if (field.id === "item_type") {
                     const existingTypes = [...new Set(Object.values(customFieldValues).map(v => v?.item_type).filter(Boolean))].sort();
                     return <ModelComboField value={val} models={existingTypes} fieldStyle={fieldStyle} onChange={onChange} />;
+                  }
+                  if (field.id === "system") {
+                    const systemOptions = CATEGORIES.filter(c => effectiveCategoryTypes[c] === "system").sort();
+                    const defaultSystem = effectiveCategoryTypes[selectedItem.category] === "system" ? selectedItem.category : "";
+                    return <ModelComboField value={val || defaultSystem} models={systemOptions} fieldStyle={fieldStyle} onChange={onChange} />;
                   }
                   if (field.id === "manufacturer") {
                     const mfrs = getManufacturers(selectedItem.item);
@@ -3451,6 +4797,12 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                         {renderFieldInput(itemTypeField)}
                       </div>
                     )}
+                    <div style={{ marginBottom: "0.45rem" }}>
+                      <div style={{ marginBottom: "0.2rem" }}>
+                        <span style={labelStyle}>System</span>
+                      </div>
+                      {renderFieldInput({ id: "system", name: "System", type: "text" })}
+                    </div>
                     {itmFields.map(field => (
                       <div key={field.id} style={{ marginBottom: "0.45rem" }}>
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.2rem" }}>
@@ -3513,23 +4865,10 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                 );
               })()}
             </div>
-          )}
-          </div>
+          ))}
 
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px" }}>
-            {/* ─── Maintenance section ──────────────────────────────────────── */}
-            <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", justifyContent: "space-between", padding: "0.5rem 1rem 0.4rem" }}>
-              <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>Maintenance</div>
-              {selectedItem && (() => {
-                const cov = itemCoverageMap[`${selectedItem.category}|${selectedItem.item}`];
-                if (cov && cov.unscheduled > 0) return (
-                  <span style={{ color: "#5a4a2e", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{cov.unscheduled} not scheduled</span>
-                );
-                return null;
-              })()}
-            </div>
-            {!selectedItem ? (
-              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "1.5rem 1rem", textAlign: "center" }}>Select an item to view maintenance</div>
+          {detailTab === "maintenance" && (!selectedItem ? (
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2.5rem 1rem", textAlign: "center" }}>Select an item to view maintenance</div>
             ) : (
             <>
               {itemTasks.length === 0 ? (
@@ -3739,20 +5078,12 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                 })()}
               </div>
             </>
-          )}
-          </div>
+          ))}
 
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px" }}>
-            <div style={{ borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 1rem 0.6rem" }}>
-              <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-                Projects
-              </div>
+          {detailTab === "projects" && (!selectedItem ? (
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2.5rem 1rem", textAlign: "center" }}>
+              Select an item to view projects
             </div>
-
-            {!selectedItem ? (
-              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "1.5rem 1rem", textAlign: "center" }}>
-                Select an item to view projects
-              </div>
             ) : (
               <>
                 {selectedProjects.length === 0 && !addingProject && (
@@ -3868,24 +5199,10 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   </button>
                 </div>
               </>
-            )}
-          </div>
+          ))}
 
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px" }}>
-            <div style={{ borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 1rem 0.6rem" }}>
-              <div style={{
-                color: "var(--fm-brass)",
-                fontFamily: "var(--fm-mono)",
-                fontSize: "0.62rem",
-                letterSpacing: "0.15em",
-                textTransform: "uppercase",
-              }}>
-                To Dos
-              </div>
-            </div>
-
-            {!selectedItem ? (
-              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "1.5rem 1rem", textAlign: "center" }}>
+          {detailTab === "todos" && (!selectedItem ? (
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2.5rem 1rem", textAlign: "center" }}>
                 Select an item to view to dos
               </div>
             ) : (
@@ -4025,10 +5342,12 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   </button>
                 </div>
               </>
-            )}
-          </div>
-        </div>
-        </div>
+          ))}
+
+          </div>{/* end tab content */}
+          </div>{/* end unified panel card */}
+        </div>{/* end right column */}
+        </div>{/* end content row */}
       </div>
       )}
     </div>

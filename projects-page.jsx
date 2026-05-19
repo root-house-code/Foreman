@@ -591,7 +591,7 @@ export default function ProjectsPage({ navigate }) {
                               <div style={{ border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", flexShrink: 0, height: 16, width: 16 }} />
                               <input
                                 autoFocus value={centerNewTaskTitle} onChange={e => setCenterNewTaskTitle(e.target.value)}
-                                placeholder="Task title..."
+                                placeholder="Title"
                                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleCenterAddTask(todo.id); } if (e.key === "Escape") { setCenterAddingTaskFor(null); setCenterNewTaskTitle(""); } }}
                                 onBlur={() => handleCenterAddTask(todo.id)}
                                 style={{ ...fieldInput, flex: 1, fontSize: "0.72rem", padding: "0.2rem 0.4rem" }}
@@ -603,7 +603,7 @@ export default function ProjectsPage({ navigate }) {
                               style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: "0.25rem 0 0.25rem 2.6rem", textAlign: "left", transition: "color 0.15s", width: "100%" }}
                               onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
                               onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
-                            >+ Add task</button>
+                            >+ Add</button>
                           )}
                         </div>
                       )}
@@ -723,9 +723,9 @@ export default function ProjectsPage({ navigate }) {
                 <ImageAttachments imageIds={rightProjectForm.images || []} onChange={ids => { setProjectField("images", ids); saveProjectField("images", ids); }} />
               </div>
 
-              {/* Tasks */}
+              {/* Checklist */}
               <div style={{ borderTop: "var(--fm-border)", paddingTop: "0.85rem" }}>
-                <label style={{ ...fieldLabel, marginBottom: "0.5rem" }}>Tasks</label>
+                <label style={{ ...fieldLabel, marginBottom: "0.5rem" }}>Checklist</label>
                 {(rightProjectForm.tasks || []).map(task => (
                   <div key={task.id} style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>
                     <TaskCheckbox completed={task.completed} onToggle={() => handleToggleProjectTask(task.id)} />
@@ -736,10 +736,10 @@ export default function ProjectsPage({ navigate }) {
                 {rightProjectAddingTask ? (
                   <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginTop: "0.3rem" }}>
                     <div style={{ border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", flexShrink: 0, height: 16, width: 16 }} />
-                    <input autoFocus value={rightProjectNewTaskTitle} onChange={e => setRightProjectNewTaskTitle(e.target.value)} placeholder="Task title..." onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleRightProjectAddTask(); } if (e.key === "Escape") { setRightProjectAddingTask(false); setRightProjectNewTaskTitle(""); } }} onBlur={handleRightProjectAddTask} style={{ ...fieldInput, flex: 1, fontSize: "0.72rem", padding: "0.2rem 0.4rem" }} />
+                    <input autoFocus value={rightProjectNewTaskTitle} onChange={e => setRightProjectNewTaskTitle(e.target.value)} placeholder="Title" onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleRightProjectAddTask(); } if (e.key === "Escape") { setRightProjectAddingTask(false); setRightProjectNewTaskTitle(""); } }} onBlur={handleRightProjectAddTask} style={{ ...fieldInput, flex: 1, fontSize: "0.72rem", padding: "0.2rem 0.4rem" }} />
                   </div>
                 ) : (
-                  <button onClick={() => setRightProjectAddingTask(true)} style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", marginTop: "0.25rem", padding: "0.2rem 0", transition: "color 0.15s" }} onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}>+ Add task</button>
+                  <button onClick={() => setRightProjectAddingTask(true)} style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", marginTop: "0.25rem", padding: "0.2rem 0", transition: "color 0.15s" }} onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}>+ Add</button>
                 )}
               </div>
 
@@ -847,9 +847,9 @@ export default function ProjectsPage({ navigate }) {
                 <textarea value={rightPanelForm.description || ""} onChange={e => setRightField("description", e.target.value)} onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"} onBlur={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; handleRightBlur("description"); }} placeholder="Notes..." rows={3} style={{ ...fieldInput, resize: "vertical" }} />
               </div>
 
-              {/* Tasks */}
+              {/* Checklist */}
               <div style={{ borderTop: "var(--fm-border)", paddingTop: "0.85rem" }}>
-                <label style={{ ...fieldLabel, marginBottom: "0.5rem" }}>Tasks</label>
+                <label style={{ ...fieldLabel, marginBottom: "0.5rem" }}>Checklist</label>
                 {(selectedTodo?.tasks || []).map(task => (
                   <div key={task.id} style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>
                     <TaskCheckbox completed={task.completed} onToggle={() => selectedTodo && handleToggleTask(selectedTodo.id, task.id)} />
@@ -860,10 +860,10 @@ export default function ProjectsPage({ navigate }) {
                 {rightAddingTask ? (
                   <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginTop: "0.3rem" }}>
                     <div style={{ border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", flexShrink: 0, height: 16, width: 16 }} />
-                    <input autoFocus value={rightNewTaskTitle} onChange={e => setRightNewTaskTitle(e.target.value)} placeholder="Task title..." onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleRightAddTask(); } if (e.key === "Escape") { setRightAddingTask(false); setRightNewTaskTitle(""); } }} onBlur={handleRightAddTask} style={{ ...fieldInput, flex: 1, fontSize: "0.72rem", padding: "0.2rem 0.4rem" }} />
+                    <input autoFocus value={rightNewTaskTitle} onChange={e => setRightNewTaskTitle(e.target.value)} placeholder="Title" onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleRightAddTask(); } if (e.key === "Escape") { setRightAddingTask(false); setRightNewTaskTitle(""); } }} onBlur={handleRightAddTask} style={{ ...fieldInput, flex: 1, fontSize: "0.72rem", padding: "0.2rem 0.4rem" }} />
                   </div>
                 ) : (
-                  <button onClick={() => setRightAddingTask(true)} style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", marginTop: "0.25rem", padding: "0.2rem 0", transition: "color 0.15s" }} onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}>+ Add task</button>
+                  <button onClick={() => setRightAddingTask(true)} style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", marginTop: "0.25rem", padding: "0.2rem 0", transition: "color 0.15s" }} onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}>+ Add</button>
                 )}
               </div>
             </div>

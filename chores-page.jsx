@@ -19,8 +19,10 @@ import { loadData, loadCustomData, saveCustomData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { loadRoomCategories, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
+import { loadRooms } from "./lib/rooms.js";
 import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
+  saveChoreCompletionRecord,
 } from "./lib/choreCompletions.js";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import {
@@ -481,7 +483,7 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DOW_LABELS  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
-function MonthCalendar({ chores, choreCompletions, onLogChore }) {
+function MonthCalendar({ chores, choreCompletions, onLogChore, onDayClick }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const [viewYear,  setViewYear]  = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -542,10 +544,12 @@ function MonthCalendar({ chores, choreCompletions, onLogChore }) {
           return (
             <div
               key={i}
+              onClick={() => inMonth && onDayClick && onDayClick(date)}
               style={{
                 background: isToday ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)",
                 border: isToday ? "1px solid rgba(201,169,110,0.3)" : "var(--fm-border)",
                 borderRadius: "var(--fm-radius)",
+                cursor: inMonth && onDayClick ? "pointer" : "default",
                 minHeight: "72px",
                 opacity: inMonth ? 1 : 0.3,
                 padding: "0.35rem 0.4rem",
@@ -559,7 +563,7 @@ function MonthCalendar({ chores, choreCompletions, onLogChore }) {
                 return (
                   <div
                     key={chore.id}
-                    onClick={() => onLogChore(chore.id, date)}
+                    onClick={e => { e.stopPropagation(); onLogChore(chore.id, date); }}
                     title={`${done ? "Unmark" : "Mark done"}: ${chore.title}`}
                     style={{
                       background: "var(--fm-bg-sunk)",
@@ -666,6 +670,7 @@ export default function ChoresPage({ navigate, navState }) {
   const [sortCols, setSortCols]           = useState([]);
   const [confirmChore, setConfirmChore]   = useState(null);
   const [addChoreModalOpen, setAddChoreModalOpen] = useState(false);
+  const [createChoreDate, setCreateChoreDate]     = useState(null);
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [choreNextDates, setChoreNextDates] = useState(() => loadChoreNextDates());
   const [detailEvent, setDetailEvent]     = useState(null); // { chore, date }
@@ -777,13 +782,14 @@ export default function ChoresPage({ navigate, navState }) {
     saveChores(updated);
   }
 
-  function handleAddChoreModalSave(form) {
-    const newChore = createChore({ ...form });
+  function handleAddChoreModalSave(form, date) {
+    const startDate = date ? date.toISOString() : new Date().toISOString();
+    const newChore = createChore({ ...form, startDate });
     const updated = [newChore, ...chores];
     setChores(updated);
     saveChores(updated);
     if (form.dayOfWeek != null && newChore.schedule) {
-      const start = new Date(); start.setHours(0,0,0,0);
+      const start = date ?? new Date(); start.setHours(0,0,0,0);
       const next = computeNextOccurrenceFromStart(start, newChore.schedule, newChore.dayOfWeek, newChore.timeOfDay);
       const updatedNext = { ...choreNextDates, [newChore.id]: next.toISOString() };
       saveChoreNextDates(updatedNext);
@@ -845,6 +851,24 @@ export default function ChoresPage({ navigate, navState }) {
     }
   }
 
+  function handleMarkDoneWithDetails(choreId, date, details) {
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
+    const updatedCompletions = toggleChoreCompletion(choreCompletions, choreId, d);
+    saveChoreCompletions(updatedCompletions);
+    setChoreCompletions(updatedCompletions);
+    const roomLabel = details.room;
+    const rooms = loadRooms();
+    const matchedRoom = roomLabel ? Object.values(rooms).find(r => r.label === roomLabel) : null;
+    saveChoreCompletionRecord(choreId, d, { ...details, roomId: matchedRoom?.id || null });
+    const chore = chores.find(c => c.id === choreId);
+    if (chore) {
+      const nextOcc = computeChoreNextDate(d, chore.schedule, chore.dayOfWeek, chore.timeOfDay);
+      const updated = { ...choreNextDates, [choreId]: nextOcc.toISOString() };
+      saveChoreNextDates(updated);
+      setChoreNextDates(updated);
+    }
+  }
+
   async function handleSyncReminders() {
     const maintenanceRows = loadData();
     let maintenanceNextDates = {};
@@ -884,12 +908,12 @@ export default function ChoresPage({ navigate, navState }) {
 
       {addChoreModalOpen && (
         <CreateChoreModal
-          date={null}
+          date={createChoreDate}
           roomOptions={roomOptions}
           roomItemsMap={roomItemsMap}
           onAddItemToInventory={handleAddItemToInventory}
           onSave={handleAddChoreModalSave}
-          onClose={() => setAddChoreModalOpen(false)}
+          onClose={() => { setAddChoreModalOpen(false); setCreateChoreDate(null); }}
         />
       )}
 
@@ -899,6 +923,8 @@ export default function ChoresPage({ navigate, navState }) {
           date={detailEvent.date}
           isDone={isChoreCompleted(choreCompletions, detailEvent.chore.id, detailEvent.date)}
           onToggleDone={() => handleLogChore(detailEvent.chore.id, detailEvent.date)}
+          onMarkDone={details => handleMarkDoneWithDetails(detailEvent.chore.id, detailEvent.date, details)}
+          roomItemsMap={roomItemsMap}
           onClose={() => setDetailEvent(null)}
         />
       )}
@@ -943,6 +969,7 @@ export default function ChoresPage({ navigate, navState }) {
             chores={chores}
             choreCompletions={choreCompletions}
             onLogChore={handleLogChore}
+            onDayClick={date => { setCreateChoreDate(date); setAddChoreModalOpen(true); }}
           />
         )}
 

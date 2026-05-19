@@ -7,6 +7,8 @@ import DatePicker from "react-datepicker";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
 import { loadData } from "./lib/data.js";
+import { loadEntityTypes, isSpatial, isFunctional, resolveTypeId } from "./lib/entityTypes.js";
+import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
 import AssigneeInput from "./components/AssigneeInput.jsx";
 import TodoModal from "./components/TodoModal.jsx";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
@@ -89,9 +91,18 @@ function TodoCard({ todo, onEdit, isDragging, onDragStart, onDragEnd, onStatusCh
       {/* Meta row */}
       <div style={{ alignItems: "flex-end", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
         <div style={{ minWidth: 0 }}>
-          {(todo.linkedCategory || todo.linkedItem) && (
-            <div style={{ border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", display: "inline-block", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.04em", marginBottom: "0.15rem", overflow: "hidden", padding: "0.1rem 0.3rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {todo.linkedItem ? `${todo.linkedCategory} › ${todo.linkedItem}` : todo.linkedCategory}
+          {(todo.linkedCategory || todo.linkedItem || todo.linkedRoom || todo.linkedSystem) && (
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.2rem", marginBottom: "0.15rem" }}>
+              {(todo.linkedRoom || (todo.linkedCategory && !todo.linkedSystem)) && (
+                <span style={{ border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.04em", overflow: "hidden", padding: "0.1rem 0.3rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {todo.linkedRoom || todo.linkedCategory}{todo.linkedItem ? ` › ${todo.linkedItem}` : ""}
+                </span>
+              )}
+              {todo.linkedSystem && (
+                <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.08em", padding: "0.1rem 0.3rem", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                  {todo.linkedSystem.slice(0, 4).toUpperCase()}
+                </span>
+              )}
             </div>
           )}
           {todo.assignee && (
@@ -264,6 +275,23 @@ export default function BoardPage({ navigate }) {
   }, [rows, deletedCategories, deletedItems]);
 
   const categories = Object.keys(categoryItems);
+
+  const entityTypeData = useMemo(() => loadEntityTypes(), []);
+  const categoryTypeOverrides = useMemo(() => loadCategoryTypeOverrides(), []);
+
+  const defaultCatTypes = useMemo(() => {
+    const map = {};
+    rows.forEach(r => { if (r.category && r.categoryType && !map[r.category]) map[r.category] = r.categoryType; });
+    return map;
+  }, [rows]);
+
+  const spatialCategories = useMemo(() =>
+    categories.filter(c => isSpatial(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "general"), entityTypeData)).sort(),
+    [categories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
+
+  const functionalCategories = useMemo(() =>
+    categories.filter(c => isFunctional(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "general"), entityTypeData)).sort(),
+    [categories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
 
   const rowDataByKey = useMemo(() => {
     const map = {};
@@ -493,7 +521,9 @@ export default function BoardPage({ navigate }) {
 
       {modalState !== null && (
         <TodoModal
-          todo={modalTodo} categories={categories} categoryItems={categoryItems} projects={projects}
+          todo={modalTodo} categories={categories} categoryItems={categoryItems}
+          spatialCategories={spatialCategories} functionalCategories={functionalCategories}
+          projects={projects}
           onSave={handleSaveTodo} onClose={() => setModalState(null)}
           onDelete={modalTodo ? () => handleDelete(modalTodo.id) : null}
         />
