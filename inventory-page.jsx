@@ -42,6 +42,9 @@ import {
   getLabelForType,
   getRootTypesForClass,
   getSubtypes,
+  createSubtype,
+  renameType,
+  deleteType,
 } from "./lib/entityTypes.js";
 import { loadChores, saveChores } from "./lib/chores.js";
 import { getFloorsInOrder, loadFloors, saveFloors } from "./lib/floors.js";
@@ -275,7 +278,6 @@ const FP_FILL = {
   structure: "rgba(127,176,135,0.12)",
   exterior:  "rgba(150,190,130,0.12)",
   safety:    "rgba(224,115,106,0.12)",
-  general:   "rgba(160,160,160,0.1)",
 };
 const FP_STROKE = {
   room:      "rgba(122,181,217,0.7)",
@@ -283,7 +285,6 @@ const FP_STROKE = {
   structure: "rgba(127,176,135,0.7)",
   exterior:  "rgba(150,190,130,0.7)",
   safety:    "rgba(224,115,106,0.7)",
-  general:   "rgba(160,160,160,0.45)",
 };
 
 function rectToPolygon({ x, y, w, h }) {
@@ -447,8 +448,7 @@ function pinAbbr(item) {
   return item.replace(/\(.*?\)/g, "").trim().slice(0, 4).toUpperCase();
 }
 
-function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory, onRenameCategory, onDeleteCategory }) {
-  const entityTypeData = useMemo(() => loadEntityTypes(), []);
+function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onFieldChange }) {
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
   const [rooms, setRooms] = useState(() => loadRooms());
@@ -583,6 +583,8 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
       pins: { ...(d.pins || {}), [lvl]: levelPins },
       zoneItems: { ...(d.zoneItems || {}), [lvl]: { ...(d.zoneItems?.[lvl] || {}), [zone]: newZoneItems } },
     });
+    const roomLabel = rooms[zone]?.label;
+    if (roomLabel) onFieldChange?.(cat, item, "roomLabel", roomLabel);
   }
 
   function deletePin(pinId) {
@@ -1026,7 +1028,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
 
   const activeLevelName = floors.find(f => f.id === activeLevel)?.label || "";
   const selectedRoom = selected ? rooms[selected] : null;
-  const selType = selectedRoom ? (categoryTypes[selectedRoom.label] || "general") : null;
+  const selType = selectedRoom ? (categoryTypes[selectedRoom.label] || "system") : null;
   const selRoom = selected ? currentPlaced[selected] : null;
 
   const placedOnAnyLevel = useMemo(() => {
@@ -1042,11 +1044,11 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
       .filter(cat => {
         if (placedOnAnyLevel.has(cat)) return false;
         // Only Spatial categories can be drawn as floor plan zones
-        return isSpatial(resolveTypeId(cat, categoryTypes[cat] || "general"), entityTypeData);
+        return isSpatial(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData);
       })
       .sort((a, b) => {
-        const ga = GROUP_ORDER.indexOf(categoryTypes[a] || "general");
-        const gb = GROUP_ORDER.indexOf(categoryTypes[b] || "general");
+        const ga = GROUP_ORDER.indexOf(categoryTypes[a] || "system");
+        const gb = GROUP_ORDER.indexOf(categoryTypes[b] || "system");
         if (ga !== gb) return ga - gb;
         return a.localeCompare(b);
       });
@@ -1087,7 +1089,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
             {sortedCategories.length === 0 && !newCatType ? (
               <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.3rem 1rem" }}>All rooms assigned</div>
             ) : sortedCategories.map(cat => {
-              const type = categoryTypes[cat] || "general";
+              const type = categoryTypes[cat] || "system";
               const isHov = hoveredCatId === cat;
               const isEditing = editingCatId === cat;
               return (
@@ -1319,7 +1321,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
           {(() => {
             const isRoomZone = (roomId) => {
               const lbl = rooms[roomId]?.label;
-              const typeId = resolveTypeId(lbl, categoryTypes[lbl] || "general");
+              const typeId = resolveTypeId(lbl, categoryTypes[lbl] || "system");
               return isSpatial(typeId, entityTypeData);
             };
             const totalSqFt = Object.entries(currentPlaced).reduce((sum, [rid, zone]) => isRoomZone(rid) ? sum + polygonArea(zone.points) / (FP_GRID * FP_GRID) : sum, 0);
@@ -1398,7 +1400,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
           {Object.entries(currentPlaced).map(([roomId, zonePoly]) => {
             const zoneRoom = rooms[roomId];
             if (!zoneRoom) return null;
-            const type = categoryTypes[zoneRoom.label] || "general";
+            const type = categoryTypes[zoneRoom.label] || "system";
             const isSel = selected === roomId;
             const isDrag = dragging === roomId;
             const itemCount = categoryItems[zoneRoom.label]?.length || 0;
@@ -1496,7 +1498,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, onCreateCategory,
           {/* Item pins */}
           {(fpData.pins?.[activeLevel] || []).map(pin => {
             const isSelected = selectedPin === pin.id;
-            const stroke = FP_STROKE[categoryTypes[pin.cat] || "general"];
+            const stroke = FP_STROKE[categoryTypes[pin.cat] || "system"];
             return (
               <g
                 key={pin.id}
@@ -1924,7 +1926,400 @@ function getInvSysTag(cat) {
   return INV_SYS_ABBR[cat] || (cat || "").slice(0, 4).toUpperCase();
 }
 
-function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange }) {
+function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, onRefreshEntityTypes, onCreateCategory, onAddItem, customFieldValues, onSelectItem }) {
+  const [addingChildOf,       setAddingChildOf]       = useState(null);
+  const [newChildLabel,       setNewChildLabel]       = useState("");
+  const [editingTypeId,       setEditingTypeId]       = useState(null);
+  const [editingLabel,        setEditingLabel]        = useState("");
+  const [hoveredTypeId,       setHoveredTypeId]       = useState(null);
+  const [collapsed,           setCollapsed]           = useState(new Set());
+  const [addingCategoryToType, setAddingCategoryToType] = useState(null);
+  const [newCategoryName,      setNewCategoryName]      = useState("");
+  const [addingItemToCategory, setAddingItemToCategory] = useState(null); // category name | null
+  const [newItemName,          setNewItemName]          = useState("");
+  const [hoveredCat,           setHoveredCat]           = useState(null);
+
+  const catsByType = useMemo(() => {
+    const map = {};
+    (categories || []).forEach(cat => {
+      const typeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
+      if (!map[typeId]) map[typeId] = [];
+      map[typeId].push(cat);
+    });
+    return map;
+  }, [categories, categoryTypes]);
+
+  const crossRefByRoom = useMemo(() => {
+    const map = {};
+    Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
+      const room = vals?.roomLabel || vals?.room;
+      if (!room) return;
+      const sepIdx = key.indexOf("|");
+      if (sepIdx === -1) return;
+      const cat  = key.slice(0, sepIdx);
+      const item = key.slice(sepIdx + 1);
+      const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
+      if (isSpatial(catTypeId, entityTypeData)) return;
+      if (!map[room]) map[room] = [];
+      map[room].push({ category: cat, item });
+    });
+    return map;
+  }, [customFieldValues, categoryTypes, entityTypeData]);
+
+  // Items from spatial categories that declare a system association → appear under that functional system
+  const crossRefBySystem = useMemo(() => {
+    const map = {};
+    Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
+      const system = vals?.systemCategory || vals?.system;
+      if (!system) return;
+      const sepIdx = key.indexOf("|");
+      if (sepIdx === -1) return;
+      const cat  = key.slice(0, sepIdx);
+      const item = key.slice(sepIdx + 1);
+      const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
+      if (isFunctional(catTypeId, entityTypeData)) return;
+      if (!map[system]) map[system] = [];
+      map[system].push({ category: cat, item });
+    });
+    return map;
+  }, [customFieldValues, categoryTypes, entityTypeData]);
+
+  function commitAdd(parentId) {
+    const label = newChildLabel.trim();
+    if (label) createSubtype(label, parentId);
+    setAddingChildOf(null);
+    setNewChildLabel("");
+    onRefreshEntityTypes();
+  }
+
+  function commitRename(typeId) {
+    const label = editingLabel.trim();
+    if (label) renameType(typeId, label);
+    setEditingTypeId(null);
+    setEditingLabel("");
+    onRefreshEntityTypes();
+  }
+
+  function handleDelete(typeId) {
+    deleteType(typeId);
+    onRefreshEntityTypes();
+  }
+
+  function commitAddCategory(typeId) {
+    const name = newCategoryName.trim();
+    if (name) onCreateCategory(name, typeId);
+    setAddingCategoryToType(null);
+    setNewCategoryName("");
+  }
+
+  function commitAddItem(cat) {
+    const name = newItemName.trim();
+    if (name) onAddItem(cat, name);
+    setAddingItemToCategory(null);
+    setNewItemName("");
+  }
+
+  const ghostBtn = {
+    background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer",
+    fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.05em", padding: "0.1rem 0.25rem",
+    transition: "color 0.1s",
+  };
+
+  function renderNode(type, depth) {
+    const subtypes = entityTypeData.types.filter(t => t.parentId === type.id);
+    const cats = catsByType[type.id] || [];
+    const mergedCat = cats.find(c => c.toLowerCase() === type.label.toLowerCase()) || null;
+    const mergedCatItems = mergedCat ? (categoryItems?.[mergedCat] || []) : [];
+    const mergedCrossRefs = mergedCat && isSpatial(resolveTypeId(mergedCat, categoryTypes?.[mergedCat] || "system"), entityTypeData)
+      ? (crossRefByRoom[mergedCat] || []) : [];
+    const mergedSystemCrossRefs = mergedCat && isFunctional(resolveTypeId(mergedCat, categoryTypes?.[mergedCat] || "system"), entityTypeData)
+      ? (crossRefBySystem[mergedCat] || []) : [];
+    const isEditing    = editingTypeId === type.id;
+    const isHovered    = hoveredTypeId === type.id;
+    const isAddingHere = addingChildOf === type.id;
+    const isCollapsed  = collapsed.has(type.id);
+    const hasChildren  = subtypes.length > 0 || cats.length > 0;
+
+    function toggleCollapse(e) {
+      e.stopPropagation();
+      setCollapsed(prev => {
+        const next = new Set(prev);
+        next.has(type.id) ? next.delete(type.id) : next.add(type.id);
+        return next;
+      });
+    }
+
+    return (
+      <div key={type.id}>
+        <div
+          onMouseEnter={() => setHoveredTypeId(type.id)}
+          onMouseLeave={() => setHoveredTypeId(null)}
+          onClick={hasChildren ? toggleCollapse : undefined}
+          style={{ alignItems: "center", cursor: hasChildren ? "pointer" : "default", display: "flex", gap: "0.45rem", paddingBottom: "0.1rem", paddingLeft: `${depth * 1.4}rem`, paddingTop: "0.22rem" }}
+        >
+          {depth > 0 && <span style={{ color: "var(--fm-hairline2)", flexShrink: 0, fontSize: "0.55rem" }}>└</span>}
+          {hasChildren && (
+            <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontSize: "0.52rem", transition: "transform 0.15s", display: "inline-block", transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>▾</span>
+          )}
+          {isEditing ? (
+            <input
+              autoFocus
+              value={editingLabel}
+              onChange={e => setEditingLabel(e.target.value)}
+              onBlur={() => commitRename(type.id)}
+              onKeyDown={e => {
+                if (e.key === "Enter") commitRename(type.id);
+                if (e.key === "Escape") { setEditingTypeId(null); setEditingLabel(""); }
+              }}
+              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.1rem 0.3rem", width: 150 }}
+            />
+          ) : (
+            <span
+              onDoubleClick={() => { if (!type.builtIn) { setEditingTypeId(type.id); setEditingLabel(type.label); } }}
+              style={{ color: type.builtIn ? "var(--fm-ink-dim)" : "var(--fm-ink)", cursor: type.builtIn ? "default" : "text", fontFamily: "var(--fm-serif)", fontSize: depth === 0 ? "1rem" : "0.85rem" }}
+            >
+              {type.label}
+            </span>
+          )}
+          {mergedCat
+            ? (mergedCatItems.length + mergedCrossRefs.length + mergedSystemCrossRefs.length) > 0 && <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{mergedCatItems.length + mergedCrossRefs.length + mergedSystemCrossRefs.length}</span>
+            : cats.length > 0 && <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{cats.length}</span>
+          }
+          {isHovered && (
+            <div style={{ alignItems: "center", display: "flex", gap: "0.1rem", marginLeft: "0.25rem" }}>
+              {mergedCat && (
+                <button
+                  onClick={e => { e.stopPropagation(); setAddingItemToCategory(mergedCat); setNewItemName(""); }}
+                  style={ghostBtn}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >+ Item</button>
+              )}
+              {!mergedCat && (
+                <button
+                  onClick={e => { e.stopPropagation(); setAddingCategoryToType(type.id); setNewCategoryName(""); }}
+                  style={ghostBtn}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >+ New {type.label}</button>
+              )}
+              {!type.builtIn && (
+                <>
+                  <button
+                    onClick={e => { e.stopPropagation(); setEditingTypeId(type.id); setEditingLabel(type.label); }}
+                    style={ghostBtn}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                  >✎</button>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleDelete(type.id); }}
+                    style={{ ...ghostBtn, color: "var(--fm-red)" }}
+                  >×</button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Inline add-category input */}
+        {addingCategoryToType === type.id && (
+          <div style={{ paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.2rem", paddingBottom: "0.1rem" }}>
+            <input
+              autoFocus
+              placeholder="Category name…"
+              value={newCategoryName}
+              onChange={e => setNewCategoryName(e.target.value)}
+              onBlur={() => commitAddCategory(type.id)}
+              onKeyDown={e => {
+                if (e.key === "Enter") commitAddCategory(type.id);
+                if (e.key === "Escape") { setAddingCategoryToType(null); setNewCategoryName(""); }
+              }}
+              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 180 }}
+            />
+          </div>
+        )}
+
+        {/* Member categories and their items */}
+        {!isCollapsed && cats.map(cat => {
+          const items = categoryItems?.[cat] || [];
+          const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
+          const crossRefs = isSpatial(catTypeId, entityTypeData) ? (crossRefByRoom[cat] || []) : [];
+          const systemCrossRefs = isFunctional(catTypeId, entityTypeData) ? (crossRefBySystem[cat] || []) : [];
+          const crossRefStyle = { alignItems: "center", color: "var(--fm-ink-mute)", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", gap: "0.3rem", paddingBottom: "0.05rem", paddingTop: "0.05rem", transition: "color 0.1s" };
+
+          if (cat.toLowerCase() === type.label.toLowerCase()) {
+            return [
+              ...items.map(item => (
+                <div
+                  key={item}
+                  onClick={() => onSelectItem?.({ category: cat, item })}
+                  style={{ color: "var(--fm-ink-mute)", cursor: onSelectItem ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", paddingBottom: "0.05rem", paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.05rem", transition: "color 0.1s" }}
+                  onMouseEnter={e => { if (onSelectItem) e.currentTarget.style.color = "var(--fm-ink)"; }}
+                  onMouseLeave={e => { if (onSelectItem) e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+                >
+                  {item}
+                </div>
+              )),
+              ...crossRefs.map(({ category: xCat, item: xItem }) => (
+                <div key={`xref-room-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
+                  style={{ ...crossRefStyle, paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem` }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >
+                  {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
+                </div>
+              )),
+              ...systemCrossRefs.map(({ category: xCat, item: xItem }) => (
+                <div key={`xref-sys-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
+                  style={{ ...crossRefStyle, paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem` }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >
+                  {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
+                </div>
+              )),
+              addingItemToCategory === cat && (
+                <div key="__add-item" style={{ paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.15rem", paddingBottom: "0.1rem" }}>
+                  <input
+                    autoFocus
+                    placeholder="Item name…"
+                    value={newItemName}
+                    onChange={e => setNewItemName(e.target.value)}
+                    onBlur={() => commitAddItem(cat)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitAddItem(cat);
+                      if (e.key === "Escape") { setAddingItemToCategory(null); setNewItemName(""); }
+                    }}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 180 }}
+                  />
+                </div>
+              ),
+            ];
+          }
+          return (
+            <div key={cat}>
+              <div
+                onMouseEnter={() => setHoveredCat(cat)}
+                onMouseLeave={() => setHoveredCat(null)}
+                style={{ alignItems: "center", color: "var(--fm-ink-dim)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", gap: "0.35rem", paddingBottom: "0.08rem", paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.08rem" }}
+              >
+                {cat}
+                {(items.length + crossRefs.length + systemCrossRefs.length) > 0 && <span style={{ color: "var(--fm-ink-mute)" }}>{items.length + crossRefs.length + systemCrossRefs.length}</span>}
+                {hoveredCat === cat && (
+                  <button
+                    onClick={e => { e.stopPropagation(); setAddingItemToCategory(cat); setNewItemName(""); }}
+                    style={ghostBtn}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                  >+ Item</button>
+                )}
+              </div>
+              {addingItemToCategory === cat && (
+                <div style={{ paddingLeft: `${(depth + 2) * 1.4 + 0.5}rem`, paddingTop: "0.15rem", paddingBottom: "0.1rem" }}>
+                  <input
+                    autoFocus
+                    placeholder="Item name…"
+                    value={newItemName}
+                    onChange={e => setNewItemName(e.target.value)}
+                    onBlur={() => commitAddItem(cat)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitAddItem(cat);
+                      if (e.key === "Escape") { setAddingItemToCategory(null); setNewItemName(""); }
+                    }}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 180 }}
+                  />
+                </div>
+              )}
+              {items.map(item => (
+                <div
+                  key={item}
+                  onClick={() => onSelectItem?.({ category: cat, item })}
+                  style={{ color: "var(--fm-ink-mute)", cursor: onSelectItem ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", paddingBottom: "0.05rem", paddingLeft: `${(depth + 2) * 1.4 + 0.5}rem`, paddingTop: "0.05rem", transition: "color 0.1s" }}
+                  onMouseEnter={e => { if (onSelectItem) e.currentTarget.style.color = "var(--fm-ink)"; }}
+                  onMouseLeave={e => { if (onSelectItem) e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+                >
+                  {item}
+                </div>
+              ))}
+              {crossRefs.map(({ category: xCat, item: xItem }) => (
+                <div key={`xref-room-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
+                  style={{ ...crossRefStyle, paddingLeft: `${(depth + 2) * 1.4 + 0.5}rem` }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >
+                  {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
+                </div>
+              ))}
+              {systemCrossRefs.map(({ category: xCat, item: xItem }) => (
+                <div key={`xref-sys-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
+                  style={{ ...crossRefStyle, paddingLeft: `${(depth + 2) * 1.4 + 0.5}rem` }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >
+                  {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+
+        {/* Child types */}
+        {!isCollapsed && subtypes.map(child => renderNode(child, depth + 1))}
+
+        {/* Inline add input */}
+        {!isCollapsed && isAddingHere && (
+          <div style={{ paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.25rem", paddingBottom: "0.1rem" }}>
+            <input
+              autoFocus
+              value={newChildLabel}
+              onChange={e => setNewChildLabel(e.target.value)}
+              onBlur={() => commitAdd(type.id)}
+              onKeyDown={e => {
+                if (e.key === "Enter") commitAdd(type.id);
+                if (e.key === "Escape") setAddingChildOf(null);
+              }}
+              placeholder="New subtype name…"
+              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 170 }}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const CLASS_DESCS = {
+    spatial:    "Physical spaces with a location: rooms, yards, and outdoor areas.",
+    functional: "Groupings that span spaces: mechanical systems and structural elements.",
+  };
+
+  return (
+    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      {/* Columns */}
+      <div style={{ display: "flex", flex: 1, gap: "0", minHeight: 0, overflow: "hidden" }}>
+      {["spatial", "functional"].map((cls, ci) => {
+        const rootTypes = getRootTypesForClass(cls, entityTypeData);
+        return (
+          <div key={cls} style={{ borderRight: ci === 0 ? "1px solid var(--fm-hairline)" : "none", display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden", paddingRight: ci === 0 ? "2rem" : 0, paddingLeft: ci === 1 ? "2rem" : 0 }}>
+            <div style={{ alignItems: "baseline", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.65rem", marginBottom: "0.6rem", paddingBottom: "0.35rem" }}>
+              <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>{cls === "spatial" ? "Spatial" : "Functional"}</span>
+              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.65rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{CLASS_DESCS[cls]}</span>
+            </div>
+            <div style={{ display: "flex", flex: 1, gap: "1.5rem", minHeight: 0, overflow: "hidden" }}>
+              {rootTypes.map(type => (
+                <div key={type.id} style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflowY: "auto", paddingBottom: "2rem" }}>
+                  {renderNode(type, 0)}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      </div>
+    </div>
+  );
+}
+
+function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTypeData, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange }) {
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [newItemCat, setNewItemCat] = useState("");
@@ -1953,8 +2348,6 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
       (categoryItems[cat] || []).map(item => ({ cat, item, key: `${cat}|${item}` }))
     ), [categories, categoryItems]);
 
-  const entityTypeData = useMemo(() => loadEntityTypes(), []);
-
   // Walk up parent chain to check if a typeId is rooted at "structure"
   const isStructureType = useMemo(() => (typeId) => {
     let id = typeId;
@@ -1973,7 +2366,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
   // System categories: functional but NOT structure-rooted
   const systemCats = useMemo(() => {
     return categories.filter(c => {
-      const oldType = categoryTypes?.[c] || "general";
+      const oldType = categoryTypes?.[c] || "system";
       const typeId = resolveTypeId(c, oldType);
       return isFunctional(typeId, entityTypeData) && !isStructureType(typeId);
     }).sort();
@@ -1982,7 +2375,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
   // Structure categories: functional AND structure-rooted
   const structureCats = useMemo(() => {
     return categories.filter(c => {
-      const oldType = categoryTypes?.[c] || "general";
+      const oldType = categoryTypes?.[c] || "system";
       return isStructureType(resolveTypeId(c, oldType));
     }).sort();
   }, [categories, categoryTypes, isStructureType]);
@@ -1990,7 +2383,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
   // All Spatial categories (Room, Exterior, custom spatial)
   const roomCats = useMemo(() => {
     return [...new Set(allRows.map(r => r.cat))].filter(c => {
-      const oldType = categoryTypes?.[c] || "general";
+      const oldType = categoryTypes?.[c] || "system";
       return isSpatial(resolveTypeId(c, oldType), entityTypeData);
     }).sort();
   }, [allRows, categoryTypes, entityTypeData]);
@@ -1998,9 +2391,16 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
   const filtered = useMemo(() => {
     let rows = allRows;
     if (statusFilter !== "ALL") rows = rows.filter(r => getInvItemStatus(itemDetails, r.cat, r.item) === statusFilter.toLowerCase());
-    if (systemFilter !== "ALL") rows = rows.filter(r => r.cat === systemFilter);
+    if (systemFilter !== "ALL") rows = rows.filter(r => {
+      if (r.cat === systemFilter) return true;
+      const cf = customFieldValues?.[r.key];
+      return (cf?.systemCategory || cf?.system || "") === systemFilter;
+    });
     if (structureFilter !== "ALL") rows = rows.filter(r => r.cat === structureFilter);
-    if (roomFilter !== "ALL") rows = rows.filter(r => r.cat === roomFilter);
+    if (roomFilter !== "ALL") rows = rows.filter(r => {
+      if (r.cat === roomFilter) return true;
+      return (customFieldValues?.[r.key]?.roomLabel || customFieldValues?.[r.key]?.room || "") === roomFilter;
+    });
     if (levelFilter !== "ALL") {
       const placedRoomIds = Object.keys(fpData.placements[levelFilter] || {});
       const placedLabels = new Set(placedRoomIds.map(rid => invRooms[rid]?.label).filter(Boolean));
@@ -2029,10 +2429,10 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
       } else if (sortCol.col === "type") {
         cmp = (customFieldValues?.[a.key]?.item_type || "").localeCompare(customFieldValues?.[b.key]?.item_type || "") || a.item.localeCompare(b.item);
       } else if (sortCol.col === "room") {
-        const aOldType = categoryTypes?.[a.cat] || "general";
-        const bOldType = categoryTypes?.[b.cat] || "general";
-        const ra = customFieldValues?.[a.key]?.room || (isSpatial(resolveTypeId(a.cat, aOldType), entityTypeData) ? a.cat : "");
-        const rb = customFieldValues?.[b.key]?.room || (isSpatial(resolveTypeId(b.cat, bOldType), entityTypeData) ? b.cat : "");
+        const aOldType = categoryTypes?.[a.cat] || "system";
+        const bOldType = categoryTypes?.[b.cat] || "system";
+        const ra = (customFieldValues?.[a.key]?.roomLabel || customFieldValues?.[a.key]?.room) || (isSpatial(resolveTypeId(a.cat, aOldType), entityTypeData) ? a.cat : "");
+        const rb = (customFieldValues?.[b.key]?.roomLabel || customFieldValues?.[b.key]?.room) || (isSpatial(resolveTypeId(b.cat, bOldType), entityTypeData) ? b.cat : "");
         cmp = ra.localeCompare(rb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "system") {
         const sa = customFieldValues?.[a.key]?.system || a.cat;
@@ -2213,7 +2613,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, itemDetai
             const typeListId = `itypes-${key}`;
             const roomListId = `irooms-${key}`;
             // Determine behavioral class for this item's own category
-            const catOldType = categoryTypes?.[cat] || "general";
+            const catOldType = categoryTypes?.[cat] || "system";
             const catTypeId = resolveTypeId(cat, catOldType);
             const catIsSpatial = isSpatial(catTypeId, entityTypeData);
             const catIsFunctional = isFunctional(catTypeId, entityTypeData);
@@ -2417,9 +2817,6 @@ export default function InventoryPage({ navigate, navState }) {
   const [editingItemName, setEditingItemName] = useState(null); // { category, item }
   const [editingTask, setEditingTask] = useState(null); // row being edited, or null
   const [pendingNewCategory, setPendingNewCategory] = useState(null); // { id, groupType }
-  const [showAddCategoryForm, setShowAddCategoryForm] = useState(false);
-  const [newCatName, setNewCatName] = useState("");
-  const [newCatGroupType, setNewCatGroupType] = useState("room");
 
   const CATEGORY_ITEMS = useMemo(() => {
     const map = {};
@@ -2455,20 +2852,14 @@ export default function InventoryPage({ navigate, navState }) {
 
   const [categoryTypeOverrides, setCategoryTypeOverridesState] = useState(() => loadCategoryTypeOverrides());
   const [activeTab, setActiveTab] = useState("Item List");
-  const [groupFilter, setGroupFilter] = useState("all");
   const [customGroupTypes, setCustomGroupTypes] = useState(() => loadCustomGroupTypes());
-  const [viewMode, setViewMode] = useState("byType"); // "byType" | "az"
-  const [azDir, setAzDir] = useState(1); // 1 = A→Z, -1 = Z→A
   const [groupLabelOverrides, setGroupLabelOverrides] = useState(() => loadGroupLabelOverrides());
-  const [editingGroupType, setEditingGroupType] = useState(null); // id of type being renamed
-  const [editingGroupDraft, setEditingGroupDraft] = useState("");
-  const [deleteGroupPrompt, setDeleteGroupPrompt] = useState(null); // { groupType, label, counts }
 
 
   const effectiveCategoryTypes = useMemo(() => {
     const result = {};
     CATEGORIES.forEach(cat => {
-      result[cat] = categoryTypeOverrides[cat] ?? defaultCategoryTypes[cat] ?? "general";
+      result[cat] = categoryTypeOverrides[cat] ?? defaultCategoryTypes[cat] ?? "system";
     });
     return result;
   }, [CATEGORIES, categoryTypeOverrides, defaultCategoryTypes]);
@@ -2479,7 +2870,7 @@ export default function InventoryPage({ navigate, navState }) {
     fullOrder.forEach(type => { groups[type] = []; });
     CATEGORIES.forEach(cat => {
       const type = effectiveCategoryTypes[cat];
-      (groups[type] ?? groups["general"]).push(cat);
+      (groups[type] ?? groups["system"]).push(cat);
     });
     return groups;
   }, [CATEGORIES, effectiveCategoryTypes, customGroupTypes]);
@@ -2508,15 +2899,8 @@ export default function InventoryPage({ navigate, navState }) {
     ...groupLabelOverrides,
   }), [customGroupTypes, groupLabelOverrides]);
 
-  const filteredGroupOrder = useMemo(() =>
-    activeTab === "Groups" ? allGroupOrder.filter(g => !["room", "system", "structure", "exterior", "safety", "general"].includes(g)) : allGroupOrder,
-    [allGroupOrder, activeTab]
-  );
-
-  const visibleGroups = useMemo(() =>
-    groupFilter === "all" ? filteredGroupOrder : filteredGroupOrder.filter(g => g === groupFilter),
-    [filteredGroupOrder, groupFilter]
-  );
+  const filteredGroupOrder = allGroupOrder;
+  const visibleGroups = allGroupOrder;
 
   const newItemRowsByCategory = useMemo(() => {
     const map = {};
@@ -2575,6 +2959,8 @@ export default function InventoryPage({ navigate, navState }) {
   const [showFieldPicker, setShowFieldPicker] = useState(false);
   const [newField, setNewField] = useState({ name: "", type: "text", options: "" });
   const [roomSubtypes, setRoomSubtypes] = useState(() => loadRoomSubtypes());
+  const [entityTypeData, setEntityTypeData] = useState(() => loadEntityTypes());
+  function refreshEntityTypes() { setEntityTypeData(loadEntityTypes()); }
 
   const itemTasks = useMemo(() => {
     if (!selectedItem) return [];
@@ -3114,7 +3500,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
     // Phase 4: cascade rename to chores, todos, projects
     const etData = loadEntityTypes();
-    const typeId = resolveTypeId(oldName, effectiveCategoryTypes[oldName] || "general");
+    const typeId = resolveTypeId(oldName, effectiveCategoryTypes[oldName] || "system");
     const isRoomRename = isSpatial(typeId, etData);
 
     const chores = loadChores();
@@ -3264,10 +3650,10 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     if (!deleteGroupPrompt) return;
     const { groupType } = deleteGroupPrompt;
     const cats = groupedCategories[groupType] ?? [];
-    // Reassign all categories in this type to "general"
+    // Reassign all categories in this type to "system"
     if (cats.length > 0) {
       const updated = { ...loadCategoryTypeOverrides() };
-      cats.forEach(cat => { updated[cat] = "general"; });
+      cats.forEach(cat => { updated[cat] = "system"; });
       saveCategoryTypeOverrides(updated);
       setCategoryTypeOverridesState(updated);
     }
@@ -3863,37 +4249,6 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
         </div>
       )}
 
-      {deleteGroupPrompt && (
-        <div onClick={() => setDeleteGroupPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1100 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 480, padding: "2rem", width: "90%" }}>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", marginBottom: "0.6rem" }}>
-              Delete "{deleteGroupPrompt.label}"?
-            </div>
-            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.8, margin: "0 0 0.5rem" }}>
-              This category type will be removed. All linked categories will be moved to <strong style={{ color: "var(--fm-ink)" }}>General</strong>.
-            </p>
-            <div style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", display: "grid", gap: "0.3rem 1.5rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1.75rem", padding: "0.85rem 1rem" }}>
-              {[
-                ["Categories", deleteGroupPrompt.counts.categories],
-                ["Items",      deleteGroupPrompt.counts.items],
-                ["Tasks",      deleteGroupPrompt.counts.tasks],
-                ["Chores",     deleteGroupPrompt.counts.chores],
-                ["To Dos",     deleteGroupPrompt.counts.todos],
-                ["Projects",   deleteGroupPrompt.counts.projects],
-              ].map(([label, n]) => (
-                <div key={label} style={{ alignItems: "baseline", display: "flex", gap: "0.4rem" }}>
-                  <span style={{ color: n > 0 ? "var(--fm-amber)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", fontWeight: 600 }}>{n}</span>
-                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>{label}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
-              <button onClick={() => setDeleteGroupPrompt(null)} style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", padding: "0.4rem 0.9rem" }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>Cancel</button>
-              <button onClick={handleConfirmDeleteGroupType} style={{ background: "var(--fm-red)18", border: "1px solid var(--fm-red)40", borderRadius: "3px", color: "var(--fm-red)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", padding: "0.4rem 0.9rem" }} onMouseEnter={e => { e.currentTarget.style.background = "var(--fm-red)30"; e.currentTarget.style.borderColor = "var(--fm-red)"; }} onMouseLeave={e => { e.currentTarget.style.background = "var(--fm-red)18"; e.currentTarget.style.borderColor = "var(--fm-red)40"; }}>Delete Type</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {addingTask && selectedItem && createPortal(
         <div
@@ -4145,7 +4500,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <FmHeader active="Inventory" tagline="Inventory" />
       <FmSubnav
-        tabs={["Item List", "Floor Plan", "Rooms", "Systems", "Structure", "Exterior", "Groups"]}
+        tabs={["Item List", "Floor Plan", "Outline"]}
         active={activeTab}
         onTabChange={tab => { setActiveTab(tab); setGroupFilter("all"); }}
         stats={[
@@ -4160,20 +4515,23 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           categories={CATEGORIES}
           categoryTypes={effectiveCategoryTypes}
           categoryItems={CATEGORY_ITEMS}
+          entityTypeData={entityTypeData}
           onCreateCategory={handleCreateCategoryFromFloorPlan}
           onRenameCategory={handleCategoryRename}
           onDeleteCategory={handleDeleteClick}
+          onFieldChange={handleCustomFieldValueChange}
         />
       ) : (
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "2rem 2rem 0" }}>
-        <div style={{ flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={activeTab === "Outline" ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (
           <ItemInventoryView
             categories={CATEGORIES}
             categoryItems={CATEGORY_ITEMS}
             categoryTypes={effectiveCategoryTypes}
+            entityTypeData={entityTypeData}
             itemDetails={itemDetails}
             onSelectItem={setSelectedItem}
             customFieldValues={customFieldValues}
@@ -4184,484 +4542,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           />
         ) : null}
 
-        {activeTab === "Rooms" && (() => {
-          const roomCats = groupedCategories["room"] ?? [];
-          const bySubtype = {};
-          roomCats.forEach(cat => {
-            const sub = roomSubtypes[cat] || null;
-            const sortKey = sub ?? "\xff";
-            if (!bySubtype[sortKey]) bySubtype[sortKey] = { label: sub, cats: [] };
-            bySubtype[sortKey].cats.push(cat);
-          });
-          return (
-            <div>
-              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
-                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-                  {roomCats.length} rooms
-                </p>
-                <button onClick={() => handleAddCategory("room")} style={{ background: "transparent", border: "1px solid var(--fm-ink-dim)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", marginLeft: "auto", padding: "0.4rem 0.9rem", transition: "all 0.15s", whiteSpace: "nowrap" }} onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}>+ ADD ROOM</button>
-              </div>
-              {Object.keys(bySubtype).sort((a, b) => a.localeCompare(b)).map(key => {
-                const { label, cats: groupCats } = bySubtype[key];
-                const sortedCats = [...groupCats].sort((a, b) => a.localeCompare(b));
-                return (
-                  <div key={key}>
-                    {label && (
-                      <div style={{ color: "#4a5060", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.14em", margin: "0.6rem 0 0.3rem 0.25rem", textTransform: "uppercase" }}>{label}</div>
-                    )}
-                    {sortedCats.map(category => renderCategory(category))}
-                  </div>
-                );
-              })}
-              {roomCats.length === 0 && (
-                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No rooms yet</div>
-              )}
-            </div>
-          );
-        })()}
 
-        {activeTab === "Systems" && (() => {
-          const systemCats = groupedCategories["system"] ?? [];
-          const displayCats = viewMode === "az"
-            ? [...systemCats].sort((a, b) => azDir * a.localeCompare(b))
-            : systemCats;
-          return (
-            <div>
-              {/* Toolbar */}
-              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
-                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-                  {systemCats.length} {systemCats.length === 1 ? "category" : "categories"}
-                </p>
-                <div style={{ display: "flex", gap: "0.3rem", marginLeft: "auto" }}>
-                  <button
-                    onClick={() => {
-                      if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
-                      else setAzDir(d => d * -1);
-                    }}
-                    style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
-                  >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
-                  <button
-                    onClick={cycleExpand}
-                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
-                </div>
-              </div>
-              {displayCats.length === 0 ? (
-                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No systems yet</div>
-              ) : (
-                displayCats.map(cat => renderCategory(cat))
-              )}
-              {pendingNewCategory?.groupType === "system" && (
-                <div style={{ marginBottom: "0.5rem" }}>
-                  <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.75rem", padding: "0.8rem 1rem" }}>
-                    <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
-                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
-                    <InlineComboInput
-                      placeholder="System name..."
-                      options={getCategoriesForGroup("system").filter(c => !new Set(CATEGORIES).has(c))}
-                      onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
-                      onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
-                    />
-                  </div>
-                </div>
-              )}
-              <div style={{ paddingTop: "0.25rem" }}>
-                <button
-                  onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  onClick={() => handleAddCategory("system")}
-                  style={addBtnStyle(false)}
-                >+ ADD SYSTEM</button>
-              </div>
-            </div>
-          );
-        })()}
-
-        {activeTab === "Structure" && (() => {
-          const structureCats = groupedCategories["structure"] ?? [];
-          const displayCats = viewMode === "az"
-            ? [...structureCats].sort((a, b) => azDir * a.localeCompare(b))
-            : structureCats;
-          return (
-            <div>
-              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
-                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-                  {structureCats.length} {structureCats.length === 1 ? "category" : "categories"}
-                </p>
-                <div style={{ display: "flex", gap: "0.3rem", marginLeft: "auto" }}>
-                  <button
-                    onClick={() => {
-                      if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
-                      else setAzDir(d => d * -1);
-                    }}
-                    style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
-                  >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
-                  <button
-                    onClick={cycleExpand}
-                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
-                </div>
-              </div>
-              {displayCats.length === 0 ? (
-                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No structure categories yet</div>
-              ) : (
-                displayCats.map(cat => renderCategory(cat))
-              )}
-              {pendingNewCategory?.groupType === "structure" && (
-                <div style={{ marginBottom: "0.5rem" }}>
-                  <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.75rem", padding: "0.8rem 1rem" }}>
-                    <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
-                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
-                    <InlineComboInput
-                      placeholder="Category name..."
-                      options={getCategoriesForGroup("structure").filter(c => !new Set(CATEGORIES).has(c))}
-                      onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
-                      onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
-                    />
-                  </div>
-                </div>
-              )}
-              <div style={{ paddingTop: "0.25rem" }}>
-                <button
-                  onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  onClick={() => handleAddCategory("structure")}
-                  style={addBtnStyle(false)}
-                >+ ADD CATEGORY</button>
-              </div>
-            </div>
-          );
-        })()}
-
-        {activeTab === "Exterior" && (() => {
-          const exteriorCats = groupedCategories["exterior"] ?? [];
-          const displayCats = viewMode === "az"
-            ? [...exteriorCats].sort((a, b) => azDir * a.localeCompare(b))
-            : exteriorCats;
-          return (
-            <div>
-              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.25rem" }}>
-                <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-                  {exteriorCats.length} {exteriorCats.length === 1 ? "category" : "categories"}
-                </p>
-                <div style={{ display: "flex", gap: "0.3rem", marginLeft: "auto" }}>
-                  <button
-                    onClick={() => {
-                      if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
-                      else setAzDir(d => d * -1);
-                    }}
-                    style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
-                  >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
-                  <button
-                    onClick={cycleExpand}
-                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
-                </div>
-              </div>
-              {displayCats.length === 0 ? (
-                <div style={{ border: "1px dashed var(--fm-hairline2)", borderRadius: "6px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "2rem", textAlign: "center" }}>No exterior categories yet</div>
-              ) : (
-                displayCats.map(cat => renderCategory(cat))
-              )}
-              {pendingNewCategory?.groupType === "exterior" && (
-                <div style={{ marginBottom: "0.5rem" }}>
-                  <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.75rem", padding: "0.8rem 1rem" }}>
-                    <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
-                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
-                    <InlineComboInput
-                      placeholder="Category name..."
-                      options={getCategoriesForGroup("exterior").filter(c => !new Set(CATEGORIES).has(c))}
-                      onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
-                      onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
-                    />
-                  </div>
-                </div>
-              )}
-              <div style={{ paddingTop: "0.25rem" }}>
-                <button
-                  onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  onClick={() => handleAddCategory("exterior")}
-                  style={addBtnStyle(false)}
-                >+ ADD CATEGORY</button>
-              </div>
-            </div>
-          );
-        })()}
-
-        {activeTab === "Groups" && <>
-        {/* Toolbar */}
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1.25rem" }}>
-          <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-            {filteredGroupOrder.reduce((n, g) => n + (groupedCategories[g]?.length ?? 0), 0)} categories
-          </p>
-          <button
-            onClick={() => { setShowAddCategoryForm(true); setNewCatName(""); }}
-            style={{ background: "transparent", border: "1px solid var(--fm-ink-dim)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", marginLeft: "auto", padding: "0.4rem 0.9rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >+ ADD CATEGORY TYPE</button>
-          {/* View toggle */}
-          <div style={{ display: "flex", gap: "0.3rem" }}>
-            <button
-              onClick={() => setViewMode("byType")}
-              style={{ background: viewMode === "byType" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "byType" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "byType" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
-            >By Type</button>
-            <button
-              onClick={() => {
-                if (viewMode !== "az") { setViewMode("az"); setAzDir(1); }
-                else setAzDir(d => d * -1);
-              }}
-              style={{ background: viewMode === "az" ? "var(--fm-brass)18" : "transparent", border: `1px solid ${viewMode === "az" ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: viewMode === "az" ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.3rem 0.6rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
-            >{viewMode === "az" && azDir === -1 ? "Z→A" : "A→Z"}</button>
-            <button
-              onClick={cycleExpand}
-              style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em", padding: "0.3rem 0.7rem", transition: "all 0.15s", flexShrink: 0 }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-            >{expandLevel === 2 ? "Collapse" : "Expand"}</button>
-          </div>
-        </div>
-
-        {/* Inline add category type form */}
-        {showAddCategoryForm && (
-          <div style={{ alignItems: "center", background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "4px", display: "flex", gap: "0.6rem", marginBottom: "0.75rem", padding: "0.6rem 0.75rem" }}>
-            <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", whiteSpace: "nowrap" }}>New type</span>
-            <input
-              autoFocus
-              value={newCatName}
-              onChange={e => setNewCatName(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter") {
-                  const trimmed = newCatName.trim();
-                  if (!trimmed) return;
-                  const id = trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-                  const label = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-                  const updated = [...customGroupTypes, { id, label }];
-                  saveCustomGroupTypes(updated);
-                  setCustomGroupTypes(updated);
-                  setGroupFilter(id);
-                  setShowAddCategoryForm(false);
-                  setNewCatName("");
-                }
-                if (e.key === "Escape") { setShowAddCategoryForm(false); setNewCatName(""); }
-              }}
-              placeholder="e.g. Workshop, Pool, Garage…"
-              style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.35rem 0.6rem" }}
-              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
-              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
-            />
-            <button
-              onClick={() => {
-                const trimmed = newCatName.trim();
-                if (!trimmed) return;
-                const id = trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-                const label = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-                const updated = [...customGroupTypes, { id, label }];
-                saveCustomGroupTypes(updated);
-                setCustomGroupTypes(updated);
-                setGroupFilter(id);
-                setShowAddCategoryForm(false);
-                setNewCatName("");
-              }}
-              disabled={!newCatName.trim()}
-              style={{ background: newCatName.trim() ? "var(--fm-brass)18" : "transparent", border: `1px solid ${newCatName.trim() ? "var(--fm-brass)40" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: newCatName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: newCatName.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.35rem 0.75rem", transition: "all 0.12s" }}
-            >Add</button>
-            <button
-              onClick={() => { setShowAddCategoryForm(false); setNewCatName(""); }}
-              style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.35rem 0.3rem", transition: "color 0.12s" }}
-              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
-              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-            >Cancel</button>
-          </div>
+        {activeTab === "Outline" && (
+          <OutlineTab categories={CATEGORIES} categoryTypes={effectiveCategoryTypes} categoryItems={CATEGORY_ITEMS} entityTypeData={entityTypeData} onRefreshEntityTypes={refreshEntityTypes} onCreateCategory={handleAddCategoryDirect} onAddItem={handleAddItemNamed} onSelectItem={setSelectedItem} customFieldValues={customFieldValues} />
         )}
 
-        {/* Group filter pills */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "1rem" }}>
-          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Group</span>
-            <ItemInvPill active={groupFilter === "all"} onClick={() => setGroupFilter("all")}>All</ItemInvPill>
-            {filteredGroupOrder.map(g => (
-              <ItemInvPill key={g} active={groupFilter === g} onClick={() => setGroupFilter(g)}>
-                {allGroupLabels[g]}
-              </ItemInvPill>
-            ))}
-          </div>
-        </div>
-
-        {viewMode === "az" && (
-          <div>
-            {[...CATEGORIES].sort((a, b) => azDir * a.localeCompare(b)).map(category => renderCategory(category))}
-          </div>
-        )}
-
-        {viewMode === "byType" && visibleGroups.map(groupType => {
-          const rawCats = groupedCategories[groupType];
-          const isSorted = sortedGroups.has(groupType);
-          const cats = isSorted ? [...rawCats].sort((a, b) => a.localeCompare(b)) : rawCats;
-          const isTarget = !!dragging && dragOverGroup === groupType && effectiveCategoryTypes[dragging] !== groupType;
-          const isGroupCollapsed = collapsedGroups[groupType];
-          const isPendingHere = pendingNewCategory?.groupType === groupType;
-          const existingCatSet = new Set(CATEGORIES);
-          const categorySuggestions = getCategoriesForGroup(groupType)
-            .filter(c => !existingCatSet.has(c));
-
-          return (
-            <div
-              key={groupType}
-              onDragEnter={() => dragging && setDragOverGroup(groupType)}
-              onDragOver={e => e.preventDefault()}
-              onDrop={() => handleDrop(groupType)}
-              style={{
-                background: isTarget ? "var(--fm-bg-panel)40" : "transparent",
-                border: isTarget ? "1px dashed var(--fm-brass)50" : "1px solid transparent",
-                borderRadius: "8px",
-                marginBottom: "2rem",
-                padding: isTarget ? "0.75rem" : "0",
-                transition: "all 0.15s",
-              }}
-            >
-              <div
-                style={{
-                  alignItems: "center",
-                  borderBottom: `1px solid ${isTarget ? "var(--fm-brass)30" : "var(--fm-ink-dim)"}`,
-                  display: "flex",
-                  gap: "0.5rem",
-                  marginBottom: isGroupCollapsed ? "0" : "0.75rem",
-                  paddingBottom: "0.4rem",
-                  userSelect: "none",
-                }}
-              >
-                <span onClick={() => toggleGroup(groupType)} style={{ color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>
-                  {isGroupCollapsed ? "▶" : "▼"}
-                </span>
-                {editingGroupType === groupType ? (
-                  <input
-                    autoFocus
-                    value={editingGroupDraft}
-                    onChange={e => setEditingGroupDraft(e.target.value)}
-                    onBlur={() => handleRenameGroupType(groupType, editingGroupDraft)}
-                    onKeyDown={e => {
-                      if (e.key === "Enter") { e.preventDefault(); handleRenameGroupType(groupType, editingGroupDraft); }
-                      if (e.key === "Escape") setEditingGroupType(null);
-                    }}
-                    onClick={e => e.stopPropagation()}
-                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: "3px", color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.15em", outline: "none", padding: "0.1rem 0.4rem", textTransform: "uppercase", width: "10rem" }}
-                  />
-                ) : (
-                  <span
-                    onClick={() => toggleGroup(groupType)}
-                    onDoubleClick={e => { e.stopPropagation(); setEditingGroupType(groupType); setEditingGroupDraft(allGroupLabels[groupType]); }}
-                    title="Double-click to rename"
-                    style={{ color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.15em", textTransform: "uppercase" }}
-                  >
-                    {allGroupLabels[groupType]}
-                  </span>
-                )}
-                <span onClick={() => toggleGroup(groupType)} style={{ color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
-                  · {cats.length}
-                </span>
-                {groupType !== "general" && (
-                  <button
-                    onClick={e => { e.stopPropagation(); handleDeleteGroupTypeClick(groupType); }}
-                    title="Delete category type"
-                    style={{ background: "transparent", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1, marginLeft: "auto", padding: "0 0.2rem", transition: "color 0.12s" }}
-                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
-                  >×</button>
-                )}
-              </div>
-
-              {!isGroupCollapsed && (
-                <>
-                  {groupType === "room" ? (() => {
-                    // Group by subtype, sorted alphabetically; untyped rooms rendered last with no label
-                    const bySubtype = {};
-                    cats.forEach(cat => {
-                      const sub = roomSubtypes[cat] || null;
-                      const sortKey = sub ?? "\xff";
-                      if (!bySubtype[sortKey]) bySubtype[sortKey] = { label: sub, cats: [] };
-                      bySubtype[sortKey].cats.push(cat);
-                    });
-                    return Object.keys(bySubtype)
-                      .sort((a, b) => a.localeCompare(b))
-                      .map(key => {
-                        const { label, cats: groupCats } = bySubtype[key];
-                        const sortedCats = [...groupCats].sort((a, b) => a.localeCompare(b));
-                        return (
-                          <div key={key}>
-                            {label && (
-                              <div style={{ color: "#4a5060", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.14em", margin: "0.6rem 0 0.3rem 0.25rem", textTransform: "uppercase" }}>
-                                {label}
-                              </div>
-                            )}
-                            {sortedCats.map(category => renderCategory(category))}
-                          </div>
-                        );
-                      });
-                  })() : cats.map(category => renderCategory(category))}
-
-                  {isPendingHere && (
-                    <div style={{ marginBottom: "0.5rem" }}>
-                      <div style={{
-                        alignItems: "center",
-                        background: "var(--fm-bg-raised)",
-                        border: "1px solid var(--fm-hairline)",
-                        borderRadius: "6px",
-                        display: "flex",
-                        gap: "0.75rem",
-                        padding: "0.8rem 1rem",
-                      }}>
-                        <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, fontSize: "0.7rem" }}>⠿</span>
-                        <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>▶</span>
-                        <InlineComboInput
-                          placeholder="Category name..."
-                          options={categorySuggestions}
-                          onCommit={name => handleCommitNewCategory(name, pendingNewCategory.id)}
-                          onCancel={() => handleCancelNewCategory(pendingNewCategory.id)}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {cats.length === 0 && !isPendingHere && (
-                    <div style={{
-                      border: `1px dashed ${isTarget ? "var(--fm-brass)50" : "var(--fm-ink-dim)"}`,
-                      borderRadius: "6px",
-                      color: isTarget ? "var(--fm-brass)80" : "var(--fm-ink-dim)",
-                      fontFamily: "var(--fm-mono)",
-                      fontSize: "0.72rem",
-                      marginBottom: "0.5rem",
-                      padding: "1.5rem",
-                      textAlign: "center",
-                      transition: "all 0.15s",
-                    }}>
-                      {isTarget ? "drop here" : "empty"}
-                    </div>
-                  )}
-
-                  <div style={{ paddingTop: "0.25rem" }}>
-                    <button
-                      onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
-                      onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                      onClick={() => handleAddCategory(groupType)}
-                      style={addBtnStyle(false)}
-                    >
-                      + Add Category
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
-        </>}
         </div>
 
         <div style={{
@@ -4731,7 +4616,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                 const itmFields = itemFieldSchemas[cfKey] || [];
                 const vals = customFieldValues[cfKey] || {};
                 const itemTypeField = UNIVERSAL_FIELDS.find(f => f.id === "item_type");
-                const addedIds = new Set([...itmFields.map(f => f.id), "item_type", "system"]);
+                const addedIds = new Set([...itmFields.map(f => f.id), "item_type", "system", "room"]);
                 const svgArrow = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5460'/%3E%3C/svg%3E")`;
                 const fieldStyle = { background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", outline: "none", padding: "0.3rem 0.5rem", width: "100%" };
                 const labelStyle = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
@@ -4746,9 +4631,19 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                     return <ModelComboField value={val} models={existingTypes} fieldStyle={fieldStyle} onChange={onChange} />;
                   }
                   if (field.id === "system") {
-                    const systemOptions = CATEGORIES.filter(c => effectiveCategoryTypes[c] === "system").sort();
-                    const defaultSystem = effectiveCategoryTypes[selectedItem.category] === "system" ? selectedItem.category : "";
-                    return <ModelComboField value={val || defaultSystem} models={systemOptions} fieldStyle={fieldStyle} onChange={onChange} />;
+                    const systemVal = vals.systemCategory || vals.system || "";
+                    const systemOptions = CATEGORIES.filter(c => isFunctional(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
+                    const defaultSystem = isFunctional(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData) ? selectedItem.category : "";
+                    return <ModelComboField value={systemVal || defaultSystem} models={systemOptions} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "systemCategory", v)} />;
+                  }
+                  if (field.id === "room") {
+                    const catIsSpatialItem = isSpatial(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData);
+                    if (catIsSpatialItem) {
+                      return <div style={{ ...fieldStyle, color: "var(--fm-ink-dim)", cursor: "default" }}>{selectedItem.category}</div>;
+                    }
+                    const roomOpts = CATEGORIES.filter(c => isSpatial(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
+                    const roomVal = vals.roomLabel || vals.room || "";
+                    return <ModelComboField value={roomVal} models={roomOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", v)} />;
                   }
                   if (field.id === "manufacturer") {
                     const mfrs = getManufacturers(selectedItem.item);
@@ -4802,6 +4697,12 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                         <span style={labelStyle}>System</span>
                       </div>
                       {renderFieldInput({ id: "system", name: "System", type: "text" })}
+                    </div>
+                    <div style={{ marginBottom: "0.45rem" }}>
+                      <div style={{ marginBottom: "0.2rem" }}>
+                        <span style={labelStyle}>Room</span>
+                      </div>
+                      {renderFieldInput({ id: "room", name: "Room", type: "text" })}
                     </div>
                     {itmFields.map(field => (
                       <div key={field.id} style={{ marginBottom: "0.45rem" }}>

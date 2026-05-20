@@ -286,11 +286,11 @@ export default function BoardPage({ navigate }) {
   }, [rows]);
 
   const spatialCategories = useMemo(() =>
-    categories.filter(c => isSpatial(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "general"), entityTypeData)).sort(),
+    categories.filter(c => isSpatial(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
     [categories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
 
   const functionalCategories = useMemo(() =>
-    categories.filter(c => isFunctional(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "general"), entityTypeData)).sort(),
+    categories.filter(c => isFunctional(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
     [categories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
 
   const rowDataByKey = useMemo(() => {

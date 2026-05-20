@@ -134,7 +134,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       label: GROUP_LABELS[type],
       tabs: Array.from(catsWithContent)
         .filter(cat => {
-          const oldType = categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "general";
+          const oldType = categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system";
           const typeId = resolveTypeId(cat, oldType);
           // Map typeId to GROUP_ORDER bucket
           if (groupTypeSet.has(typeId)) return typeId === type;
@@ -162,7 +162,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   // Functional non-structure categories → Systems filter row
   const systemCats = useMemo(() => {
     return categoryGroups
-      .filter(g => g.type === "system" || g.type === "safety" || g.type === "general")
+      .filter(g => g.type === "system" || g.type === "safety")
       .flatMap(g => g.tabs)
       .sort();
   }, [categoryGroups]);
