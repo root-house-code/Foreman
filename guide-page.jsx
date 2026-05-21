@@ -321,9 +321,9 @@ export default function GuidePage({ navigate }) {
     <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
       <style>{EDITOR_STYLES}</style>
 
-      <FmHeader active="Guide" tagline="Guide" />
+      <FmHeader active="Notebook" tagline="Notebook" />
       <FmSubnav
-        tabs={["Articles", "By system", "By item", "Drafts"]}
+        tabs={["Articles", "By system", "By item", "Drafts", "Guide"]}
         active="By system"
         stats={[
           { value: grouped.reduce((n, g) => n + g.items.length, 0), label: "items" },

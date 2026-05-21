@@ -3,12 +3,13 @@ import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import CategoryTabs from "./components/CategoryTabs.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
+import MaintenanceCompleteModal from "./components/MaintenanceCompleteModal.jsx";
 import {
   loadChores, saveChores, createChore,
   loadChoreNextDates, saveChoreNextDates,
   computeNextOccurrenceFromStart, computeChoreNextDate,
 } from "./lib/chores.js";
-import { loadData } from "./lib/data.js";
+import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { getScheduleColor } from "./lib/scheduleColor.js";
@@ -16,6 +17,7 @@ import { loadRoomCategories } from "./lib/categoryTypes.js";
 import { parseMonths, isComputable } from "./lib/scheduleInterval.js";
 import {
   loadMaintenanceStartDates, saveMaintenanceStartDates, maintenanceKey,
+  saveMaintenanceCompletionRecord,
 } from "./lib/maintenance.js";
 import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
@@ -329,8 +331,8 @@ export default function CalendarPage({ navigate }) {
     );
   });
   const [maintenanceStartDates, setMaintenanceStartDates] = useState(() => loadMaintenanceStartDates());
-  const [maintenanceDates]      = useState(() => { try { return JSON.parse(localStorage.getItem("maintenance-dates") || "{}"); } catch { return {}; } });
-  const [maintenanceNextDates]  = useState(() => { try { return JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}"); } catch { return {}; } });
+  const [maintenanceDates, setMaintenanceDates]         = useState(() => { try { return JSON.parse(localStorage.getItem("maintenance-dates") || "{}"); } catch { return {}; } });
+  const [maintenanceNextDates, setMaintenanceNextDates] = useState(() => { try { return JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}"); } catch { return {}; } });
   const [view, setView]         = useState({ y: todayYear, m: todayMonth });
   const [createDate, setCreateDate]       = useState(null);
   const [selectedTaskKey, setSelectedTaskKey] = useState(null); // maintenance task awaiting start date
@@ -339,6 +341,7 @@ export default function CalendarPage({ navigate }) {
   const [roomOptions]           = useState(() => buildRoomOptions());
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [detailEvent, setDetailEvent] = useState(null); // { chore, date } | null
+  const [completionEvent, setCompletionEvent] = useState(null); // { row, key, date, isCompleted } | null
   const [roomItemsMap] = useState(() => buildRoomItemsMap());
   const [calView, setCalView] = useState("Month");
   const [weekStart, setWeekStart] = useState(() => {
@@ -501,6 +504,45 @@ export default function CalendarPage({ navigate }) {
     }
   }
 
+  function handleMaintenanceRowEdit(row, field, value) {
+    if (row._isCustom) {
+      const customs = loadCustomData();
+      saveCustomData(customs.map(r => r._id === row._id ? { ...r, [field]: value } : r));
+    } else {
+      const overrides = loadOverrides();
+      overrides[row._defaultKey] = { ...(overrides[row._defaultKey] || {}), [field]: value };
+      saveOverrides(overrides);
+    }
+  }
+
+  function handleMaintenanceMarkDone(key, row, completedDate, notes, nextDateOverride, assignee) {
+    if (!completedDate) {
+      const next = { ...maintenanceDates };
+      delete next[key];
+      localStorage.setItem("maintenance-dates", JSON.stringify(next));
+      setMaintenanceDates(next);
+      setCompletionEvent(null);
+      return;
+    }
+    saveMaintenanceCompletionRecord(key, { completedAt: completedDate.toISOString(), assignee, notes });
+    const updatedDates = { ...maintenanceDates, [key]: completedDate.toISOString() };
+    localStorage.setItem("maintenance-dates", JSON.stringify(updatedDates));
+    setMaintenanceDates(updatedDates);
+    const effectiveNext = nextDateOverride || (() => {
+      const months = parseMonths(row.schedule);
+      if (!months) return null;
+      const d = new Date(completedDate);
+      d.setMonth(d.getMonth() + months);
+      return d;
+    })();
+    if (effectiveNext) {
+      const updatedNext = { ...maintenanceNextDates, [key]: effectiveNext.toISOString() };
+      localStorage.setItem("maintenance-next-dates", JSON.stringify(updatedNext));
+      setMaintenanceNextDates(updatedNext);
+    }
+    setCompletionEvent(null);
+  }
+
   const navBtnStyle = (disabled) => ({
     background: "transparent", border: "none",
     color: disabled ? "var(--fm-ink-mute)" : "var(--fm-brass-dim)",
@@ -534,6 +576,20 @@ export default function CalendarPage({ navigate }) {
           onMarkDone={details => handleMarkDoneWithDetails(detailEvent.chore.id, detailEvent.date, details)}
           roomItemsMap={roomItemsMap}
           onClose={() => setDetailEvent(null)}
+        />
+      )}
+
+      {completionEvent && (
+        <MaintenanceCompleteModal
+          row={completionEvent.row}
+          date={completionEvent.date}
+          isCompleted={completionEvent.isCompleted}
+          lastDate={maintenanceDates[completionEvent.key] ? new Date(maintenanceDates[completionEvent.key]) : null}
+          onMarkDone={(completedDate, notes, nextDateOverride, assignee) =>
+            handleMaintenanceMarkDone(completionEvent.key, completionEvent.row, completedDate, notes, nextDateOverride, assignee)
+          }
+          onRowEdit={(field, value) => handleMaintenanceRowEdit(completionEvent.row, field, value)}
+          onClose={() => setCompletionEvent(null)}
         />
       )}
 
@@ -586,8 +642,10 @@ export default function CalendarPage({ navigate }) {
                       const isMaint = evt.type === "maintenance";
                       const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? evt.row.item : evt.chore.title;
-                      const clickable = !isMaint;
-                      return <div key={idx} onClick={clickable ? e => { e.stopPropagation(); setDetailEvent({ chore: evt.chore, date: evt.date }); } : undefined} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: clickable ? "pointer" : "default", marginBottom: "1px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "1px 3px" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "rgba(255,255,255,0.05)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}><span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span></div>;
+                      const onClick = isMaint
+                        ? e => { e.stopPropagation(); setCompletionEvent({ row: evt.row, key: evt.key, date: new Date(view.y, view.m, day), isCompleted: evt.isCompleted }); }
+                        : e => { e.stopPropagation(); setDetailEvent({ chore: evt.chore, date: evt.date }); };
+                      return <div key={idx} onClick={onClick} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: "pointer", marginBottom: "1px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "1px 3px" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}><span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span></div>;
                     })}
                     {overflow > 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", padding: "0 3px" }}>+{overflow} more</div>}
                   </div>
@@ -623,9 +681,11 @@ export default function CalendarPage({ navigate }) {
                         const tag = isMaint ? getSysTag(evt.row.category) : "CHORE";
                         const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                         const label = isMaint ? `${evt.row.item} · ${evt.row.task}` : evt.chore.title;
-                        const clickable = !isMaint;
+                        const sidebarClick = isMaint
+                          ? () => setCompletionEvent({ row: evt.row, key: evt.key, date: new Date(view.y, view.m, day), isCompleted: evt.isCompleted })
+                          : () => setDetailEvent({ chore: evt.chore, date: new Date(view.y, view.m, day) });
                         return (
-                          <div key={`${day}-${idx}`} onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date: new Date(view.y, view.m, day) }) : undefined} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: clickable ? "pointer" : "default", display: "flex", gap: "0.5rem", padding: "0.32rem 0" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "var(--fm-bg-raised)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}>
+                          <div key={`${day}-${idx}`} onClick={sidebarClick} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", display: "flex", gap: "0.5rem", padding: "0.32rem 0" }} onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                             <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-serif)", fontSize: "0.88rem", minWidth: "20px", textAlign: "right" }}>{day}</span>
                             <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: tagColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>{tag}</span>
                             <span style={{ color: evt.isCompleted ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
@@ -688,9 +748,11 @@ export default function CalendarPage({ navigate }) {
                       const isMaint = evt.type === "maintenance";
                       const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? evt.row.item : evt.chore.title;
-                      const clickable = !isMaint;
+                      const weekClick = isMaint
+                        ? () => setCompletionEvent({ row: evt.row, key: evt.key, date, isCompleted: evt.isCompleted })
+                        : () => setDetailEvent({ chore: evt.chore, date });
                       return (
-                        <div key={idx} onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date }) : undefined} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: clickable ? "pointer" : "default", marginBottom: "2px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "2px 4px" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "rgba(255,255,255,0.05)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}>
+                        <div key={idx} onClick={weekClick} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: "pointer", marginBottom: "2px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "2px 4px" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                           <span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
                         </div>
                       );
@@ -729,9 +791,11 @@ export default function CalendarPage({ navigate }) {
                       const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? `${evt.row.item} · ${evt.row.task}` : evt.chore.title;
                       const sub = isMaint ? evt.row.schedule : evt.chore.schedule;
-                      const clickable = !isMaint;
+                      const agendaClick = isMaint
+                        ? () => setCompletionEvent({ row: evt.row, key: evt.key, date, isCompleted: evt.isCompleted })
+                        : () => setDetailEvent({ chore: evt.chore, date });
                       return (
-                        <div key={idx} onClick={clickable ? () => setDetailEvent({ chore: evt.chore, date }) : undefined} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: clickable ? "pointer" : "default", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", opacity: evt.isCompleted ? 0.45 : 1, padding: "0.35rem 0.3rem" }} onMouseEnter={clickable ? e => e.currentTarget.style.background = "var(--fm-bg-raised)" : undefined} onMouseLeave={clickable ? e => e.currentTarget.style.background = "transparent" : undefined}>
+                        <div key={idx} onClick={agendaClick} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", opacity: evt.isCompleted ? 0.45 : 1, padding: "0.35rem 0.3rem" }} onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                           <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: tagColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>{tag}</span>
                           <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", textDecoration: evt.isCompleted ? "line-through" : "none" }}>{label}</span>
                           <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{sub}</span>

@@ -4,6 +4,7 @@ import DatePicker from "react-datepicker";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import Tooltip from "./components/Tooltip.jsx";
+import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
 import { CATEGORY_TIPS, ITEM_TIPS } from "./lib/tooltips.js";
@@ -448,7 +449,7 @@ function pinAbbr(item) {
   return item.replace(/\(.*?\)/g, "").trim().slice(0, 4).toUpperCase();
 }
 
-function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onFieldChange }) {
+function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onFieldChange, onChangeCategoryType }) {
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
   const [rooms, setRooms] = useState(() => loadRooms());
@@ -457,6 +458,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
   const [dragging, setDragging] = useState(null);
   const [editingLevelId, setEditingLevelId] = useState(null);
   const [editingPanelName, setEditingPanelName] = useState(false);
+  const [editingPanelType, setEditingPanelType] = useState(false);
   const [selectedPin, setSelectedPin] = useState(null);
   const [ghostPin, setGhostPin] = useState(null);
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: FP_W, h: FP_H });
@@ -1322,7 +1324,17 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
             const isRoomZone = (roomId) => {
               const lbl = rooms[roomId]?.label;
               const typeId = resolveTypeId(lbl, categoryTypes[lbl] || "system");
-              return isSpatial(typeId, entityTypeData);
+              let id = typeId;
+              const visited = new Set();
+              while (id) {
+                if (visited.has(id)) break;
+                visited.add(id);
+                if (id === "room") return true;
+                const t = entityTypeData.types.find(t => t.id === id);
+                if (!t) break;
+                id = t.parentId;
+              }
+              return false;
             };
             const totalSqFt = Object.entries(currentPlaced).reduce((sum, [rid, zone]) => isRoomZone(rid) ? sum + polygonArea(zone.points) / (FP_GRID * FP_GRID) : sum, 0);
             const houseSqFt = Object.values(fpData.placements).reduce((sum, lvl) => sum + Object.entries(lvl).reduce((s, [rid, zone]) => isRoomZone(rid) ? s + polygonArea(zone.points) / (FP_GRID * FP_GRID) : s, 0), 0);
@@ -1636,8 +1648,32 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
           <>
             {/* Header */}
             <div style={{ padding: "0.85rem 1rem 0.7rem" }}>
-              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.12em", marginBottom: "0.35rem", textTransform: "uppercase" }}>
-                {activeLevelName} · {GROUP_LABELS[selType] || selType}
+              <div style={{ alignItems: "center", color: "var(--fm-ink-dim)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", gap: "0.3rem", letterSpacing: "0.12em", marginBottom: "0.35rem", textTransform: "uppercase" }}>
+                {activeLevelName} ·{" "}
+                {editingPanelType ? (
+                  <select
+                    autoFocus
+                    value={selType}
+                    onChange={e => {
+                      onChangeCategoryType?.(selectedRoom.label, e.target.value);
+                      setEditingPanelType(false);
+                    }}
+                    onBlur={() => setEditingPanelType(false)}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.12em", outline: "none", padding: "0.05rem 0.2rem", textTransform: "uppercase" }}
+                  >
+                    {GROUP_ORDER.map(t => (
+                      <option key={t} value={t}>{GROUP_LABELS[t] || t}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span
+                    onDoubleClick={() => setEditingPanelType(true)}
+                    title="Double-click to change type"
+                    style={{ borderBottom: "1px dashed transparent", cursor: "default", transition: "border-color 0.1s" }}
+                    onMouseEnter={e => e.currentTarget.style.borderBottomColor = "var(--fm-ink-dim)"}
+                    onMouseLeave={e => e.currentTarget.style.borderBottomColor = "transparent"}
+                  >{GROUP_LABELS[selType] || selType}</span>
+                )}
               </div>
               {editingPanelName ? (
                 <input
@@ -1849,30 +1885,6 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
 
 // ── Item Inventory View ────────────────────────────────────────────────────────
 
-function ItemInvPill({ active, color, onClick, children }) {
-  const c = color || "var(--fm-brass)";
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        background: active ? "rgba(201,169,110,0.10)" : "transparent",
-        border: `1px solid ${active ? c : "var(--fm-hairline2)"}`,
-        borderRadius: "var(--fm-radius)",
-        color: active ? c : "var(--fm-ink-dim)",
-        cursor: "pointer",
-        fontFamily: "var(--fm-mono)",
-        fontSize: "0.65rem",
-        letterSpacing: "0.08em",
-        padding: "0.22rem 0.55rem",
-        textTransform: "uppercase",
-        transition: "all 0.12s",
-        whiteSpace: "nowrap",
-      }}
-      onMouseEnter={e => { if (!active) { e.currentTarget.style.borderColor = c; e.currentTarget.style.color = c; } }}
-      onMouseLeave={e => { if (!active) { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; } }}
-    >{children}</button>
-  );
-}
 
 function InvNoteCell({ value, onChange }) {
   const [editing, setEditing] = useState(false);
@@ -2335,6 +2347,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [systemFilter, setSystemFilter] = useState("ALL");
   const [structureFilter, setStructureFilter] = useState("ALL");
+  const [exteriorFilter, setExteriorFilter] = useState("ALL");
   const [roomFilter, setRoomFilter] = useState("ALL");
   const [levelFilter, setLevelFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
@@ -2363,6 +2376,21 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
     return false;
   }, [entityTypeData]);
 
+  // Walk up parent chain to check if a typeId is rooted at "exterior"
+  const isExteriorType = useMemo(() => (typeId) => {
+    let id = typeId;
+    const visited = new Set();
+    while (id) {
+      if (visited.has(id)) break;
+      visited.add(id);
+      if (id === "exterior") return true;
+      const type = entityTypeData.types.find(t => t.id === id);
+      if (!type) break;
+      id = type.parentId;
+    }
+    return false;
+  }, [entityTypeData]);
+
   // System categories: functional but NOT structure-rooted
   const systemCats = useMemo(() => {
     return categories.filter(c => {
@@ -2380,13 +2408,23 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
     }).sort();
   }, [categories, categoryTypes, isStructureType]);
 
-  // All Spatial categories (Room, Exterior, custom spatial)
+  // Exterior categories: spatial AND exterior-rooted
+  const exteriorCats = useMemo(() => {
+    return [...new Set(allRows.map(r => r.cat))].filter(c => {
+      const oldType = categoryTypes?.[c] || "system";
+      const typeId = resolveTypeId(c, oldType);
+      return isSpatial(typeId, entityTypeData) && isExteriorType(typeId);
+    }).sort();
+  }, [allRows, categoryTypes, entityTypeData, isExteriorType]);
+
+  // Room categories: spatial but NOT exterior-rooted
   const roomCats = useMemo(() => {
     return [...new Set(allRows.map(r => r.cat))].filter(c => {
       const oldType = categoryTypes?.[c] || "system";
-      return isSpatial(resolveTypeId(c, oldType), entityTypeData);
+      const typeId = resolveTypeId(c, oldType);
+      return isSpatial(typeId, entityTypeData) && !isExteriorType(typeId);
     }).sort();
-  }, [allRows, categoryTypes, entityTypeData]);
+  }, [allRows, categoryTypes, entityTypeData, isExteriorType]);
 
   const filtered = useMemo(() => {
     let rows = allRows;
@@ -2397,6 +2435,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       return (cf?.systemCategory || cf?.system || "") === systemFilter;
     });
     if (structureFilter !== "ALL") rows = rows.filter(r => r.cat === structureFilter);
+    if (exteriorFilter !== "ALL") rows = rows.filter(r => r.cat === exteriorFilter);
     if (roomFilter !== "ALL") rows = rows.filter(r => {
       if (r.cat === roomFilter) return true;
       return (customFieldValues?.[r.key]?.roomLabel || customFieldValues?.[r.key]?.room || "") === roomFilter;
@@ -2441,7 +2480,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       }
       return cmp * sortCol.dir;
     });
-  }, [allRows, statusFilter, systemFilter, structureFilter, roomFilter, levelFilter, typeFilter, fpData, invRooms, search, sortCol, itemDetails, customFieldValues]);
+  }, [allRows, statusFilter, systemFilter, structureFilter, exteriorFilter, roomFilter, levelFilter, typeFilter, fpData, invRooms, search, sortCol, itemDetails, customFieldValues]);
 
   function handleHeaderClick(col) {
     setSortCol(prev => prev.col === col ? { col, dir: prev.dir * -1 } : { col, dir: 1 });
@@ -2466,12 +2505,9 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
   };
 
   return (
-    <div style={{ padding: "var(--fm-spacing-5xl) var(--fm-spacing-5xl) 0" }}>
+    <div style={{ padding: "0 var(--fm-spacing-5xl)" }}>
       {/* Toolbar */}
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1.25rem" }}>
-        <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-          {allRows.length} item{allRows.length !== 1 ? "s" : ""}
-        </p>
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
@@ -2526,54 +2562,52 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
 
       {/* Filter pills */}
       <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.6rem" }}>
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Status</span>
+        <FilterRow label="Status">
           {[
             { key: "ALL",     label: "All" },
             { key: "ACTIVE",  label: "Active",  color: "var(--fm-green)" },
             { key: "PARTIAL", label: "Partial", color: "var(--fm-amber)" },
             { key: "EMPTY",   label: "Empty" },
           ].map(({ key, label, color }) => (
-            <ItemInvPill key={key} active={statusFilter === key} color={color} onClick={() => setStatusFilter(key)}>{label}</ItemInvPill>
+            <FilterPill key={key} active={statusFilter === key} color={color} onClick={() => setStatusFilter(key)}>{label}</FilterPill>
           ))}
-        </div>
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Systems</span>
-          <ItemInvPill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</ItemInvPill>
+        </FilterRow>
+        <FilterRow label="Systems">
+          <FilterPill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</FilterPill>
           {systemCats.map(cat => (
-            <ItemInvPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</ItemInvPill>
+            <FilterPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</FilterPill>
           ))}
-        </div>
-        {structureCats.length > 0 && (
-          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Structure</span>
-            <ItemInvPill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</ItemInvPill>
-            {structureCats.map(cat => (
-              <ItemInvPill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</ItemInvPill>
-            ))}
-          </div>
-        )}
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Room</span>
-          <ItemInvPill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</ItemInvPill>
+        </FilterRow>
+        <FilterRow label="Structure" hidden={structureCats.length === 0}>
+          <FilterPill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</FilterPill>
+          {structureCats.map(cat => (
+            <FilterPill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</FilterPill>
+          ))}
+        </FilterRow>
+        <FilterRow label="Exterior" hidden={exteriorCats.length === 0}>
+          <FilterPill active={exteriorFilter === "ALL"} onClick={() => setExteriorFilter("ALL")}>All</FilterPill>
+          {exteriorCats.map(cat => (
+            <FilterPill key={cat} active={exteriorFilter === cat} onClick={() => setExteriorFilter(cat)}>{cat}</FilterPill>
+          ))}
+        </FilterRow>
+        <FilterRow label="Room">
+          <FilterPill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</FilterPill>
           {roomCats.map(cat => (
-            <ItemInvPill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</ItemInvPill>
+            <FilterPill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</FilterPill>
           ))}
-        </div>
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Level</span>
-          <ItemInvPill active={levelFilter === "ALL"} onClick={() => setLevelFilter("ALL")}>All</ItemInvPill>
+        </FilterRow>
+        <FilterRow label="Level">
+          <FilterPill active={levelFilter === "ALL"} onClick={() => setLevelFilter("ALL")}>All</FilterPill>
           {invFloors.map(lvl => (
-            <ItemInvPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.label}</ItemInvPill>
+            <FilterPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.label}</FilterPill>
           ))}
-        </div>
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Type</span>
-          <ItemInvPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</ItemInvPill>
+        </FilterRow>
+        <FilterRow label="Type">
+          <FilterPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</FilterPill>
           {[...new Set(allRows.map(r => customFieldValues?.[r.key]?.item_type).filter(Boolean))].sort().map(t => (
-            <ItemInvPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{t}</ItemInvPill>
+            <FilterPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{t}</FilterPill>
           ))}
-        </div>
+        </FilterRow>
       </div>
 
       {/* Table */}
@@ -3456,6 +3490,18 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       reload();
     }
+  }
+
+  function handleCategoryTypeChange(categoryLabel, newType) {
+    if (effectiveCategoryTypes[categoryLabel] === newType) return;
+    const next = { ...categoryTypeOverrides };
+    if (defaultCategoryTypes[categoryLabel] === newType) {
+      delete next[categoryLabel];
+    } else {
+      next[categoryLabel] = newType;
+    }
+    saveCategoryTypeOverrides(next);
+    setCategoryTypeOverridesState(next);
   }
 
   function handleDrop(groupType) {
@@ -4520,10 +4566,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           onRenameCategory={handleCategoryRename}
           onDeleteCategory={handleDeleteClick}
           onFieldChange={handleCustomFieldValueChange}
+          onChangeCategoryType={handleCategoryTypeChange}
         />
       ) : (
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "2rem 2rem 0" }}>
+        <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
         <div style={activeTab === "Outline" ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (

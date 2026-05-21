@@ -9,7 +9,7 @@ const FOREMAN_PAGES = [
   { key: 'Chores' },
   { key: 'To Dos' },
   { key: 'Projects' },
-  { key: 'Guide' },
+  { key: 'Notebook' },
   { key: 'Preferences' },
 ];
 

@@ -16,36 +16,22 @@ import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
 import { loadEntityTypes, resolveTypeId, isSpatial } from "./lib/entityTypes.js";
+import { getFloorsInOrder } from "./lib/floors.js";
+import { loadRooms } from "./lib/rooms.js";
+import { loadCustomFieldValues } from "./lib/customFields.js";
+import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
+import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
 
 const DEFAULT_CAT_SET = new Set(defaultData.map(d => d.category));
 const DEFAULT_CAT_ORDER = Array.from(new Set(defaultData.map(r => r.category)));
 
-function Pill({ active, onClick, color, children }) {
-  const activeColor = color || "var(--fm-brass)";
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        background: active ? "rgba(201,169,110,0.10)" : "transparent",
-        border: `1px solid ${active ? activeColor : "var(--fm-hairline2)"}`,
-        borderRadius: "var(--fm-radius)",
-        color: active ? activeColor : "var(--fm-ink-dim)",
-        cursor: "pointer",
-        fontFamily: "var(--fm-mono)",
-        fontSize: "0.65rem",
-        letterSpacing: "0.08em",
-        padding: "0.22rem 0.55rem",
-        textTransform: "uppercase",
-        transition: "all 0.12s",
-        whiteSpace: "nowrap",
-      }}
-      onMouseEnter={e => { if (!active) { e.currentTarget.style.borderColor = activeColor; e.currentTarget.style.color = activeColor; } }}
-      onMouseLeave={e => { if (!active) { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; } }}
-    >
-      {children}
-    </button>
-  );
+
+function loadFpPlacements() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("fp-data") || "{}");
+    return raw.placements || {};
+  } catch { return {}; }
 }
 
 function loadDates(key) {
@@ -69,10 +55,15 @@ function saveDates(key, dates) {
 
 export default function HomeMaintenanceTable({ navigate, navState }) {
   const [rows, setRows] = useState(() => loadData());
+  const [activeTab, setActiveTab] = useState("All tasks");
+  const [completionRecords] = useState(() => loadMaintenanceCompletionRecords());
   const [activeStatus, setActiveStatus] = useState("ALL");
   const [systemFilter, setSystemFilter] = useState("ALL");
   const [structureFilter, setStructureFilter] = useState("ALL");
+  const [exteriorFilter, setExteriorFilter] = useState("ALL");
   const [roomFilter, setRoomFilter] = useState("ALL");
+  const [levelFilter, setLevelFilter] = useState("ALL");
+  const [typeFilter, setTypeFilter] = useState("ALL");
   const [search, setSearch] = useState("");
   const [activeFrequencies, setActiveFrequencies] = useState(new Set());
   const [activeSeasons, setActiveSeasons] = useState(new Set());
@@ -85,6 +76,10 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [categoryTypeOverrides] = useState(() => loadCategoryTypeOverrides());
   const [roomSubtypes] = useState(() => loadRoomSubtypes());
   const [entityTypeData] = useState(() => loadEntityTypes());
+  const [fpPlacements] = useState(() => loadFpPlacements());
+  const [invFloors] = useState(() => getFloorsInOrder());
+  const [invRooms] = useState(() => loadRooms());
+  const [customFieldValues] = useState(() => loadCustomFieldValues());
   const pageHeaderRef = useRef(null);
   const [pageHeaderHeight, setPageHeaderHeight] = useState(0);
 
@@ -159,26 +154,31 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     return labels;
   }, [categoryGroups, roomSubtypes]);
 
-  // Functional non-structure categories → Systems filter row
-  const systemCats = useMemo(() => {
-    return categoryGroups
-      .filter(g => g.type === "system" || g.type === "safety")
-      .flatMap(g => g.tabs)
-      .sort();
-  }, [categoryGroups]);
+  const systemCats = useMemo(() =>
+    categoryGroups.filter(g => g.type === "system" || g.type === "safety").flatMap(g => g.tabs).sort()
+  , [categoryGroups]);
 
-  // Structure-rooted categories → Structure filter row
-  const structureCats = useMemo(() => {
-    return categoryGroups.find(g => g.type === "structure")?.tabs ?? [];
-  }, [categoryGroups]);
+  const structureCats = useMemo(() =>
+    categoryGroups.find(g => g.type === "structure")?.tabs ?? []
+  , [categoryGroups]);
 
-  // Spatial categories (room + exterior) → Rooms filter row
-  const roomCats = useMemo(() => {
-    return categoryGroups
-      .filter(g => g.type === "room" || g.type === "exterior")
-      .flatMap(g => g.tabs)
-      .sort();
-  }, [categoryGroups]);
+  const exteriorCats = useMemo(() =>
+    categoryGroups.find(g => g.type === "exterior")?.tabs ?? []
+  , [categoryGroups]);
+
+  const roomCats = useMemo(() =>
+    categoryGroups.find(g => g.type === "room")?.tabs.slice().sort() ?? []
+  , [categoryGroups]);
+
+  const typeOptions = useMemo(() => {
+    const seen = new Set();
+    rows.forEach(r => {
+      if (!r.category || r._isBlankCategory) return;
+      const v = customFieldValues?.[`${r.category}|${r.item}`]?.item_type;
+      if (v) seen.add(v);
+    });
+    return [...seen].sort();
+  }, [rows, customFieldValues]);
 
 
   const activeTaskCount = useMemo(() => {
@@ -466,7 +466,14 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
       if (systemFilter !== "ALL" && row.category !== systemFilter) return false;
       if (structureFilter !== "ALL" && row.category !== structureFilter) return false;
+      if (exteriorFilter !== "ALL" && row.category !== exteriorFilter) return false;
       if (roomFilter !== "ALL" && row.category !== roomFilter) return false;
+      if (levelFilter !== "ALL") {
+        const placedRoomIds = Object.keys(fpPlacements[levelFilter] || {});
+        const placedLabels = new Set(placedRoomIds.map(rid => invRooms[rid]?.label).filter(Boolean));
+        if (!placedLabels.has(row.category)) return false;
+      }
+      if (typeFilter !== "ALL" && (customFieldValues?.[`${row.category}|${row.item}`]?.item_type || "") !== typeFilter) return false;
 
       // Status filter
       if (activeStatus !== "ALL") {
@@ -508,7 +515,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       if (a._isCustom !== b._isCustom) return a._isCustom ? -1 : 1;
       return 0;
     });
-  }, [rows, activeStatus, systemFilter, structureFilter, roomFilter, activeFrequencies, activeSeasons, search, deletedRows, deletedCategories, deletedItems, sortCols, nextDates]);
+  }, [rows, activeStatus, systemFilter, structureFilter, exteriorFilter, roomFilter, levelFilter, typeFilter, fpPlacements, invRooms, customFieldValues, activeFrequencies, activeSeasons, search, deletedRows, deletedCategories, deletedItems, sortCols, nextDates]);
 
   const maintenanceStats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -528,6 +535,16 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     return { overdue, soon };
   }, [rows, deletedCategories, deletedItems, deletedRows, nextDates]);
 
+  const historyEntries = useMemo(() => {
+    return Object.entries(completionRecords)
+      .map(([key, rec]) => {
+        const [category, item, task] = key.split("|");
+        return { key, category, item, task, ...rec };
+      })
+      .filter(e => e.completedAt)
+      .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+  }, [completionRecords]);
+
   return (
     <div style={{
       height: "100vh",
@@ -542,21 +559,58 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
         <FmHeader active="Maintenance" tagline="Maintenance" />
         <FmSubnav
           tabs={["All tasks", "History"]}
-          active="All tasks"
-          stats={[
-            { value: activeTaskCount, label: "tracked" },
-            { value: maintenanceStats.overdue, color: "var(--fm-red)", label: "overdue" },
-            { value: maintenanceStats.soon, color: "var(--fm-amber)", label: "due ≤7d" },
-            { value: filtered.length, label: "shown" },
-          ]}
+          active={activeTab}
+          onTabChange={setActiveTab}
+          stats={activeTab === "History"
+            ? [{ value: historyEntries.length, label: "logged" }]
+            : [
+                { value: activeTaskCount, label: "tracked" },
+                { value: maintenanceStats.overdue, color: "var(--fm-red)", label: "overdue" },
+                { value: maintenanceStats.soon, color: "var(--fm-amber)", label: "due ≤7d" },
+                { value: filtered.length, label: "shown" },
+              ]
+          }
         />
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl) var(--fm-spacing-5xl) 4rem" }}>
+      {activeTab === "History" && (
+        <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl) var(--fm-spacing-5xl) 4rem" }}>
+          {historyEntries.length === 0 ? (
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
+              No history logged yet. Use "Log It" on any task to record a completion.
+            </p>
+          ) : (
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead>
+                <tr>
+                  {["Date", "Category", "Item", "Task", "Who", "Notes"].map(h => (
+                    <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {historyEntries.map(e => {
+                  const d = new Date(e.completedAt);
+                  const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                  return (
+                    <tr key={e.key} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
+                      <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{dateStr}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.category}</td>
+                      <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.item}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.task}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.assignee || "—"}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{e.notes || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {activeTab === "All tasks" && <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl) var(--fm-spacing-5xl) 4rem" }}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1.25rem" }}>
-          <p style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", margin: 0 }}>
-            {activeTaskCount} maintenance item{activeTaskCount !== 1 ? "s" : ""} across {activeCategoryCount} categor{activeCategoryCount !== 1 ? "ies" : "y"}
-          </p>
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -621,9 +675,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
         </div>
         {/* Filter pills — Status / System / Room */}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.6rem" }}>
-          {/* Status */}
-          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Status</span>
+          <FilterRow label="Status" labelWidth="54px">
             {[
               { key: "ALL",     label: "All" },
               { key: "OVERDUE", label: "Overdue", color: "var(--fm-red)"   },
@@ -631,37 +683,45 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
               { key: "SCHED",   label: "Sched" },
               { key: "OK",      label: "OK",      color: "var(--fm-green)" },
             ].map(({ key, label, color }) => (
-              <Pill key={key} active={activeStatus === key} color={color} onClick={() => setActiveStatus(key)}>{label}</Pill>
+              <FilterPill key={key} active={activeStatus === key} color={color} onClick={() => setActiveStatus(key)}>{label}</FilterPill>
             ))}
-          </div>
-
-          {systemCats.length > 0 && (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Systems</span>
-              <Pill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</Pill>
-              {systemCats.map(cat => (
-                <Pill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</Pill>
-              ))}
-            </div>
-          )}
-          {structureCats.length > 0 && (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Structure</span>
-              <Pill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</Pill>
-              {structureCats.map(cat => (
-                <Pill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</Pill>
-              ))}
-            </div>
-          )}
-          {roomCats.length > 0 && (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", minWidth: "54px", textTransform: "uppercase" }}>Rooms</span>
-              <Pill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</Pill>
-              {roomCats.map(cat => (
-                <Pill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</Pill>
-              ))}
-            </div>
-          )}
+          </FilterRow>
+          <FilterRow label="Systems" labelWidth="54px" hidden={systemCats.length === 0}>
+            <FilterPill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</FilterPill>
+            {systemCats.map(cat => (
+              <FilterPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</FilterPill>
+            ))}
+          </FilterRow>
+          <FilterRow label="Structure" labelWidth="54px" hidden={structureCats.length === 0}>
+            <FilterPill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</FilterPill>
+            {structureCats.map(cat => (
+              <FilterPill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</FilterPill>
+            ))}
+          </FilterRow>
+          <FilterRow label="Exterior" labelWidth="54px" hidden={exteriorCats.length === 0}>
+            <FilterPill active={exteriorFilter === "ALL"} onClick={() => setExteriorFilter("ALL")}>All</FilterPill>
+            {exteriorCats.map(cat => (
+              <FilterPill key={cat} active={exteriorFilter === cat} onClick={() => setExteriorFilter(cat)}>{cat}</FilterPill>
+            ))}
+          </FilterRow>
+          <FilterRow label="Rooms" labelWidth="54px" hidden={roomCats.length === 0}>
+            <FilterPill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</FilterPill>
+            {roomCats.map(cat => (
+              <FilterPill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</FilterPill>
+            ))}
+          </FilterRow>
+          <FilterRow label="Level" labelWidth="54px" hidden={invFloors.length === 0}>
+            <FilterPill active={levelFilter === "ALL"} onClick={() => setLevelFilter("ALL")}>All</FilterPill>
+            {invFloors.map(lvl => (
+              <FilterPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.label}</FilterPill>
+            ))}
+          </FilterRow>
+          <FilterRow label="Type" labelWidth="54px" hidden={typeOptions.length === 0}>
+            <FilterPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</FilterPill>
+            {typeOptions.map(t => (
+              <FilterPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{t}</FilterPill>
+            ))}
+          </FilterRow>
         </div>
 
         <Legend
@@ -689,7 +749,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
           onHeaderClick={handleHeaderClick}
           stickyTop={0}
         />
-      </div>
+      </div>}
 
       <ReminderSettings
         open={remindersOpen}

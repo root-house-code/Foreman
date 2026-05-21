@@ -24,7 +24,7 @@ const PAGE_KEYS = {
   chores: "Chores",
   board: "To Dos",
   projects: "Projects",
-  guide: "Guide",
+  guide: "Notebook",
   preferences: "Preferences",
 };
 

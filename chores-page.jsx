@@ -483,7 +483,7 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DOW_LABELS  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
-function MonthCalendar({ chores, choreCompletions, onLogChore, onDayClick }) {
+function MonthCalendar({ chores, choreCompletions, onChoreClick, onDayClick }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const [viewYear,  setViewYear]  = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -563,8 +563,8 @@ function MonthCalendar({ chores, choreCompletions, onLogChore, onDayClick }) {
                 return (
                   <div
                     key={chore.id}
-                    onClick={e => { e.stopPropagation(); onLogChore(chore.id, date); }}
-                    title={`${done ? "Unmark" : "Mark done"}: ${chore.title}`}
+                    onClick={e => { e.stopPropagation(); onChoreClick(chore, date); }}
+                    title={chore.title}
                     style={{
                       background: "var(--fm-bg-sunk)",
                       borderLeft: `3px solid ${done ? "var(--fm-ink-mute)" : "var(--fm-cyan)"}`,
@@ -590,7 +590,7 @@ function MonthCalendar({ chores, choreCompletions, onLogChore, onDayClick }) {
   );
 }
 
-function WeekStrip({ chores, choreCompletions, onLogChore, startDate }) {
+function WeekStrip({ chores, choreCompletions, onChoreClick, startDate }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(startDate || today);
@@ -625,8 +625,8 @@ function WeekStrip({ chores, choreCompletions, onLogChore, startDate }) {
               return (
                 <div
                   key={chore.id}
-                  onClick={() => onLogChore(chore.id, date)}
-                  title={`${done ? "Unmark" : "Mark done"}: ${chore.title}`}
+                  onClick={() => onChoreClick(chore, date)}
+                  title={chore.title}
                   style={{
                     background: "var(--fm-bg-sunk)",
                     borderLeft: `3px solid ${done ? "var(--fm-ink-mute)" : "var(--fm-cyan)"}`,
@@ -950,7 +950,7 @@ export default function ChoresPage({ navigate, navState }) {
             <WeekStrip
               chores={chores}
               choreCompletions={choreCompletions}
-              onLogChore={handleLogChore}
+              onChoreClick={(chore, date) => setDetailEvent({ chore, date })}
               startDate={sunday}
             />
           );
@@ -960,7 +960,7 @@ export default function ChoresPage({ navigate, navState }) {
           <WeekStrip
             chores={chores}
             choreCompletions={choreCompletions}
-            onLogChore={handleLogChore}
+            onChoreClick={(chore, date) => setDetailEvent({ chore, date })}
           />
         )}
 
@@ -968,7 +968,7 @@ export default function ChoresPage({ navigate, navState }) {
           <MonthCalendar
             chores={chores}
             choreCompletions={choreCompletions}
-            onLogChore={handleLogChore}
+            onChoreClick={(chore, date) => setDetailEvent({ chore, date })}
             onDayClick={date => { setCreateChoreDate(date); setAddChoreModalOpen(true); }}
           />
         )}
@@ -1148,7 +1148,7 @@ export default function ChoresPage({ navigate, navState }) {
                           onCycle={() => handleCycleReminderMode(chore.id)}
                         />
                         <button
-                          onClick={() => handleLogChore(chore.id)}
+                          onClick={() => setDetailEvent({ chore, date: nd ? new Date(nd) : new Date() })}
                           style={{ background: "var(--fm-brass-bg)", border: "1px solid rgba(201,169,110,0.3)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.06em", padding: "0.2rem 0.5rem", transition: "all 0.12s" }}
                           onMouseEnter={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
                           onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(201,169,110,0.3)"}

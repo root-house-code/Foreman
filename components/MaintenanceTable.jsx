@@ -1,7 +1,8 @@
-import { useState, forwardRef } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
-import DatePicker from "react-datepicker";
 import ScheduleBadge from "./ScheduleBadge.jsx";
+import MaintenanceCompleteModal from "./MaintenanceCompleteModal.jsx";
+import { saveMaintenanceCompletionRecord } from "../lib/maintenance.js";
 import DateCell from "./DateCell.jsx";
 import FollowButton from "./FollowButton.jsx";
 import ReminderButton from "./ReminderButton.jsx";
@@ -100,30 +101,6 @@ function TaskCell({ value, onChange, tooltip }) {
   );
 }
 
-const LogItTrigger = forwardRef(({ onClick }, ref) => (
-  <button
-    ref={ref}
-    onClick={onClick}
-    style={{
-      background: "transparent",
-      border: "1px solid var(--fm-hairline2)",
-      borderRadius: "var(--fm-radius)",
-      color: "var(--fm-brass-dim)",
-      cursor: "pointer",
-      fontFamily: "var(--fm-mono)",
-      fontSize: "0.62rem",
-      letterSpacing: "0.08em",
-      padding: "0.2rem 0.45rem",
-      textTransform: "uppercase",
-      transition: "all 0.12s",
-      whiteSpace: "nowrap",
-    }}
-    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-  >
-    Log it
-  </button>
-));
 
 function NoteIconButton({ hasNote, onClick }) {
   const color = hasNote ? "var(--fm-brass)" : "var(--fm-ink-mute)";
@@ -174,14 +151,18 @@ export default function MaintenanceTable({
   const [confirmRow, setConfirmRow] = useState(null);
   const [loggedRows, setLoggedRows] = useState(new Set());
   const [detailRow, setDetailRow] = useState(null);
+  const [completionRow, setCompletionRow] = useState(null); // { row, key }
 
-  function handleLogIt(key, date) {
-    if (!date) return;
-    onDateChange(key, date);
+  function handleModalMarkDone(key, row, completedDate, notes, nextDateOverride, assignee) {
+    if (!completedDate) {
+      onDateChange(key, null);
+      return;
+    }
+    saveMaintenanceCompletionRecord(key, { completedAt: completedDate.toISOString(), assignee, notes });
+    onDateChange(key, completedDate);
+    if (nextDateOverride) onNextDateChange(key, nextDateOverride);
     setLoggedRows(prev => new Set([...prev, key]));
-    setTimeout(() => setLoggedRows(prev => {
-      const next = new Set(prev); next.delete(key); return next;
-    }), 3000);
+    setTimeout(() => setLoggedRows(prev => { const n = new Set(prev); n.delete(key); return n; }), 3000);
   }
 
   // Pre-compute item grouping: first occurrence of category+item gets name shown
@@ -369,12 +350,12 @@ export default function MaintenanceTable({
 
                 {/* Log it */}
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
-                  <DatePicker
-                    selected={new Date()}
-                    onChange={date => handleLogIt(key, date)}
-                    customInput={<LogItTrigger />}
-                    popperPlacement="bottom-start"
-                  />
+                  <button
+                    onClick={() => setCompletionRow({ row, key })}
+                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", padding: "0.2rem 0.45rem", textTransform: "uppercase", transition: "all 0.12s", whiteSpace: "nowrap" }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                  >Log it</button>
                 </td>
 
                 {/* Delete */}
@@ -399,6 +380,21 @@ export default function MaintenanceTable({
         <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", padding: "3rem", textAlign: "center" }}>
           No results found.
         </div>
+      )}
+
+      {completionRow && createPortal(
+        <MaintenanceCompleteModal
+          row={completionRow.row}
+          date={nextDates[completionRow.key] || new Date()}
+          isCompleted={!!completedDates[completionRow.key]}
+          lastDate={completedDates[completionRow.key] || null}
+          onMarkDone={(completedDate, notes, nextDateOverride, assignee) =>
+            handleModalMarkDone(completionRow.key, completionRow.row, completedDate, notes, nextDateOverride, assignee)
+          }
+          onRowEdit={(field, value) => onRowEdit(completionRow.row._id, field, value)}
+          onClose={() => setCompletionRow(null)}
+        />,
+        document.body
       )}
 
       {detailRow && createPortal(
