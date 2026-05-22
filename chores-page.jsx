@@ -22,8 +22,9 @@ import { loadRoomCategories, loadRoomSubtypes, formatRoomLabel } from "./lib/cat
 import { loadRooms } from "./lib/rooms.js";
 import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
-  saveChoreCompletionRecord,
+  saveChoreCompletionRecord, loadChoreCompletionRecords,
 } from "./lib/choreCompletions.js";
+import { FilterPill } from "./components/FilterPill.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import {
   loadChoreReminderModes, saveChoreReminderModes,
@@ -674,6 +675,9 @@ export default function ChoresPage({ navigate, navState }) {
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [choreNextDates, setChoreNextDates] = useState(() => loadChoreNextDates());
   const [detailEvent, setDetailEvent]     = useState(null); // { chore, date }
+  const [choreCompletionRecords]          = useState(() => loadChoreCompletionRecords());
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyRoomFilter, setHistoryRoomFilter] = useState("ALL");
 
   useEffect(() => {
     if (!navState) return;
@@ -691,6 +695,37 @@ export default function ChoresPage({ navigate, navState }) {
     Object.fromEntries(roomOptions.filter(o => o.label !== o.value).map(o => [o.value, o.label])),
     [roomOptions]
   );
+
+  const historyEntries = useMemo(() => {
+    const choreMap = Object.fromEntries(chores.map(c => [c.id, c]));
+    return Object.entries(choreCompletionRecords)
+      .map(([key, rec]) => ({ key, chore: choreMap[rec.choreId] ?? null, ...rec }))
+      .filter(e => e.completedAt)
+      .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+  }, [choreCompletionRecords, chores]);
+
+  const historyRooms = useMemo(() => {
+    const seen = new Set();
+    historyEntries.forEach(e => { if (e.room) seen.add(e.room); });
+    return [...seen].sort();
+  }, [historyEntries]);
+
+  const filteredHistoryEntries = useMemo(() => {
+    return historyEntries.filter(e => {
+      if (historyRoomFilter !== "ALL" && e.room !== historyRoomFilter) return false;
+      if (historySearch.trim()) {
+        const q = historySearch.toLowerCase();
+        const title = e.chore?.title || "";
+        if (
+          !title.toLowerCase().includes(q) &&
+          !(e.room      || "").toLowerCase().includes(q) &&
+          !(e.assignee  || "").toLowerCase().includes(q) &&
+          !(e.notes     || "").toLowerCase().includes(q)
+        ) return false;
+      }
+      return true;
+    });
+  }, [historyEntries, historyRoomFilter, historySearch]);
 
   // ── Sort helpers ────────────────────────────────────────────────────────────
   function handleHeaderClick(col, shiftKey) {
@@ -931,14 +966,17 @@ export default function ChoresPage({ navigate, navState }) {
 
       <FmHeader active="Chores" tagline="Chores" />
       <FmSubnav
-        tabs={["This week", "Next 7 days", "This month"]}
+        tabs={["This week", "Next 7 days", "This month", "History"]}
         active={activeTab}
         onTabChange={setActiveTab}
-        stats={[
-          { value: chores.length, label: "total" },
-          { value: choreStats.overdue, color: "var(--fm-red)", label: "overdue" },
-          { value: choreStats.thisWeek, color: "var(--fm-amber)", label: "this week" },
-        ]}
+        stats={activeTab === "History"
+          ? [{ value: filteredHistoryEntries.length, label: "logged" }]
+          : [
+              { value: chores.length, label: "total" },
+              { value: choreStats.overdue, color: "var(--fm-red)", label: "overdue" },
+              { value: choreStats.thisWeek, color: "var(--fm-amber)", label: "this week" },
+            ]
+        }
       />
 
       <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem 4rem" }}>
@@ -972,6 +1010,8 @@ export default function ChoresPage({ navigate, navState }) {
             onDayClick={date => { setCreateChoreDate(date); setAddChoreModalOpen(true); }}
           />
         )}
+
+        {activeTab !== "History" && <>
 
         {/* Filter bar */}
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.85rem" }}>
@@ -1180,6 +1220,65 @@ export default function ChoresPage({ navigate, navState }) {
             </tbody>
           </table>
         </div>
+        </>}
+
+        {activeTab === "History" && (
+          <div>
+            {/* Filter bar */}
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                <FilterPill active={historyRoomFilter === "ALL"} onClick={() => setHistoryRoomFilter("ALL")}>All</FilterPill>
+                {historyRooms.map(room => (
+                  <FilterPill key={room} active={historyRoomFilter === room} onClick={() => setHistoryRoomFilter(room)}>{room}</FilterPill>
+                ))}
+              </div>
+              <div style={{ flex: 1 }} />
+              <input
+                value={historySearch}
+                onChange={e => setHistorySearch(e.target.value)}
+                placeholder="Search…"
+                style={{ background: "var(--fm-bg-sunk)", border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", outline: "none", padding: "0.35rem 0.7rem", transition: "border-color 0.12s", width: "200px" }}
+                onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+                onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
+              />
+            </div>
+
+            {historyEntries.length === 0 ? (
+              <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
+                No history logged yet. Mark a chore complete to start tracking.
+              </p>
+            ) : filteredHistoryEntries.length === 0 ? (
+              <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
+                No results match your filter.
+              </p>
+            ) : (
+              <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                <thead>
+                  <tr>
+                    {["Date", "Chore", "Room", "Who", "Notes"].map(h => (
+                      <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredHistoryEntries.map(e => {
+                    const d = new Date(e.completedAt);
+                    const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    return (
+                      <tr key={e.key} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
+                        <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{dateStr}</td>
+                        <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.chore?.title || e.choreId}</td>
+                        <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.room || "—"}</td>
+                        <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.assignee || "—"}</td>
+                        <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{e.notes || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
 
       <ReminderSettings

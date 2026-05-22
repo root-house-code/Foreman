@@ -2,6 +2,7 @@ import { useContext } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
 
 const FOREMAN_PAGES = [
+  { key: 'Read Me' },
   { key: 'Dashboard' },
   { key: 'Calendar' },
   { key: 'Inventory' },

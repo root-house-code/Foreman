@@ -203,10 +203,17 @@ function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, 
       }
     } else {
       const nextStr = maintenanceNextDates[key];
-      if (!nextStr) continue;
-      const nextDate = new Date(nextStr);
-      if (nextDate.getFullYear() === y && nextDate.getMonth() === m && nextDate.getDate() === d)
-        events.push({ type: "maintenance", row, key, isCompleted: false });
+      if (nextStr) {
+        const nextDate = new Date(nextStr);
+        if (nextDate.getFullYear() === y && nextDate.getMonth() === m && nextDate.getDate() === d)
+          events.push({ type: "maintenance", row, key, isCompleted: false });
+      }
+      const lastStr = maintenanceDates[key];
+      if (lastStr) {
+        const lastDate = new Date(lastStr);
+        if (lastDate.getFullYear() === y && lastDate.getMonth() === m && lastDate.getDate() === d)
+          events.push({ type: "maintenance", row, key, isCompleted: true });
+      }
     }
   }
   return events;
@@ -407,12 +414,20 @@ export default function CalendarPage({ navigate }) {
           push(day, { type: "maintenance", row, key, isCompleted: checkMaintenanceCompleted(key, projectedDate, row.schedule, maintenanceDates) });
         }
       } else {
-        // No recurring start date — show next due date as a one-time event if it falls in this month.
+        // No recurring start date — show next due date if it falls in this month.
         const nextStr = maintenanceNextDates[key];
-        if (!nextStr) continue;
-        const nextDate = new Date(nextStr);
-        if (nextDate.getFullYear() === view.y && nextDate.getMonth() === view.m)
-          push(nextDate.getDate(), { type: "maintenance", row, key, isCompleted: false });
+        if (nextStr) {
+          const nextDate = new Date(nextStr);
+          if (nextDate.getFullYear() === view.y && nextDate.getMonth() === view.m)
+            push(nextDate.getDate(), { type: "maintenance", row, key, isCompleted: false });
+        }
+        // Also show completed occurrence on the date it was done, if it falls in this month.
+        const lastStr = maintenanceDates[key];
+        if (lastStr) {
+          const lastDate = new Date(lastStr);
+          if (lastDate.getFullYear() === view.y && lastDate.getMonth() === view.m)
+            push(lastDate.getDate(), { type: "maintenance", row, key, isCompleted: true });
+        }
       }
     }
     return map;

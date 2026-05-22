@@ -11,12 +11,14 @@ import GuidePage from "../guide-page.jsx";
 import ChoresPage from "../chores-page.jsx";
 import CalendarPage from "../calendar-page.jsx";
 import PreferencesPage from "../preferences-page.jsx";
+import ReadMePage from "../read-me-page.jsx";
 
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
 initRoomsFromCategories();
 
 const PAGE_KEYS = {
+  readme: "Read Me",
   dashboard: "Dashboard",
   calendar: "Calendar",
   inventory: "Inventory",
@@ -48,6 +50,7 @@ export default function App() {
   );
 
   const pageContent = () => {
+    if (page === "readme") return <ReadMePage navigate={navigate} />;
     if (page === "inventory") return <InventoryPage navigate={navigate} navState={navState} />;
     if (page === "dashboard") return <DashboardPage navigate={navigate} />;
     if (page === "board") return <BoardPage navigate={navigate} />;

@@ -257,6 +257,8 @@ export default function BoardPage({ navigate }) {
   const [choreNextDates, setChoreNextDates] = useState(() => loadChoreNextDates());
   const [choreCompletedDates, setChoreCompletedDates] = useState(() => loadChoreCompletedDates());
   const [showChoresOnly, setShowChoresOnly] = useState(false);
+  const [activeTab, setActiveTab] = useState("Board");
+  const [backlogSort, setBacklogSort] = useState("created");
 
   const rows = useMemo(() => loadData(), []);
   const deletedCategories = useMemo(() => loadDeletedCategories(), []);
@@ -415,12 +417,16 @@ export default function BoardPage({ navigate }) {
       } : t));
     } else {
       const colKey = (modalState && modalState.colKey) || "not-started";
-      persistTodos([...todos, createTodo({ ...form, status: form.status || colKey })]);
+      persistTodos([...todos, createTodo({ ...form, status: colKey === "backlog" ? "backlog" : (form.status || colKey) })]);
     }
     setModalState(null);
   }
 
   function handleDelete(id) { persistTodos(todos.filter(t => t.id !== id)); }
+
+  function handlePromote(id, targetStatus) {
+    persistTodos(todos.map(t => t.id === id ? { ...t, status: targetStatus } : t));
+  }
 
   function markDone(id) {
     const now = new Date().toISOString();
@@ -493,12 +499,19 @@ export default function BoardPage({ navigate }) {
   }, [todos]);
 
   const filteredTodos = useMemo(() => todos.filter(t => {
+    if (t.status === "backlog") return false;
     if (selectedProjectId && t.projectId !== selectedProjectId) return false;
     if (activeCategory !== "All" && t.linkedCategory !== activeCategory) return false;
     if (!showChoresOnly && t._isOverdueChore) return false;
     if (assigneeFilter && t.assignee !== assigneeFilter) return false;
     return true;
   }), [todos, selectedProjectId, activeCategory, showChoresOnly, assigneeFilter]);
+
+  const backlogTodos = useMemo(() => {
+    const base = todos.filter(t => t.status === "backlog");
+    if (backlogSort === "alpha") return [...base].sort((a, b) => a.title.localeCompare(b.title));
+    return [...base].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  }, [todos, backlogSort]);
 
   const todosByStatus = useMemo(() => {
     const map = { "not-started": [], "in-progress": [], "done": [] };
@@ -540,9 +553,12 @@ export default function BoardPage({ navigate }) {
 
       <FmHeader active="To Dos" tagline="To Dos" />
       <FmSubnav
-        tabs={["Board", "List", "By priority", "By project"]}
-        active="Board"
-        stats={[
+        tabs={["Board", "Backlog"]}
+        active={activeTab}
+        onTabChange={setActiveTab}
+        stats={activeTab === "Backlog" ? [
+          { value: backlogTodos.length, label: "backlog" },
+        ] : [
           { value: todosByStatus["not-started"].length, label: "not started" },
           { value: todosByStatus["in-progress"].length, color: "var(--fm-amber)", label: "in progress" },
           { value: todosByStatus["done"].length, color: "var(--fm-green)", label: "done" },
@@ -645,100 +661,230 @@ export default function BoardPage({ navigate }) {
           </div>
         </aside>
 
-        {/* Main kanban area */}
+        {/* Main content area */}
         <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
           <div style={{ flex: 1, overflowY: "auto", padding: "1.25rem 1.5rem 4rem" }}>
 
-            {/* Filter + action bar */}
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "1.25rem" }}>
-              {/* Assignee pills */}
-              {assignees.map(a => {
-                const isActive = assigneeFilter === a;
-                return (
-                  <button
-                    key={a}
-                    onClick={() => setAssigneeFilter(prev => prev === a ? null : a)}
-                    style={{ ...pillBase, background: isActive ? "var(--fm-brass-bg)" : "transparent", border: isActive ? "1px solid rgba(201,169,110,0.5)" : "var(--fm-border-2)", color: isActive ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
-                    onMouseEnter={e => { if (!isActive) { e.currentTarget.style.color = "var(--fm-ink-dim)"; e.currentTarget.style.borderColor = "var(--fm-ink-mute)"; } }}
-                    onMouseLeave={e => { if (!isActive) { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; } }}
-                  >
-                    {a}
-                  </button>
-                );
-              })}
-
-              <div style={{ flex: 1 }} />
-
-              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
-                {filteredTodos.length} item{filteredTodos.length !== 1 ? "s" : ""}
-              </span>
-
-              <button
-                onClick={() => setShowChoresOnly(prev => !prev)}
-                style={{ ...pillBase, background: showChoresOnly ? "var(--fm-brass-bg)" : "transparent", border: showChoresOnly ? "1px solid rgba(201,169,110,0.5)" : "var(--fm-border-2)", color: showChoresOnly ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
-                onMouseEnter={e => { if (!showChoresOnly) { e.currentTarget.style.color = "var(--fm-ink-dim)"; e.currentTarget.style.borderColor = "var(--fm-ink-mute)"; } }}
-                onMouseLeave={e => { if (!showChoresOnly) { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; } }}
-              >
-                Chores
-              </button>
-
-              <button
-                onClick={() => setModalState("new")}
-                style={{ ...pillBase, background: "var(--fm-brass-bg)", border: "1px solid rgba(201,169,110,0.4)", color: "var(--fm-brass)" }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
-                onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(201,169,110,0.4)"}
-              >
-                + New To Do
-              </button>
-            </div>
-
-            {/* Kanban columns */}
-            <div style={{ alignItems: "flex-start", display: "flex", gap: "0.85rem" }}>
-              {STATUS_COLUMNS.map(col => {
-                const colTodos = todosByStatus[col.key];
-                const isDragTarget = !!dragging && dragOverCol === col.key;
-                return (
-                  <div
-                    key={col.key}
-                    onDragEnter={() => dragging && setDragOverCol(col.key)}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={() => handleDrop(col.key)}
-                    style={{ background: isDragTarget ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)", border: isDragTarget ? "1px solid rgba(201,169,110,0.4)" : "var(--fm-border)", borderRadius: "var(--fm-radius)", flex: 1, minHeight: 240, padding: "0.7rem", transition: "background 0.15s, border-color 0.15s" }}
-                  >
-                    {/* Column header */}
-                    <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between", marginBottom: "0.85rem" }}>
-                      <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-                        {col.label}
-                      </span>
-                      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1.15rem", lineHeight: 1 }}>
-                        {colTodos.length}
-                      </span>
-                    </div>
-
-                    {colTodos.map(todo => (
-                      <TodoCard
-                        key={todo.id}
-                        todo={todo}
-                        onEdit={() => setModalState(todo)}
-                        isDragging={dragging === todo.id}
-                        onDragStart={() => setDragging(todo.id)}
-                        onDragEnd={() => { setDragging(null); setDragOverCol(null); }}
-                        onStatusChange={handleStatusChange}
-                      />
-                    ))}
-
+            {activeTab === "Board" && (<>
+              {/* Filter + action bar */}
+              <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "1.25rem" }}>
+                {assignees.map(a => {
+                  const isActive = assigneeFilter === a;
+                  return (
                     <button
-                      onClick={() => setModalState({ colKey: col.key })}
-                      style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.06em", marginTop: "0.25rem", padding: "0.3rem 0", textAlign: "left", transition: "color 0.15s", width: "100%" }}
-                      onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
-                      onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+                      key={a}
+                      onClick={() => setAssigneeFilter(prev => prev === a ? null : a)}
+                      style={{ ...pillBase, background: isActive ? "var(--fm-brass-bg)" : "transparent", border: isActive ? "1px solid rgba(201,169,110,0.5)" : "var(--fm-border-2)", color: isActive ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
+                      onMouseEnter={e => { if (!isActive) { e.currentTarget.style.color = "var(--fm-ink-dim)"; e.currentTarget.style.borderColor = "var(--fm-ink-mute)"; } }}
+                      onMouseLeave={e => { if (!isActive) { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; } }}
                     >
-                      + Add
+                      {a}
                     </button>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+                <div style={{ flex: 1 }} />
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
+                  {filteredTodos.length} item{filteredTodos.length !== 1 ? "s" : ""}
+                </span>
+                <button
+                  onClick={() => setShowChoresOnly(prev => !prev)}
+                  style={{ ...pillBase, background: showChoresOnly ? "var(--fm-brass-bg)" : "transparent", border: showChoresOnly ? "1px solid rgba(201,169,110,0.5)" : "var(--fm-border-2)", color: showChoresOnly ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
+                  onMouseEnter={e => { if (!showChoresOnly) { e.currentTarget.style.color = "var(--fm-ink-dim)"; e.currentTarget.style.borderColor = "var(--fm-ink-mute)"; } }}
+                  onMouseLeave={e => { if (!showChoresOnly) { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; } }}
+                >
+                  Chores
+                </button>
+                <button
+                  onClick={() => setModalState("new")}
+                  style={{ ...pillBase, background: "var(--fm-brass-bg)", border: "1px solid rgba(201,169,110,0.4)", color: "var(--fm-brass)" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(201,169,110,0.4)"}
+                >
+                  + New To Do
+                </button>
+              </div>
+
+              {/* Kanban columns */}
+              <div style={{ alignItems: "flex-start", display: "flex", gap: "0.85rem" }}>
+                {STATUS_COLUMNS.map(col => {
+                  const colTodos = todosByStatus[col.key];
+                  const isDragTarget = !!dragging && dragOverCol === col.key;
+                  return (
+                    <div
+                      key={col.key}
+                      onDragEnter={() => dragging && setDragOverCol(col.key)}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={() => handleDrop(col.key)}
+                      style={{ background: isDragTarget ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)", border: isDragTarget ? "1px solid rgba(201,169,110,0.4)" : "var(--fm-border)", borderRadius: "var(--fm-radius)", flex: 1, minHeight: 240, padding: "0.7rem", transition: "background 0.15s, border-color 0.15s" }}
+                    >
+                      <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between", marginBottom: "0.85rem" }}>
+                        <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>
+                          {col.label}
+                        </span>
+                        <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1.15rem", lineHeight: 1 }}>
+                          {colTodos.length}
+                        </span>
+                      </div>
+                      {colTodos.map(todo => (
+                        <TodoCard
+                          key={todo.id}
+                          todo={todo}
+                          onEdit={() => setModalState(todo)}
+                          isDragging={dragging === todo.id}
+                          onDragStart={() => setDragging(todo.id)}
+                          onDragEnd={() => { setDragging(null); setDragOverCol(null); }}
+                          onStatusChange={handleStatusChange}
+                        />
+                      ))}
+                      <button
+                        onClick={() => setModalState({ colKey: col.key })}
+                        style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.06em", marginTop: "0.25rem", padding: "0.3rem 0", textAlign: "left", transition: "color 0.15s", width: "100%" }}
+                        onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>)}
+
+            {activeTab === "Backlog" && (<>
+              {/* Backlog toolbar */}
+              <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", marginBottom: "1.25rem" }}>
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", marginRight: "0.2rem", textTransform: "uppercase" }}>Sort</span>
+                {[{ key: "created", label: "Date Added" }, { key: "alpha", label: "A–Z" }].map(s => {
+                  const isActive = backlogSort === s.key;
+                  return (
+                    <button
+                      key={s.key}
+                      onClick={() => setBacklogSort(s.key)}
+                      style={{ ...pillBase, background: isActive ? "var(--fm-brass-bg)" : "transparent", border: isActive ? "1px solid rgba(201,169,110,0.5)" : "var(--fm-border-2)", color: isActive ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
+                      onMouseEnter={e => { if (!isActive) { e.currentTarget.style.color = "var(--fm-ink-dim)"; e.currentTarget.style.borderColor = "var(--fm-ink-mute)"; } }}
+                      onMouseLeave={e => { if (!isActive) { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; } }}
+                    >
+                      {s.label}
+                    </button>
+                  );
+                })}
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={() => setModalState({ colKey: "backlog" })}
+                  style={{ ...pillBase, background: "var(--fm-brass-bg)", border: "1px solid rgba(201,169,110,0.4)", color: "var(--fm-brass)" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(201,169,110,0.4)"}
+                >
+                  + Add to Backlog
+                </button>
+              </div>
+
+              {/* Backlog list */}
+              {backlogTodos.length === 0 ? (
+                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", paddingTop: "2rem", textAlign: "center" }}>
+                  No items in backlog
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 640 }}>
+                  {backlogTodos.map(todo => {
+                    const isDone = todo.status === "done";
+                    const isOverdue = todo.dueDate && !isDone && new Date(todo.dueDate) < new Date();
+                    const priorityColor = PRIORITY_COLORS[todo.priority] || "var(--fm-brass)";
+                    const priorityHex = PRIORITY_HEX[todo.priority] || "#c9a96e";
+                    return (
+                      <div
+                        key={todo.id}
+                        style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderLeft: `3px solid ${priorityHex}`, borderRadius: "var(--fm-radius)", padding: "0.6rem 0.7rem 0.45rem" }}
+                      >
+                        {/* Priority row */}
+                        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>
+                          <span style={{ color: priorityColor, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                            {PRIORITY_LABELS[todo.priority] || "Medium"}
+                          </span>
+                        </div>
+                        {/* Title */}
+                        <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.35, marginBottom: "0.4rem" }}>
+                          {todo.title}
+                        </div>
+                        {/* Labels */}
+                        {todo.labels?.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginBottom: "0.35rem" }}>
+                            {todo.labels.map(label => (
+                              <span key={label} style={{ background: "transparent", border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.06em", padding: "0.1rem 0.3rem" }}>{label}</span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Meta row */}
+                        <div style={{ alignItems: "flex-end", display: "flex", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+                          <div style={{ minWidth: 0 }}>
+                            {(todo.linkedCategory || todo.linkedItem) && (
+                              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.04em" }}>
+                                {todo.linkedCategory}{todo.linkedItem ? ` › ${todo.linkedItem}` : ""}
+                              </div>
+                            )}
+                            {todo.assignee && (
+                              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.68rem" }}>{todo.assignee}</div>
+                            )}
+                          </div>
+                          <div style={{ flexShrink: 0, textAlign: "right" }}>
+                            {todo.dueDate && (
+                              <div style={{ color: isOverdue ? "var(--fm-red)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>
+                                {new Date(todo.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                              </div>
+                            )}
+                            {todo.projectId && (() => {
+                              const proj = projects.find(p => p.id === todo.projectId);
+                              return proj ? <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem" }}>{proj.name}</div> : null;
+                            })()}
+                          </div>
+                        </div>
+                        {/* Action footer */}
+                        <div style={{ borderTop: "1px solid var(--fm-hairline)", display: "flex", flexWrap: "wrap", gap: "0.2rem", paddingTop: "0.35rem" }}>
+                          <span style={{ alignSelf: "center", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.08em", marginRight: "0.1rem", textTransform: "uppercase" }}>Move to</span>
+                          {STATUS_COLUMNS.map(col => (
+                            <button
+                              key={col.key}
+                              onClick={() => handlePromote(todo.id, col.key)}
+                              style={{ background: "transparent", border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.04em", padding: "0.12rem 0.4rem", textTransform: "uppercase", transition: "all 0.12s" }}
+                              onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-ink)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; }}
+                              onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline)"; }}
+                            >
+                              {col.label}
+                            </button>
+                          ))}
+                          <div style={{ flex: 1 }} />
+                          <button
+                            onClick={() => setModalState(todo)}
+                            style={{ background: "transparent", border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.04em", padding: "0.12rem 0.4rem", textTransform: "uppercase", transition: "all 0.12s" }}
+                            onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-ink)"; e.currentTarget.style.borderColor = "var(--fm-hairline2)"; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline)"; }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleStatusChange(todo.id, "done")}
+                            style={{ background: "transparent", border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.04em", padding: "0.12rem 0.4rem", textTransform: "uppercase", transition: "all 0.12s" }}
+                            onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-green)"; e.currentTarget.style.borderColor = "var(--fm-green)"; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline)"; }}
+                          >
+                            Complete
+                          </button>
+                          <button
+                            onClick={() => handleDelete(todo.id)}
+                            style={{ background: "transparent", border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.04em", padding: "0.12rem 0.4rem", textTransform: "uppercase", transition: "all 0.12s" }}
+                            onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-red)"; e.currentTarget.style.borderColor = "var(--fm-red)"; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; e.currentTarget.style.borderColor = "var(--fm-hairline)"; }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>)}
+
           </div>
         </div>
       </div>

@@ -65,6 +65,8 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [levelFilter, setLevelFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [search, setSearch] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyCatFilter, setHistoryCatFilter] = useState("ALL");
   const [activeFrequencies, setActiveFrequencies] = useState(new Set());
   const [activeSeasons, setActiveSeasons] = useState(new Set());
   const [addRowHovered, setAddRowHovered] = useState(false);
@@ -545,6 +547,29 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
   }, [completionRecords]);
 
+  const historyCats = useMemo(() => {
+    const seen = new Set();
+    historyEntries.forEach(e => { if (e.category) seen.add(e.category); });
+    return [...seen].sort();
+  }, [historyEntries]);
+
+  const filteredHistoryEntries = useMemo(() => {
+    return historyEntries.filter(e => {
+      if (historyCatFilter !== "ALL" && e.category !== historyCatFilter) return false;
+      if (historySearch.trim()) {
+        const q = historySearch.toLowerCase();
+        if (
+          !(e.category || "").toLowerCase().includes(q) &&
+          !(e.item     || "").toLowerCase().includes(q) &&
+          !(e.task     || "").toLowerCase().includes(q) &&
+          !(e.assignee || "").toLowerCase().includes(q) &&
+          !(e.notes    || "").toLowerCase().includes(q)
+        ) return false;
+      }
+      return true;
+    });
+  }, [historyEntries, historyCatFilter, historySearch]);
+
   return (
     <div style={{
       height: "100vh",
@@ -562,7 +587,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
           active={activeTab}
           onTabChange={setActiveTab}
           stats={activeTab === "History"
-            ? [{ value: historyEntries.length, label: "logged" }]
+            ? [{ value: filteredHistoryEntries.length, label: "logged" }]
             : [
                 { value: activeTaskCount, label: "tracked" },
                 { value: maintenanceStats.overdue, color: "var(--fm-red)", label: "overdue" },
@@ -575,9 +600,33 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
       {activeTab === "History" && (
         <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl) var(--fm-spacing-5xl) 4rem" }}>
+
+          {/* Filter bar */}
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+              <FilterPill active={historyCatFilter === "ALL"} onClick={() => setHistoryCatFilter("ALL")}>All</FilterPill>
+              {historyCats.map(cat => (
+                <FilterPill key={cat} active={historyCatFilter === cat} onClick={() => setHistoryCatFilter(cat)}>{cat}</FilterPill>
+              ))}
+            </div>
+            <div style={{ flex: 1 }} />
+            <input
+              value={historySearch}
+              onChange={e => setHistorySearch(e.target.value)}
+              placeholder="Search…"
+              style={{ background: "var(--fm-bg-sunk)", border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", outline: "none", padding: "0.35rem 0.7rem", transition: "border-color 0.12s", width: "200px" }}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
+            />
+          </div>
+
           {historyEntries.length === 0 ? (
             <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
-              No history logged yet. Use "Log It" on any task to record a completion.
+              No history logged yet. Use &quot;Log It&quot; on any task to record a completion.
+            </p>
+          ) : filteredHistoryEntries.length === 0 ? (
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
+              No results match your filter.
             </p>
           ) : (
             <table style={{ borderCollapse: "collapse", width: "100%" }}>
@@ -589,7 +638,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
                 </tr>
               </thead>
               <tbody>
-                {historyEntries.map(e => {
+                {filteredHistoryEntries.map(e => {
                   const d = new Date(e.completedAt);
                   const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
                   return (
