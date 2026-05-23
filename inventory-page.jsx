@@ -38,6 +38,8 @@ import {
   getBehaviorClass,
   isSpatial,
   isFunctional,
+  isExteriorType as isExteriorTypeUtil,
+  isStructureType as isStructureTypeUtil,
   getTypesForClass,
   resolveTypeId,
   getLabelForType,
@@ -52,11 +54,13 @@ import { getFloorsInOrder, loadFloors, saveFloors } from "./lib/floors.js";
 import { loadRooms, saveRooms, createRoom, updateRoom } from "./lib/rooms.js";
 import { getManufacturers } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
+import { polygonCentroid } from "./lib/geometry.js";
 import { SEASON_OPTIONS } from "./lib/scheduleOptions.js";
 import FollowButton from "./components/FollowButton.jsx";
 import SchedulePicker from "./components/SchedulePicker.jsx";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import ComboInput from "./components/ComboInput.jsx";
+import TodoModal from "./components/TodoModal.jsx";
 
 const PRIORITY_COLORS = {
   low:    "var(--fm-green)",
@@ -302,13 +306,6 @@ function polygonArea(points) {
   return Math.abs(area / 2);
 }
 
-function polygonCentroid(points) {
-  return {
-    cx: points.reduce((s, p) => s + p.x, 0) / points.length,
-    cy: points.reduce((s, p) => s + p.y, 0) / points.length,
-  };
-}
-
 function pointInPolygon(pt, points) {
   let inside = false;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
@@ -484,6 +481,10 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
   const inProgressRef = useRef(null);
   const drawColorRef = useRef("#c9a96e");
   const drawNameRef = useRef("");
+  const [selectedTodoMarkerId, setSelectedTodoMarkerId] = useState(null);
+  const todoMarkerDragRef = useRef(null);
+  const [showTodoCreate, setShowTodoCreate] = useState(false);
+  const [pendingTodoLocation, setPendingTodoLocation] = useState(null);
 
   useEffect(() => { fpDataRef.current = fpData; }, [fpData]);
   useEffect(() => { activeLevelRef.current = activeLevel; }, [activeLevel]);
@@ -564,6 +565,14 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
     setDrawMode("select");
   }
 
+  function detectZoneAtPoint(x, y) {
+    const placements = fpDataRef.current.placements?.[activeLevelRef.current] || {};
+    for (const [roomId, zone] of Object.entries(placements)) {
+      if (zone.points && pointInPolygon({ x, y }, zone.points)) return roomId;
+    }
+    return null;
+  }
+
   function cancelDraw() {
     setDrawMode("select");
     setInProgress(null);
@@ -603,6 +612,46 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
     const pin = (fpDataRef.current.pins?.[activeLevelRef.current] || []).find(p => p.id === pinId);
     if (!pin) return;
     pinDragRef.current = { id: pinId, origX: pin.x, origY: pin.y, startClientX: e.clientX, startClientY: e.clientY };
+  }
+
+  function handleTodoMarkerMouseDown(e, dr) {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedTodoMarkerId(dr.id);
+    todoMarkerDragRef.current = { id: dr.id, todoId: dr.todoId, origX: dr.x, origY: dr.y, startClientX: e.clientX, startClientY: e.clientY, hasDragged: false };
+  }
+
+  function updateTodoMarkerPosition(dr, x, y) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    // Detect new zone
+    const placements = d.placements?.[lvl] || {};
+    let newZone = null;
+    for (const [rId, zData] of Object.entries(placements)) {
+      if (pointInPolygon({ x, y }, zData.points || [])) { newZone = rId; break; }
+    }
+    // Update drawing marker
+    const newDrawings = (d.drawings?.[lvl] || []).map(drw => drw.id === dr.id ? { ...drw, x, y } : drw);
+    const next = { ...d, drawings: { ...(d.drawings || {}), [lvl]: newDrawings } };
+    save(next);
+    // Update todo in localStorage
+    const todos = JSON.parse(localStorage.getItem("foreman-todos") || "[]");
+    const updated = todos.map(t => t.id === dr.todoId
+      ? { ...t, floorPlanLocation: { ...t.floorPlanLocation, x, y, ...(newZone ? { zone: newZone } : {}) } }
+      : t
+    );
+    localStorage.setItem("foreman-todos", JSON.stringify(updated));
+  }
+
+  function removeTodoMarker(drawId) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const marker = (d.drawings?.[lvl] || []).find(drw => drw.id === drawId);
+    if (!marker?.todoId) return;
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).filter(drw => drw.id !== drawId) } });
+    const todos = JSON.parse(localStorage.getItem("foreman-todos") || "[]");
+    localStorage.setItem("foreman-todos", JSON.stringify(todos.map(t => t.id === marker.todoId ? { ...t, floorPlanLocation: null } : t)));
+    setSelectedTodoMarkerId(null);
   }
 
   function renameRoom(roomId, newLabel) {
@@ -785,6 +834,22 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
         fpDataRef.current = next;
         setFpData({ ...next });
       }
+
+      // Todo marker drag
+      if (todoMarkerDragRef.current) {
+        const { id, origX, origY, startClientX, startClientY } = todoMarkerDragRef.current;
+        const dx = (e.clientX - startClientX) * scaleX;
+        const dy = (e.clientY - startClientY) * scaleY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) todoMarkerDragRef.current.hasDragged = true;
+        const nx = fpSnap(Math.max(0, Math.min(FP_W, origX + dx)));
+        const ny = fpSnap(Math.max(0, Math.min(FP_H, origY + dy)));
+        const d = fpDataRef.current;
+        const lvl = activeLevelRef.current;
+        const newDrawings = (d.drawings?.[lvl] || []).map(drw => drw.id === id ? { ...drw, x: nx, y: ny } : drw);
+        const next = { ...d, drawings: { ...(d.drawings || {}), [lvl]: newDrawings } };
+        fpDataRef.current = next;
+        setFpData({ ...next });
+      }
     }
 
     function onUp(e) {
@@ -815,7 +880,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
         panDragRef.current = null;
         setIsPanning(false);
         if (Math.abs(e.clientX - startX) <= 4 && Math.abs(e.clientY - startY) <= 4) {
-          setSelected(null); setSelectedPin(null);
+          setSelected(null); setSelectedPin(null); setSelectedTodoMarkerId(null);
         }
         return;
       }
@@ -862,6 +927,18 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
 
       // Persist pin reposition
       if (pinDragRef.current) { saveFpData(fpDataRef.current); pinDragRef.current = null; }
+
+      // Persist todo marker drag
+      if (todoMarkerDragRef.current) {
+        const { id, hasDragged } = todoMarkerDragRef.current;
+        todoMarkerDragRef.current = null;
+        if (hasDragged) {
+          const d = fpDataRef.current;
+          const lvl = activeLevelRef.current;
+          const marker = (d.drawings?.[lvl] || []).find(drw => drw.id === id);
+          if (marker) updateTodoMarkerPosition(marker, marker.x, marker.y);
+        }
+      }
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -1556,15 +1633,31 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
               <line key={dr.id} x1={dr.points[0].x} y1={dr.points[0].y} x2={dr.points[1].x} y2={dr.points[1].y}
                 stroke={dr.color} strokeWidth={2.5} strokeLinecap="round" style={{ pointerEvents: "none" }} />
             );
-            if (dr.type === "marker") return (
-              <g key={dr.id} style={{ pointerEvents: "none" }}>
-                <circle cx={dr.x} cy={dr.y} r={5} fill={dr.color} />
-                <text x={dr.x} y={dr.y - 9} textAnchor="middle"
-                  style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "8px", letterSpacing: "0.04em" }}>
-                  {dr.label || dr.name}
-                </text>
-              </g>
-            );
+            if (dr.type === "marker") {
+              if (dr.todoId) {
+                const isSel = selectedTodoMarkerId === dr.id;
+                return (
+                  <g key={dr.id} style={{ cursor: "grab", pointerEvents: "auto" }}
+                    onMouseDown={e => handleTodoMarkerMouseDown(e, dr)}>
+                    <circle cx={dr.x} cy={dr.y} r={8}
+                      fill={dr.color} stroke={isSel ? "var(--fm-ink)" : "var(--fm-bg)"} strokeWidth={isSel ? 2 : 1.5} />
+                    <text x={dr.x} y={dr.y - 13} textAnchor="middle"
+                      style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "9px", pointerEvents: "none", userSelect: "none" }}>
+                      {(dr.label || "").slice(0, 12)}
+                    </text>
+                  </g>
+                );
+              }
+              return (
+                <g key={dr.id} style={{ pointerEvents: "none" }}>
+                  <circle cx={dr.x} cy={dr.y} r={5} fill={dr.color} />
+                  <text x={dr.x} y={dr.y - 9} textAnchor="middle"
+                    style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "8px", letterSpacing: "0.04em" }}>
+                    {dr.label || dr.name}
+                  </text>
+                </g>
+              );
+            }
             return null;
           })}
 
@@ -1631,6 +1724,57 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commitMarkerLabel(); } if (e.key === "Escape") { setPendingMarker(null); setMarkerLabel(""); } }}
                 style={{ background: "transparent", border: "none", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", outline: "none", width: 100 }} />
               <button onClick={commitMarkerLabel} style={{ background: "var(--fm-brass)", border: "none", borderRadius: 2, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.3rem", padding: "0.15rem 0.4rem" }}>OK</button>
+              <button
+                onClick={() => {
+                  if (!pendingMarker) return;
+                  const zoneId = detectZoneAtPoint(pendingMarker.x, pendingMarker.y);
+                  const zoneRoom = zoneId ? rooms[zoneId] : null;
+                  const catName = zoneRoom?.categoryName || zoneRoom?.label || null;
+                  const catTypeId = catName ? resolveTypeId(catName, categoryTypes[catName] || "system") : null;
+                  const isExt = catTypeId ? isExteriorTypeUtil(catTypeId, entityTypeData) : false;
+                  setPendingTodoLocation({
+                    levelId: activeLevel,
+                    zone: zoneId || null,
+                    x: pendingMarker.x,
+                    y: pendingMarker.y,
+                    preLinkedRoom: catName && !isExt ? catName : null,
+                    preLinkedExterior: catName && isExt ? catName : null,
+                  });
+                  setShowTodoCreate(true);
+                  setPendingMarker(null);
+                  setMarkerLabel("");
+                  setDrawMode("select");
+                }}
+                style={{ background: "var(--fm-ink-dim)", border: "none", borderRadius: 2, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.3rem", padding: "0.15rem 0.4rem" }}>
+                + To Do
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Todo marker info popup */}
+        {selectedTodoMarkerId && svgRef.current && (() => {
+          const marker = (fpData.drawings?.[activeLevel] || []).find(drw => drw.id === selectedTodoMarkerId);
+          if (!marker) return null;
+          const rect = svgRef.current.getBoundingClientRect();
+          const vb = viewBoxRef.current;
+          const cssX = (marker.x - vb.x) / vb.w * rect.width;
+          const cssY = (marker.y - vb.y) / vb.h * rect.height;
+          return (
+            <div style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: 4, boxShadow: "0 2px 8px rgba(0,0,0,0.5)", left: Math.min(cssX + 12, rect.width - 200), maxWidth: 190, padding: "0.5rem 0.6rem", position: "absolute", top: Math.max(4, cssY - 70), zIndex: 20 }}>
+              <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", fontWeight: 600, marginBottom: "0.2rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {marker.label}
+              </div>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", marginBottom: "0.4rem" }}>
+                <div style={{ background: marker.color, borderRadius: "50%", flexShrink: 0, height: 8, width: 8 }} />
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.06em" }}>TO DO</span>
+              </div>
+              <button
+                onClick={() => removeTodoMarker(selectedTodoMarkerId)}
+                style={{ background: "transparent", border: "1px solid rgba(224,115,106,0.3)", borderRadius: 2, color: "var(--fm-red)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.04em", padding: "0.15rem 0.4rem", transition: "all 0.12s", width: "100%" }}
+                onMouseEnter={e => { e.currentTarget.style.background = "rgba(224,115,106,0.1)"; e.currentTarget.style.borderColor = "var(--fm-red)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(224,115,106,0.3)"; }}
+              >Remove from map</button>
             </div>
           );
         })()}
@@ -1641,6 +1785,59 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
           </div>
         )}
       </div>
+
+      {/* Create To Do from marker placement */}
+      {showTodoCreate && pendingTodoLocation && (() => {
+        const loc = pendingTodoLocation;
+        const spatialCats = categories.filter(c => isSpatial(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
+        const functionalCats = categories.filter(c => isFunctional(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
+        const exteriorCats = categories.filter(c => isExteriorTypeUtil(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
+        const structureCats = categories.filter(c => isStructureTypeUtil(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
+        const PCOLOR = { urgent: "#e07b6a", high: "#e0b266", medium: "#c9a96e", low: "#7fb087" };
+        return (
+          <TodoModal
+            todo={null}
+            initialOverrides={{
+              floorPlanLocation: { levelId: loc.levelId, zone: loc.zone, x: loc.x, y: loc.y },
+              linkedRoom: loc.preLinkedRoom || null,
+              linkedExterior: loc.preLinkedExterior || null,
+            }}
+            categories={categories}
+            categoryItems={categoryItems}
+            spatialCategories={spatialCats}
+            functionalCategories={functionalCats}
+            exteriorCategories={exteriorCats}
+            structureCategories={structureCats}
+            projects={loadProjects()}
+            onSave={form => {
+              const drawingId = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+              const newTodo = createTodo({
+                ...form,
+                floorPlanLocation: { levelId: loc.levelId, zone: loc.zone, x: loc.x, y: loc.y, markerId: drawingId },
+              });
+              const drawing = {
+                id: drawingId,
+                type: "marker",
+                todoId: newTodo.id,
+                label: (newTodo.title || "To Do").slice(0, 14),
+                color: PCOLOR[newTodo.priority] || "#c9a96e",
+                x: loc.x,
+                y: loc.y,
+                visible: true,
+                name: newTodo.title || "To Do",
+              };
+              const current = fpDataRef.current;
+              const lvlDrawings = current.drawings?.[loc.levelId] || [];
+              const newFpData = { ...current, drawings: { ...(current.drawings || {}), [loc.levelId]: [...lvlDrawings, drawing] } };
+              save(newFpData);
+              saveTodos([...loadTodos(), newTodo]);
+              setShowTodoCreate(false);
+              setPendingTodoLocation(null);
+            }}
+            onClose={() => { setShowTodoCreate(false); setPendingTodoLocation(null); }}
+          />
+        );
+      })()}
 
       {/* Right detail panel */}
       <div style={{ borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, width: 280 }}>
@@ -1850,31 +2047,60 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
               Click a zone to view details
             </div>
             <div style={{ borderTop: "1px solid var(--fm-hairline)", flex: 1, overflowY: "auto" }}>
-              <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
-                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                  Drawings · {(fpData.drawings?.[activeLevel] || []).length}
-                </span>
-              </div>
-              {(fpData.drawings?.[activeLevel] || []).length === 0 ? (
-                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
-                  Use the toolbar to draw paths, lines, and markers.
-                </div>
-              ) : (fpData.drawings?.[activeLevel] || []).map(dr => (
-                <div key={dr.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem" }}>
-                  <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, width: 10 }} />
-                  <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
-                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{dr.type}</span>
-                  <button onClick={() => toggleDrawingVisibility(dr.id)}
-                    title={dr.visible !== false ? "Hide" : "Show"}
-                    style={{ background: "none", border: "none", color: dr.visible !== false ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontSize: "0.75rem", padding: "0 0.1rem" }}>
-                    {dr.visible !== false ? "👁" : "○"}
-                  </button>
-                  <button onClick={() => deleteDrawing(dr.id)}
-                    style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
-                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
-                </div>
-              ))}
+              {(() => {
+                const allDrawings = fpData.drawings?.[activeLevel] || [];
+                const regularDrawings = allDrawings.filter(dr => !dr.todoId);
+                const todoMarkers = allDrawings.filter(dr => dr.todoId);
+                return (
+                  <>
+                    <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
+                      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                        Drawings · {regularDrawings.length}
+                      </span>
+                    </div>
+                    {regularDrawings.length === 0 ? (
+                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
+                        Use the toolbar to draw paths, lines, and markers.
+                      </div>
+                    ) : regularDrawings.map(dr => (
+                      <div key={dr.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem" }}>
+                        <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, width: 10 }} />
+                        <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
+                        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{dr.type}</span>
+                        <button onClick={() => toggleDrawingVisibility(dr.id)}
+                          title={dr.visible !== false ? "Hide" : "Show"}
+                          style={{ background: "none", border: "none", color: dr.visible !== false ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontSize: "0.75rem", padding: "0 0.1rem" }}>
+                          {dr.visible !== false ? "👁" : "○"}
+                        </button>
+                        <button onClick={() => deleteDrawing(dr.id)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
+                          onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                          onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
+                      </div>
+                    ))}
+                    {todoMarkers.length > 0 && (
+                      <>
+                        <div style={{ alignItems: "center", borderTop: "1px solid var(--fm-hairline)", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
+                          <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                            To Do Pins · {todoMarkers.length}
+                          </span>
+                        </div>
+                        {todoMarkers.map(dr => (
+                          <div key={dr.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem" }}>
+                            <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, width: 10 }} />
+                            <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
+                            <button onClick={() => removeTodoMarker(dr.id)}
+                              title="Remove from map"
+                              style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
+                              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -1938,7 +2164,7 @@ function getInvSysTag(cat) {
   return INV_SYS_ABBR[cat] || (cat || "").slice(0, 4).toUpperCase();
 }
 
-function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, onRefreshEntityTypes, onCreateCategory, onAddItem, customFieldValues, onSelectItem }) {
+function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, onRefreshEntityTypes, onCreateCategory, onAddItem, customFieldValues, onSelectItem, onDeleteCategory, onRenameCategory }) {
   const [addingChildOf,       setAddingChildOf]       = useState(null);
   const [newChildLabel,       setNewChildLabel]       = useState("");
   const [editingTypeId,       setEditingTypeId]       = useState(null);
@@ -1950,6 +2176,8 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
   const [addingItemToCategory, setAddingItemToCategory] = useState(null); // category name | null
   const [newItemName,          setNewItemName]          = useState("");
   const [hoveredCat,           setHoveredCat]           = useState(null);
+  const [editingCatName,       setEditingCatName]       = useState(null);
+  const [editingCatLabel,      setEditingCatLabel]      = useState("");
 
   const catsByType = useMemo(() => {
     const map = {};
@@ -2031,6 +2259,13 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
     setNewItemName("");
   }
 
+  function commitCatRename(oldName) {
+    const trimmed = editingCatLabel.trim();
+    setEditingCatName(null);
+    setEditingCatLabel("");
+    if (trimmed && trimmed !== oldName) onRenameCategory?.(oldName, trimmed);
+  }
+
   const ghostBtn = {
     background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer",
     fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.05em", padding: "0.1rem 0.25rem",
@@ -2100,12 +2335,18 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
           {isHovered && (
             <div style={{ alignItems: "center", display: "flex", gap: "0.1rem", marginLeft: "0.25rem" }}>
               {mergedCat && (
-                <button
-                  onClick={e => { e.stopPropagation(); setAddingItemToCategory(mergedCat); setNewItemName(""); }}
-                  style={ghostBtn}
-                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
-                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                >+ Item</button>
+                <>
+                  <button
+                    onClick={e => { e.stopPropagation(); setAddingItemToCategory(mergedCat); setNewItemName(""); }}
+                    style={ghostBtn}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                  >+ Item</button>
+                  <button
+                    onClick={e => { e.stopPropagation(); onDeleteCategory?.(mergedCat); }}
+                    style={{ ...ghostBtn, color: "var(--fm-red)" }}
+                  >×</button>
+                </>
               )}
               {!mergedCat && (
                 <button
@@ -2215,15 +2456,39 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
                 onMouseLeave={() => setHoveredCat(null)}
                 style={{ alignItems: "center", color: "var(--fm-ink-dim)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", gap: "0.35rem", paddingBottom: "0.08rem", paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.08rem" }}
               >
-                {cat}
-                {(items.length + crossRefs.length + systemCrossRefs.length) > 0 && <span style={{ color: "var(--fm-ink-mute)" }}>{items.length + crossRefs.length + systemCrossRefs.length}</span>}
+                {editingCatName === cat ? (
+                  <input
+                    autoFocus
+                    value={editingCatLabel}
+                    onChange={e => setEditingCatLabel(e.target.value)}
+                    onBlur={() => commitCatRename(cat)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitCatRename(cat);
+                      if (e.key === "Escape") { setEditingCatName(null); setEditingCatLabel(""); }
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.1rem 0.3rem", width: 160 }}
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={e => { e.stopPropagation(); setEditingCatName(cat); setEditingCatLabel(cat); }}
+                    style={{ cursor: "text" }}
+                  >{cat}</span>
+                )}
+                {editingCatName !== cat && (items.length + crossRefs.length + systemCrossRefs.length) > 0 && <span style={{ color: "var(--fm-ink-mute)" }}>{items.length + crossRefs.length + systemCrossRefs.length}</span>}
                 {hoveredCat === cat && (
-                  <button
-                    onClick={e => { e.stopPropagation(); setAddingItemToCategory(cat); setNewItemName(""); }}
-                    style={ghostBtn}
-                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
-                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                  >+ Item</button>
+                  <>
+                    <button
+                      onClick={e => { e.stopPropagation(); setAddingItemToCategory(cat); setNewItemName(""); }}
+                      style={ghostBtn}
+                      onMouseEnter={e => e.currentTarget.style.color = "var(--fm-cyan)"}
+                      onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                    >+ Item</button>
+                    <button
+                      onClick={e => { e.stopPropagation(); onDeleteCategory?.(cat); }}
+                      style={{ ...ghostBtn, color: "var(--fm-red)" }}
+                    >×</button>
+                  </>
                 )}
               </div>
               {addingItemToCategory === cat && (
@@ -4591,7 +4856,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
 
         {activeTab === "Outline" && (
-          <OutlineTab categories={CATEGORIES} categoryTypes={effectiveCategoryTypes} categoryItems={CATEGORY_ITEMS} entityTypeData={entityTypeData} onRefreshEntityTypes={refreshEntityTypes} onCreateCategory={handleAddCategoryDirect} onAddItem={handleAddItemNamed} onSelectItem={setSelectedItem} customFieldValues={customFieldValues} />
+          <OutlineTab categories={CATEGORIES} categoryTypes={effectiveCategoryTypes} categoryItems={CATEGORY_ITEMS} entityTypeData={entityTypeData} onRefreshEntityTypes={refreshEntityTypes} onCreateCategory={handleAddCategoryDirect} onAddItem={handleAddItemNamed} onSelectItem={setSelectedItem} customFieldValues={customFieldValues} onDeleteCategory={handleDeleteClick} onRenameCategory={handleCategoryRename} />
         )}
 
         </div>
@@ -4685,11 +4950,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   }
                   if (field.id === "room") {
                     const catIsSpatialItem = isSpatial(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData);
-                    if (catIsSpatialItem) {
-                      return <div style={{ ...fieldStyle, color: "var(--fm-ink-dim)", cursor: "default" }}>{selectedItem.category}</div>;
-                    }
                     const roomOpts = CATEGORIES.filter(c => isSpatial(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
-                    const roomVal = vals.roomLabel || vals.room || "";
+                    const roomVal = vals.roomLabel || vals.room || (catIsSpatialItem ? selectedItem.category : "");
                     return <ModelComboField value={roomVal} models={roomOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", v)} />;
                   }
                   if (field.id === "manufacturer") {

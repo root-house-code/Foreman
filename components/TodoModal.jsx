@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import DatePicker from "react-datepicker";
 import AssigneeInput from "./AssigneeInput.jsx";
 import ImageAttachments from "./ImageAttachments.jsx";
+import LocationPickerModal from "./LocationPickerModal.jsx";
 import { fieldLabel, fieldInput, fieldSelect, DueDateBtn, STATUS_COLUMNS, PRIORITY_LABELS } from "./ModalShared.jsx";
+import { getFloorsInOrder } from "../lib/floors.js";
+import { loadRooms } from "../lib/rooms.js";
 
 function TaskCheckbox({ completed, onToggle }) {
   return (
@@ -16,7 +19,7 @@ function TaskCheckbox({ completed, onToggle }) {
   );
 }
 
-export default function TodoModal({ todo, categories, categoryItems, spatialCategories, functionalCategories, projects, onSave, onClose, onDelete }) {
+export default function TodoModal({ todo, initialOverrides, categories, categoryItems, spatialCategories, functionalCategories, exteriorCategories, structureCategories, projects, onSave, onClose, onDelete }) {
   const [form, setForm] = useState(todo ? {
     ...todo,
     labels: todo.labels || [],
@@ -25,22 +28,59 @@ export default function TodoModal({ todo, categories, categoryItems, spatialCate
     tasks: todo.tasks || [],
     linkedRoom: todo.linkedRoom || null,
     linkedSystem: todo.linkedSystem || null,
+    linkedExterior: todo.linkedExterior || null,
+    linkedStructure: todo.linkedStructure || null,
+    floorPlanLocation: todo.floorPlanLocation || null,
   } : {
     title: "", description: "", status: "not-started", priority: "medium",
     dueDate: null, assignee: "", labels: [], estimatedCost: "",
-    linkedCategory: null, linkedItem: null, linkedRoom: null, linkedSystem: null,
+    linkedCategory: null, linkedItem: null,
+    linkedRoom: initialOverrides?.linkedRoom ?? null,
+    linkedSystem: null,
+    linkedExterior: initialOverrides?.linkedExterior ?? null,
+    linkedStructure: null,
+    floorPlanLocation: initialOverrides?.floorPlanLocation ?? null,
     projectId: null, images: [], tasks: [],
   });
 
   // Derive spatial/functional lists from props or fall back to full categories list
   const roomOptions = spatialCategories || categories || [];
   const systemOptions = functionalCategories || [];
+  const exteriorOptions = exteriorCategories || [];
+  const structureOptions = structureCategories || [];
 
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [showPicker, setShowPicker] = useState(false);
+
+  // For resolving the floor plan location label
+  const floors = useMemo(() => getFloorsInOrder(), []);
+  const allRooms = useMemo(() => loadRooms(), []);
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
   const linkedItems = form.linkedCategory ? (categoryItems[form.linkedCategory] || []) : [];
+
+  function handleLocationConfirm({ levelId, zone, x, y }) {
+    setShowPicker(false);
+    const roomRecord = zone ? allRooms[zone] : null;
+    const isExt = exteriorOptions.includes(roomRecord?.categoryName);
+    setForm(f => ({
+      ...f,
+      floorPlanLocation: { levelId, zone, x, y },
+      ...(zone && !isExt && roomRecord?.categoryName ? { linkedRoom: roomRecord.categoryName } : {}),
+      ...(zone && isExt && roomRecord?.categoryName ? { linkedExterior: roomRecord.categoryName } : {}),
+    }));
+  }
+
+  const fpLevelLabel = form.floorPlanLocation
+    ? floors.find(f => f.id === form.floorPlanLocation.levelId)?.label || form.floorPlanLocation.levelId
+    : null;
+  const fpZoneLabel = form.floorPlanLocation?.zone
+    ? allRooms[form.floorPlanLocation.zone]?.label || null
+    : null;
+  const fpLocationLabel = fpLevelLabel
+    ? [fpLevelLabel, fpZoneLabel].filter(Boolean).join(" — ")
+    : null;
 
   function handleToggleTask(taskId) {
     set("tasks", form.tasks.map(t => t.id === taskId ? { ...t, completed: !t.completed } : t));
@@ -60,7 +100,7 @@ export default function TodoModal({ todo, categories, categoryItems, spatialCate
     setNewTaskTitle("");
   }
 
-  return createPortal(
+  const modal = createPortal(
     <div
       onClick={onClose}
       style={{
@@ -184,6 +224,36 @@ export default function TodoModal({ todo, categories, categoryItems, spatialCate
           </div>
         </div>
 
+        {(exteriorOptions.length > 0 || structureOptions.length > 0) && (
+          <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
+            {exteriorOptions.length > 0 && (
+              <div style={{ flex: 1 }}>
+                <label style={fieldLabel}>Exterior</label>
+                <select
+                  value={form.linkedExterior || ""}
+                  style={fieldSelect}
+                  onChange={e => set("linkedExterior", e.target.value || null)}>
+                  <option value="">None</option>
+                  {exteriorOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                </select>
+              </div>
+            )}
+            {structureOptions.length > 0 && (
+              <div style={{ flex: 1 }}>
+                <label style={fieldLabel}>Structure</label>
+                <select
+                  value={form.linkedStructure || ""}
+                  style={fieldSelect}
+                  onChange={e => set("linkedStructure", e.target.value || null)}>
+                  <option value="">None</option>
+                  {structureOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                </select>
+              </div>
+            )}
+            <div style={{ flex: 1 }} />
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
           <div style={{ flex: 1 }}>
             <label style={fieldLabel}>Project</label>
@@ -191,6 +261,44 @@ export default function TodoModal({ todo, categories, categoryItems, spatialCate
               <option value="">None</option>
               {(projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
+          </div>
+        </div>
+
+        {/* Floor Plan Location */}
+        <div style={{ marginBottom: "1rem" }}>
+          <label style={fieldLabel}>Floor Plan</label>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+            {fpLocationLabel ? (
+              <>
+                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem" }}>
+                  {fpLocationLabel}
+                </span>
+                <button
+                  onClick={() => setShowPicker(true)}
+                  style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", padding: "0.1rem 0.3rem", transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >Move</button>
+                <button
+                  onClick={() => set("floorPlanLocation", null)}
+                  style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.1rem 0.2rem", transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >×</button>
+              </>
+            ) : (
+              <>
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", fontStyle: "italic" }}>
+                  Not placed
+                </span>
+                <button
+                  onClick={() => setShowPicker(true)}
+                  style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", padding: "0.2rem 0.5rem", transition: "all 0.12s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+                >Set Location</button>
+              </>
+            )}
           </div>
         </div>
 
@@ -290,5 +398,18 @@ export default function TodoModal({ todo, categories, categoryItems, spatialCate
       </div>
     </div>,
     document.body
+  );
+
+  return (
+    <>
+      {modal}
+      {showPicker && (
+        <LocationPickerModal
+          initialLocation={form.floorPlanLocation}
+          onConfirm={handleLocationConfirm}
+          onCancel={() => setShowPicker(false)}
+        />
+      )}
+    </>
   );
 }

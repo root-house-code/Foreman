@@ -7,7 +7,7 @@ import DatePicker from "react-datepicker";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
 import { loadData } from "./lib/data.js";
-import { loadEntityTypes, isSpatial, isFunctional, resolveTypeId } from "./lib/entityTypes.js";
+import { loadEntityTypes, isSpatial, isFunctional, isExteriorType, isStructureType, resolveTypeId } from "./lib/entityTypes.js";
 import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
 import AssigneeInput from "./components/AssigneeInput.jsx";
 import TodoModal from "./components/TodoModal.jsx";
@@ -287,6 +287,13 @@ export default function BoardPage({ navigate }) {
     return map;
   }, [rows]);
 
+  // All unique category names from data, including blank categories (no items/tasks)
+  const allCategories = useMemo(() => {
+    const set = new Set();
+    rows.forEach(r => { if (r.category && !deletedCategories.has(r.category)) set.add(r.category); });
+    return [...set];
+  }, [rows, deletedCategories]);
+
   const spatialCategories = useMemo(() =>
     categories.filter(c => isSpatial(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
     [categories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
@@ -294,6 +301,14 @@ export default function BoardPage({ navigate }) {
   const functionalCategories = useMemo(() =>
     categories.filter(c => isFunctional(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
     [categories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
+
+  const exteriorCategories = useMemo(() =>
+    allCategories.filter(c => isExteriorType(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
+    [allCategories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
+
+  const structureCategories = useMemo(() =>
+    allCategories.filter(c => isStructureType(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
+    [allCategories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
 
   const rowDataByKey = useMemo(() => {
     const map = {};
@@ -409,20 +424,66 @@ export default function BoardPage({ navigate }) {
       if (form.status === "done" && existing?.status !== "done" && existing?._isOverdueChore) {
         advanceChoreDate(existing);
       }
-      persistTodos(todos.map(t => t.id === prev.id ? {
-        ...t, ...form,
-        completedDate: form.status === "done" && t.status !== "done" ? now
+      const updated = { ...existing, ...form,
+        completedDate: form.status === "done" && existing?.status !== "done" ? now
           : form.status !== "done" ? null
-          : t.completedDate,
-      } : t));
+          : existing?.completedDate,
+      };
+      persistTodos(todos.map(t => t.id === prev.id ? updated : t));
+      if (updated.floorPlanLocation) syncTodoMarker(updated);
+      else if (existing?.floorPlanLocation?.markerId && !form.floorPlanLocation) {
+        removeTodoMarkerFromFpData(existing.floorPlanLocation.levelId, existing.floorPlanLocation.markerId);
+      }
     } else {
       const colKey = (modalState && modalState.colKey) || "not-started";
-      persistTodos([...todos, createTodo({ ...form, status: colKey === "backlog" ? "backlog" : (form.status || colKey) })]);
+      const newTodo = createTodo({ ...form, status: colKey === "backlog" ? "backlog" : (form.status || colKey) });
+      persistTodos([...todos, newTodo]);
+      if (newTodo.floorPlanLocation) syncTodoMarker(newTodo);
     }
     setModalState(null);
   }
 
-  function handleDelete(id) { persistTodos(todos.filter(t => t.id !== id)); }
+  function syncTodoMarker(todo) {
+    const loc = todo.floorPlanLocation;
+    if (!loc) return;
+    const FP_KEY = "inventory-floor-plan-v2";
+    const stored = JSON.parse(localStorage.getItem(FP_KEY) || "{}");
+    const drawings = stored.drawings || {};
+    const lvlDrawings = drawings[loc.levelId] || [];
+    const existing = lvlDrawings.find(d => d.todoId === todo.id);
+    const PCOLOR = { urgent: "#e07b6a", high: "#e0b266", medium: "#c9a96e", low: "#7fb087" };
+    const markerData = {
+      type: "marker", todoId: todo.id, visible: true,
+      label: (todo.title || "To Do").slice(0, 14),
+      color: PCOLOR[todo.priority] || "#c9a96e",
+      x: loc.x, y: loc.y,
+    };
+    let updated;
+    if (existing) {
+      updated = lvlDrawings.map(d => d.todoId === todo.id ? { ...d, ...markerData } : d);
+    } else {
+      const id = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+      updated = [...lvlDrawings, { id, name: todo.title || "To Do", ...markerData }];
+      persistTodos(todos.map(t => t.id === todo.id ? { ...t, floorPlanLocation: { ...loc, markerId: id } } : t));
+    }
+    localStorage.setItem(FP_KEY, JSON.stringify({ ...stored, drawings: { ...drawings, [loc.levelId]: updated } }));
+  }
+
+  function removeTodoMarkerFromFpData(levelId, markerId) {
+    const FP_KEY = "inventory-floor-plan-v2";
+    const stored = JSON.parse(localStorage.getItem(FP_KEY) || "{}");
+    const drawings = stored.drawings || {};
+    const lvlDrawings = (drawings[levelId] || []).filter(d => d.id !== markerId);
+    localStorage.setItem(FP_KEY, JSON.stringify({ ...stored, drawings: { ...drawings, [levelId]: lvlDrawings } }));
+  }
+
+  function handleDelete(id) {
+    const todo = todos.find(t => t.id === id);
+    if (todo?.floorPlanLocation?.markerId) {
+      removeTodoMarkerFromFpData(todo.floorPlanLocation.levelId, todo.floorPlanLocation.markerId);
+    }
+    persistTodos(todos.filter(t => t.id !== id));
+  }
 
   function handlePromote(id, targetStatus) {
     persistTodos(todos.map(t => t.id === id ? { ...t, status: targetStatus } : t));
@@ -536,6 +597,7 @@ export default function BoardPage({ navigate }) {
         <TodoModal
           todo={modalTodo} categories={categories} categoryItems={categoryItems}
           spatialCategories={spatialCategories} functionalCategories={functionalCategories}
+          exteriorCategories={exteriorCategories} structureCategories={structureCategories}
           projects={projects}
           onSave={handleSaveTodo} onClose={() => setModalState(null)}
           onDelete={modalTodo ? () => handleDelete(modalTodo.id) : null}
