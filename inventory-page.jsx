@@ -446,7 +446,34 @@ function pinAbbr(item) {
   return item.replace(/\(.*?\)/g, "").trim().slice(0, 4).toUpperCase();
 }
 
-function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onFieldChange, onChangeCategoryType }) {
+const DRAW_COLORS = ["#c9a96e", "#7ab5d9", "#7fb087", "#e07b6a", "#9b8ec4", "#a8a29c"];
+
+function ColorPickerDropdown({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+  return (
+    <div ref={ref} style={{ flexShrink: 0, position: "relative" }}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ background: value, border: `2px solid ${value}`, borderRadius: "50%", cursor: "pointer", height: 14, outline: `1px solid ${value}`, outlineOffset: 1, width: 14 }} />
+      {open && (
+        <div style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: 4, bottom: "calc(100% + 4px)", display: "flex", gap: 5, left: 0, padding: "5px 6px", position: "absolute", zIndex: 200 }}>
+          {DRAW_COLORS.map(c => (
+            <div key={c} onClick={() => { onChange(c); setOpen(false); }}
+              style={{ background: c, border: value === c ? `2px solid ${c}` : "2px solid transparent", borderRadius: "50%", cursor: "pointer", height: 14, outline: `1px solid ${c}`, outlineOffset: 1, width: 14 }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onFieldChange, onChangeCategoryType, onAddItem, customFieldValues, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem }) {
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
   const [rooms, setRooms] = useState(() => loadRooms());
@@ -483,8 +510,16 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
   const drawNameRef = useRef("");
   const [selectedTodoMarkerId, setSelectedTodoMarkerId] = useState(null);
   const todoMarkerDragRef = useRef(null);
+  const [selectedDrawingId, setSelectedDrawingId] = useState(null);
+  const drawingDragRef = useRef(null);
+  const drawingVertexDragRef = useRef(null);
   const [showTodoCreate, setShowTodoCreate] = useState(false);
   const [pendingTodoLocation, setPendingTodoLocation] = useState(null);
+  const [drawCategory, setDrawCategory] = useState(null);
+  const [markerIsTodo, setMarkerIsTodo] = useState(false);
+  const [editingDrawingNameId, setEditingDrawingNameId] = useState(null);
+  const drawCategoryRef = useRef(null);
+  const markerIsTodoRef = useRef(false);
 
   useEffect(() => { fpDataRef.current = fpData; }, [fpData]);
   useEffect(() => { activeLevelRef.current = activeLevel; }, [activeLevel]);
@@ -493,6 +528,8 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
   useEffect(() => { inProgressRef.current = inProgress; }, [inProgress]);
   useEffect(() => { drawColorRef.current = drawColor; }, [drawColor]);
   useEffect(() => { drawNameRef.current = drawName; }, [drawName]);
+  useEffect(() => { drawCategoryRef.current = drawCategory; }, [drawCategory]);
+  useEffect(() => { markerIsTodoRef.current = markerIsTodo; }, [markerIsTodo]);
 
   const currentPlaced = fpData.placements[activeLevel] || {};
   // Build roomId ↔ label maps for the active floor
@@ -511,15 +548,85 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
     const id = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
     const typeLabel = drawing.type === "marker" ? "Marker" : drawing.type === "line" ? "Line" : "Path";
     const existing = (d.drawings?.[lvl] || []).filter(dr => dr.type === drawing.type);
-    const name = drawNameRef.current.trim() || `${typeLabel} ${existing.length + 1}`;
+    const markerLabel = drawing.type === "marker" && drawing.label && drawing.label !== "PT" ? drawing.label : null;
+    const name = drawNameRef.current.trim() || markerLabel || `${typeLabel} ${existing.length + 1}`;
     const newDrawing = { id, name, color: drawColorRef.current, visible: true, ...drawing };
+    if (drawCategoryRef.current && drawing.type !== "marker") {
+      newDrawing.category = drawCategoryRef.current;
+      newDrawing.inventoryItemKey = `${drawCategoryRef.current}|${name}`;
+      onCreateLinkedItem?.(drawCategoryRef.current, name);
+    }
     save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: [...(d.drawings?.[lvl] || []), newDrawing] } });
     setDrawName("");
+    setDrawCategory(null);
+    drawCategoryRef.current = null;
+  }
+
+  function renameDrawing(drawId, newName) {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const drawing = (d.drawings?.[lvl] || []).find(dr => dr.id === drawId);
+    const oldKey = drawing?.inventoryItemKey;
+    let inventoryItemKey = oldKey;
+    if (oldKey) {
+      const sep = oldKey.indexOf("|");
+      const cat = oldKey.slice(0, sep);
+      const oldItem = oldKey.slice(sep + 1);
+      inventoryItemKey = `${cat}|${trimmed}`;
+      onRenameLinkedItem?.(cat, oldItem, trimmed);
+    }
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).map(dr =>
+      dr.id === drawId ? { ...dr, name: trimmed, ...(oldKey ? { inventoryItemKey } : {}) } : dr
+    ) } });
+  }
+
+  function updateDrawingColor(drawId, color) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).map(dr => dr.id === drawId ? { ...dr, color } : dr) } });
+  }
+
+  function updateDrawingCategory(drawId, category) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const drawing = (d.drawings?.[lvl] || []).find(dr => dr.id === drawId);
+    const oldKey = drawing?.inventoryItemKey;
+    const itemName = drawing?.name;
+    let newKey = undefined;
+
+    if (oldKey) {
+      const sep = oldKey.indexOf("|");
+      const oldCat = oldKey.slice(0, sep);
+      const oldItem = oldKey.slice(sep + 1);
+      if (!category) {
+        onDeleteLinkedItem?.(oldCat, oldItem);
+      } else if (oldCat !== category) {
+        onDeleteLinkedItem?.(oldCat, oldItem);
+        onCreateLinkedItem?.(category, itemName);
+        newKey = `${category}|${itemName}`;
+      } else {
+        newKey = oldKey;
+      }
+    } else if (category && itemName) {
+      onCreateLinkedItem?.(category, itemName);
+      newKey = `${category}|${itemName}`;
+    }
+
+    save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).map(dr =>
+      dr.id === drawId ? { ...dr, category: category || undefined, inventoryItemKey: newKey } : dr
+    ) } });
   }
 
   function deleteDrawing(drawId) {
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
+    const drawing = (d.drawings?.[lvl] || []).find(dr => dr.id === drawId);
+    if (drawing?.inventoryItemKey) {
+      const sep = drawing.inventoryItemKey.indexOf("|");
+      onDeleteLinkedItem?.(drawing.inventoryItemKey.slice(0, sep), drawing.inventoryItemKey.slice(sep + 1));
+    }
     save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).filter(dr => dr.id !== drawId) } });
   }
 
@@ -536,7 +643,24 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
     const x = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - rect.left) / rect.width * vb.w)));
     const y = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - rect.top) / rect.height * vb.h)));
     const mode = drawModeRef.current;
-    if (mode === "marker") { setPendingMarker({ x, y }); setMarkerLabel(""); return; }
+    if (mode === "marker") {
+      if (markerIsTodoRef.current) {
+        const zoneId = detectZoneAtPoint(x, y);
+        const zoneRoom = zoneId ? rooms[zoneId] : null;
+        const catName = zoneRoom?.categoryName || zoneRoom?.label || null;
+        const catTypeId = catName ? resolveTypeId(catName, categoryTypes[catName] || "system") : null;
+        const isExt = catTypeId ? isExteriorTypeUtil(catTypeId, entityTypeData) : false;
+        setPendingTodoLocation({ levelId: activeLevel, zone: zoneId || null, x, y, preLinkedRoom: catName && !isExt ? catName : null, preLinkedExterior: catName && isExt ? catName : null });
+        setShowTodoCreate(true);
+        setDrawMode("select");
+        setMarkerIsTodo(false);
+        markerIsTodoRef.current = false;
+      } else {
+        setPendingMarker({ x, y });
+        setMarkerLabel("");
+      }
+      return;
+    }
     if (mode === "path") { setInProgress(p => p ? { ...p, points: [...p.points, { x, y }] } : { type: "path", points: [{ x, y }] }); return; }
     if (mode === "line") {
       const ip = inProgressRef.current;
@@ -573,12 +697,25 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
     return null;
   }
 
+  function ptSegDist(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+
   function cancelDraw() {
     setDrawMode("select");
     setInProgress(null);
     setCursorPt(null);
     setPendingMarker(null);
     setMarkerLabel("");
+    setDrawCategory(null);
+    setMarkerIsTodo(false);
+    drawCategoryRef.current = null;
+    markerIsTodoRef.current = false;
+    setSelectedDrawingId(null);
   }
 
   function addPin(cat, item, zone, x, y) {
@@ -850,6 +987,46 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
         fpDataRef.current = next;
         setFpData({ ...next });
       }
+
+      // Drawing vertex drag
+      if (drawingVertexDragRef.current) {
+        const { id, vi } = drawingVertexDragRef.current;
+        const nx = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) * scaleX)));
+        const ny = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) * scaleY)));
+        const d = fpDataRef.current;
+        const lvl = activeLevelRef.current;
+        const newDrawings = (d.drawings?.[lvl] || []).map(drw => drw.id === id ? { ...drw, points: drw.points.map((p, i) => i === vi ? { x: nx, y: ny } : p) } : drw);
+        const next = { ...d, drawings: { ...(d.drawings || {}), [lvl]: newDrawings } };
+        fpDataRef.current = next;
+        setFpData({ ...next });
+        return;
+      }
+
+      // Drawing whole-body drag
+      if (drawingDragRef.current) {
+        const { id, type, origPoints, origX, origY, startClientX, startClientY } = drawingDragRef.current;
+        const dx = (e.clientX - startClientX) * scaleX;
+        const dy = (e.clientY - startClientY) * scaleY;
+        if (!drawingDragRef.current.hasDragged && Math.abs(dx) <= 4 && Math.abs(dy) <= 4) return;
+        drawingDragRef.current.hasDragged = true;
+        const d = fpDataRef.current;
+        const lvl = activeLevelRef.current;
+        let newDrawings;
+        if (type === "marker") {
+          const nx = fpSnap(Math.max(0, Math.min(FP_W, origX + dx)));
+          const ny = fpSnap(Math.max(0, Math.min(FP_H, origY + dy)));
+          newDrawings = (d.drawings?.[lvl] || []).map(drw => drw.id === id ? { ...drw, x: nx, y: ny } : drw);
+        } else {
+          const newPoints = origPoints.map(p => ({
+            x: fpSnap(Math.max(0, Math.min(FP_W, p.x + dx))),
+            y: fpSnap(Math.max(0, Math.min(FP_H, p.y + dy))),
+          }));
+          newDrawings = (d.drawings?.[lvl] || []).map(drw => drw.id === id ? { ...drw, points: newPoints } : drw);
+        }
+        const next = { ...d, drawings: { ...(d.drawings || {}), [lvl]: newDrawings } };
+        fpDataRef.current = next;
+        setFpData({ ...next });
+      }
     }
 
     function onUp(e) {
@@ -872,6 +1049,56 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
         }
         return;
       }
+
+      // Drawing vertex drag end
+      if (drawingVertexDragRef.current) {
+        const { id, vi, startX, startY } = drawingVertexDragRef.current;
+        drawingVertexDragRef.current = null;
+        const moved = Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4;
+        if (moved) {
+          saveFpData(fpDataRef.current);
+        } else {
+          const d = fpDataRef.current;
+          const lvl = activeLevelRef.current;
+          const dr = (d.drawings?.[lvl] || []).find(drw => drw.id === id);
+          if (dr && dr.points.length > 2) {
+            const newPoints = dr.points.filter((_, i) => i !== vi);
+            save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).map(drw => drw.id === id ? { ...drw, points: newPoints } : drw) } });
+          } else {
+            saveFpData(d);
+          }
+        }
+        return;
+      }
+
+      // Drawing whole-body drag end (or click-to-insert-vertex for paths)
+      if (drawingDragRef.current) {
+        const { id, type, hasDragged, startClientX, startClientY } = drawingDragRef.current;
+        drawingDragRef.current = null;
+        if (!hasDragged && type === "path" && svgRef.current) {
+          const svgRect = svgRef.current.getBoundingClientRect();
+          const vb = viewBoxRef.current;
+          const clickX = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (startClientX - svgRect.left) / svgRect.width * vb.w)));
+          const clickY = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (startClientY - svgRect.top) / svgRect.height * vb.h)));
+          const d = fpDataRef.current;
+          const lvl = activeLevelRef.current;
+          const dr = (d.drawings?.[lvl] || []).find(drw => drw.id === id);
+          if (dr) {
+            let bestEdge = 0, bestDist = Infinity;
+            for (let i = 0; i < dr.points.length - 1; i++) {
+              const dist = ptSegDist(clickX, clickY, dr.points[i].x, dr.points[i].y, dr.points[i + 1].x, dr.points[i + 1].y);
+              if (dist < bestDist) { bestDist = dist; bestEdge = i; }
+            }
+            const newPoints = [...dr.points];
+            newPoints.splice(bestEdge + 1, 0, { x: clickX, y: clickY });
+            save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).map(drw => drw.id === id ? { ...drw, points: newPoints } : drw) } });
+          }
+        } else if (hasDragged) {
+          saveFpData(fpDataRef.current);
+        }
+        return;
+      }
+
       if (draggingRef.current) { saveFpData(fpDataRef.current); draggingRef.current = null; setDragging(null); return; }
 
       // End pan drag
@@ -880,7 +1107,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
         panDragRef.current = null;
         setIsPanning(false);
         if (Math.abs(e.clientX - startX) <= 4 && Math.abs(e.clientY - startY) <= 4) {
-          setSelected(null); setSelectedPin(null); setSelectedTodoMarkerId(null);
+          setSelected(null); setSelectedPin(null); setSelectedTodoMarkerId(null); setSelectedDrawingId(null);
         }
         return;
       }
@@ -1074,6 +1301,41 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
     Object.entries(categoryItems).flatMap(([cat, items]) => items.map(item => ({ cat, item }))),
     [categoryItems]
   );
+
+  const structureCats = useMemo(() =>
+    categories.filter(c => isStructureTypeUtil(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData)),
+    [categories, categoryTypes, entityTypeData]
+  );
+
+  const systemCats = useMemo(() =>
+    categories.filter(c => {
+      const typeId = resolveTypeId(c, categoryTypes[c] || "system");
+      return isFunctional(typeId, entityTypeData) && !isStructureTypeUtil(typeId, entityTypeData);
+    }),
+    [categories, categoryTypes, entityTypeData]
+  );
+
+  const selectedDrawing = useMemo(() => {
+    if (!selectedDrawingId) return null;
+    return (fpData.drawings?.[activeLevel] || []).find(d => d.id === selectedDrawingId) || null;
+  }, [fpData, activeLevel, selectedDrawingId]);
+
+  const roomCrossRefItems = useMemo(() => {
+    const map = {};
+    Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
+      const room = vals?.roomLabel || vals?.room;
+      if (!room) return;
+      const sep = key.indexOf("|");
+      if (sep === -1) return;
+      const cat = key.slice(0, sep);
+      const item = key.slice(sep + 1);
+      const typeId = resolveTypeId(cat, categoryTypes[cat] || "system");
+      if (isSpatial(typeId, entityTypeData)) return;
+      if (!map[room]) map[room] = [];
+      map[room].push({ cat, item });
+    });
+    return map;
+  }, [customFieldValues, categoryTypes, entityTypeData]);
 
   const searchResults = useMemo(() => {
     const q = zoneSearch.trim().toLowerCase();
@@ -1369,30 +1631,102 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", position: "relative" }}>
         {/* Draw toolbar */}
         <div style={{ alignItems: "center", background: "var(--fm-bg)", borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0, gap: "0.4rem", padding: "0.35rem 0.75rem", flexWrap: "wrap" }}>
-          {[
-            ["select", "↖ Select", null],
-            ["path", "✏ Path", "Trace multi-point routes across the plan — e.g. HVAC duct runs, supply/return lines, electrical conduit, or irrigation pipe paths between zones"],
-            ["line", "╱ Line", "Mark a single straight segment — e.g. a gas shutoff run, a fence boundary, a wall opening, or the span of a beam between two points"],
-            ["marker", "● Marker", "Drop a labeled point — e.g. main water shutoff, circuit breaker location, cleanout access, camera coverage, or any single-location fixture"],
-          ].map(([mode, label, tip]) => (
-            <button key={mode} onClick={() => { setDrawMode(mode); setInProgress(null); setCursorPt(null); setPendingMarker(null); }}
-              title={tip || undefined}
-              style={{ background: drawMode === mode ? "var(--fm-bg-panel)" : "transparent", border: `1px solid ${drawMode === mode ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: drawMode === mode ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em", padding: "0.18rem 0.5rem", transition: "all 0.1s" }}>
-              {label}
-            </button>
-          ))}
+          <select
+            value={drawMode}
+            onChange={e => {
+              const mode = e.target.value;
+              setDrawMode(mode);
+              setInProgress(null);
+              setCursorPt(null);
+              setPendingMarker(null);
+              setDrawCategory(null);
+              setMarkerIsTodo(false);
+              drawCategoryRef.current = null;
+              markerIsTodoRef.current = false;
+              setSelectedDrawingId(null);
+            }}
+            style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em", outline: "none", padding: "0.18rem 0.5rem" }}>
+            <option value="select">↖ Select</option>
+            <option value="path">✏ Path</option>
+            <option value="line">╱ Line</option>
+            <option value="marker">● Marker</option>
+          </select>
+
+          {/* Edit mode: drawing selected from right panel */}
+          {drawMode === "select" && selectedDrawing && (() => {
+            const isPathOrLine = selectedDrawing.type === "path" || selectedDrawing.type === "line";
+            return (
+              <>
+                <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                {isPathOrLine && (structureCats.length > 0 || systemCats.length > 0) && (
+                  <>
+                    <select
+                      value={selectedDrawing.category || ""}
+                      onChange={e => updateDrawingCategory(selectedDrawing.id, e.target.value || null)}
+                      style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: selectedDrawing.category ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.35rem" }}>
+                      <option value="">Category…</option>
+                      {structureCats.length > 0 && <optgroup label="Structure">{structureCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
+                      {systemCats.length > 0 && <optgroup label="System">{systemCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
+                    </select>
+                    <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                  </>
+                )}
+                <input
+                  value={selectedDrawing.name}
+                  onChange={e => renameDrawing(selectedDrawing.id, e.target.value)}
+                  style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.68rem", outline: "none", padding: "0.15rem 0.45rem", width: 130 }} />
+                <ColorPickerDropdown value={selectedDrawing.color || "#c9a96e"} onChange={c => updateDrawingColor(selectedDrawing.id, c)} />
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem" }}>editing {selectedDrawing.type}</span>
+                <button onClick={() => setSelectedDrawingId(null)} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", padding: "0.1rem 0.3rem" }}>esc ×</button>
+              </>
+            );
+          })()}
+
+          {/* Draw mode controls */}
           {drawMode !== "select" && (
             <>
               <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
-              <input value={drawName} onChange={e => setDrawName(e.target.value)}
-                placeholder={drawMode === "path" ? "Path name…" : drawMode === "line" ? "Line name…" : "Marker name…"}
-                style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.68rem", outline: "none", padding: "0.15rem 0.45rem", width: 130 }} />
-              {["#c9a96e", "#7ab5d9", "#7fb087", "#e07b6a", "#9b8ec4", "#a8a29c"].map(c => (
-                <div key={c} onClick={() => setDrawColor(c)}
-                  style={{ border: drawColor === c ? `2px solid ${c}` : "2px solid transparent", borderRadius: "50%", cursor: "pointer", flexShrink: 0, height: 14, outline: `1px solid ${c}`, outlineOffset: 1, width: 14, background: c }} />
-              ))}
+              {(drawMode === "path" || drawMode === "line") && (structureCats.length > 0 || systemCats.length > 0) && (
+                <>
+                  <select
+                    value={drawCategory || ""}
+                    onChange={e => {
+                      const val = e.target.value || null;
+                      setDrawCategory(val);
+                      drawCategoryRef.current = val;
+                      if (val) {
+                        const typeId = resolveTypeId(val, categoryTypes[val] || "system");
+                        setDrawColor(isStructureTypeUtil(typeId, entityTypeData) ? "#7fb087" : "#c9a96e");
+                      }
+                    }}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: drawCategory ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.35rem" }}>
+                    <option value="">Category…</option>
+                    {structureCats.length > 0 && <optgroup label="Structure">{structureCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
+                    {systemCats.length > 0 && <optgroup label="System">{systemCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
+                  </select>
+                  <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                </>
+              )}
+              {drawMode === "marker" && (
+                <>
+                  <button
+                    onClick={() => { const next = !markerIsTodo; setMarkerIsTodo(next); markerIsTodoRef.current = next; }}
+                    style={{ background: markerIsTodo ? "rgba(201,169,110,0.15)" : "transparent", border: `1px solid ${markerIsTodo ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: markerIsTodo ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em", padding: "0.18rem 0.5rem", transition: "all 0.1s" }}>
+                    ✓ To Do
+                  </button>
+                  <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                </>
+              )}
+              {!markerIsTodo && (
+                <>
+                  <input value={drawName} onChange={e => setDrawName(e.target.value)}
+                    placeholder={drawMode === "path" ? "Path name…" : drawMode === "line" ? "Line name…" : "Marker name…"}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.68rem", outline: "none", padding: "0.15rem 0.45rem", width: 130 }} />
+                  <ColorPickerDropdown value={drawColor} onChange={setDrawColor} />
+                </>
+              )}
               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem" }}>
-                {drawMode === "path" ? "click · dblclick or ↵ to finish" : drawMode === "line" ? "click start · click end" : "click to place"}
+                {drawMode === "path" ? "click · dblclick or ↵ to finish" : drawMode === "line" ? "click start · click end" : markerIsTodo ? "click to place · to do modal opens" : "click to place"}
               </span>
               <button onClick={cancelDraw} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", padding: "0.1rem 0.3rem" }}>esc ×</button>
             </>
@@ -1492,7 +1826,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
             const type = categoryTypes[zoneRoom.label] || "system";
             const isSel = selected === roomId;
             const isDrag = dragging === roomId;
-            const itemCount = categoryItems[zoneRoom.label]?.length || 0;
+            const itemCount = (categoryItems[zoneRoom.label]?.length || 0) + (roomCrossRefItems[zoneRoom.label]?.length || 0);
             const pts = zonePoly.points;
             const ptStr = pts.map(p => `${p.x},${p.y}`).join(" ");
             const { cx, cy } = polygonCentroid(pts);
@@ -1625,22 +1959,72 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
 
           {/* Committed drawings */}
           {(fpData.drawings?.[activeLevel] || []).filter(dr => dr.visible !== false).map(dr => {
-            if (dr.type === "path" && dr.points?.length >= 2) return (
-              <polyline key={dr.id} points={dr.points.map(p => `${p.x},${p.y}`).join(" ")}
-                stroke={dr.color} strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }} />
-            );
-            if (dr.type === "line" && dr.points?.length >= 2) return (
-              <line key={dr.id} x1={dr.points[0].x} y1={dr.points[0].y} x2={dr.points[1].x} y2={dr.points[1].y}
-                stroke={dr.color} strokeWidth={2.5} strokeLinecap="round" style={{ pointerEvents: "none" }} />
-            );
+            const isSel = selectedDrawingId === dr.id;
+
+            if (dr.type === "path" && dr.points?.length >= 2) {
+              const ptStr = dr.points.map(p => `${p.x},${p.y}`).join(" ");
+              return (
+                <g key={dr.id}>
+                  {isSel && <polyline points={ptStr} stroke={dr.color} strokeWidth={7} fill="none" opacity={0.18} strokeLinecap="round" style={{ pointerEvents: "none" }} />}
+                  <polyline points={ptStr} stroke={dr.color} strokeWidth={isSel ? 3 : 2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+                  {/* Hit area — drag moves whole path, click inserts vertex */}
+                  <polyline points={ptStr} stroke="transparent" strokeWidth={14} fill="none"
+                    style={{ cursor: isSel ? "crosshair" : "pointer", pointerEvents: "auto" }}
+                    onMouseDown={e => {
+                      e.preventDefault(); e.stopPropagation();
+                      if (!isSel) { setSelectedDrawingId(dr.id); return; }
+                      drawingDragRef.current = { id: dr.id, type: "path", origPoints: dr.points.map(p => ({ ...p })), startClientX: e.clientX, startClientY: e.clientY, hasDragged: false };
+                    }}
+                  />
+                  {/* Vertex handles */}
+                  {isSel && dr.points.map((p, vi) => (
+                    <circle key={`vh-${vi}`} cx={p.x} cy={p.y} r={5}
+                      fill="var(--fm-bg)" stroke={dr.color} strokeWidth={1.5}
+                      style={{ cursor: dr.points.length > 2 ? "crosshair" : "grab", pointerEvents: "auto" }}
+                      onMouseDown={e => { e.preventDefault(); e.stopPropagation(); drawingVertexDragRef.current = { id: dr.id, vi, startX: e.clientX, startY: e.clientY }; }}
+                      title={dr.points.length > 2 ? "Drag to move · Click to remove" : "Drag to move"}
+                    />
+                  ))}
+                </g>
+              );
+            }
+
+            if (dr.type === "line" && dr.points?.length >= 2) {
+              const [p0, p1] = dr.points;
+              return (
+                <g key={dr.id}>
+                  {isSel && <line x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke={dr.color} strokeWidth={7} opacity={0.18} strokeLinecap="round" style={{ pointerEvents: "none" }} />}
+                  <line x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke={dr.color} strokeWidth={isSel ? 3 : 2.5} strokeLinecap="round" style={{ pointerEvents: "none" }} />
+                  {/* Hit area — drag moves whole line */}
+                  <line x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke="transparent" strokeWidth={14}
+                    style={{ cursor: isSel ? "grab" : "pointer", pointerEvents: "auto" }}
+                    onMouseDown={e => {
+                      e.preventDefault(); e.stopPropagation();
+                      if (!isSel) { setSelectedDrawingId(dr.id); return; }
+                      drawingDragRef.current = { id: dr.id, type: "line", origPoints: dr.points.map(p => ({ ...p })), startClientX: e.clientX, startClientY: e.clientY, hasDragged: false };
+                    }}
+                  />
+                  {/* Endpoint handles */}
+                  {isSel && dr.points.map((p, vi) => (
+                    <circle key={`vh-${vi}`} cx={p.x} cy={p.y} r={5}
+                      fill="var(--fm-bg)" stroke={dr.color} strokeWidth={1.5}
+                      style={{ cursor: "grab", pointerEvents: "auto" }}
+                      onMouseDown={e => { e.preventDefault(); e.stopPropagation(); drawingVertexDragRef.current = { id: dr.id, vi, startX: e.clientX, startY: e.clientY }; }}
+                      title="Drag to move endpoint"
+                    />
+                  ))}
+                </g>
+              );
+            }
+
             if (dr.type === "marker") {
               if (dr.todoId) {
-                const isSel = selectedTodoMarkerId === dr.id;
+                const isTodoSel = selectedTodoMarkerId === dr.id;
                 return (
                   <g key={dr.id} style={{ cursor: "grab", pointerEvents: "auto" }}
                     onMouseDown={e => handleTodoMarkerMouseDown(e, dr)}>
                     <circle cx={dr.x} cy={dr.y} r={8}
-                      fill={dr.color} stroke={isSel ? "var(--fm-ink)" : "var(--fm-bg)"} strokeWidth={isSel ? 2 : 1.5} />
+                      fill={dr.color} stroke={isTodoSel ? "var(--fm-ink)" : "var(--fm-bg)"} strokeWidth={isTodoSel ? 2 : 1.5} />
                     <text x={dr.x} y={dr.y - 13} textAnchor="middle"
                       style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "9px", pointerEvents: "none", userSelect: "none" }}>
                       {(dr.label || "").slice(0, 12)}
@@ -1649,10 +2033,16 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
                 );
               }
               return (
-                <g key={dr.id} style={{ pointerEvents: "none" }}>
-                  <circle cx={dr.x} cy={dr.y} r={5} fill={dr.color} />
-                  <text x={dr.x} y={dr.y - 9} textAnchor="middle"
-                    style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "8px", letterSpacing: "0.04em" }}>
+                <g key={dr.id} style={{ cursor: isSel ? "grab" : "pointer", pointerEvents: "auto" }}
+                  onMouseDown={e => {
+                    e.preventDefault(); e.stopPropagation();
+                    if (!isSel) { setSelectedDrawingId(dr.id); return; }
+                    drawingDragRef.current = { id: dr.id, type: "marker", origX: dr.x, origY: dr.y, startClientX: e.clientX, startClientY: e.clientY, hasDragged: false };
+                  }}>
+                  <circle cx={dr.x} cy={dr.y} r={isSel ? 7 : 5} fill={dr.color}
+                    stroke={isSel ? "var(--fm-bg)" : "none"} strokeWidth={1.5} />
+                  <text x={dr.x} y={dr.y - 10} textAnchor="middle"
+                    style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "8px", letterSpacing: "0.04em", pointerEvents: "none" }}>
                     {dr.label || dr.name}
                   </text>
                 </g>
@@ -1724,30 +2114,6 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commitMarkerLabel(); } if (e.key === "Escape") { setPendingMarker(null); setMarkerLabel(""); } }}
                 style={{ background: "transparent", border: "none", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", outline: "none", width: 100 }} />
               <button onClick={commitMarkerLabel} style={{ background: "var(--fm-brass)", border: "none", borderRadius: 2, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.3rem", padding: "0.15rem 0.4rem" }}>OK</button>
-              <button
-                onClick={() => {
-                  if (!pendingMarker) return;
-                  const zoneId = detectZoneAtPoint(pendingMarker.x, pendingMarker.y);
-                  const zoneRoom = zoneId ? rooms[zoneId] : null;
-                  const catName = zoneRoom?.categoryName || zoneRoom?.label || null;
-                  const catTypeId = catName ? resolveTypeId(catName, categoryTypes[catName] || "system") : null;
-                  const isExt = catTypeId ? isExteriorTypeUtil(catTypeId, entityTypeData) : false;
-                  setPendingTodoLocation({
-                    levelId: activeLevel,
-                    zone: zoneId || null,
-                    x: pendingMarker.x,
-                    y: pendingMarker.y,
-                    preLinkedRoom: catName && !isExt ? catName : null,
-                    preLinkedExterior: catName && isExt ? catName : null,
-                  });
-                  setShowTodoCreate(true);
-                  setPendingMarker(null);
-                  setMarkerLabel("");
-                  setDrawMode("select");
-                }}
-                style={{ background: "var(--fm-ink-dim)", border: "none", borderRadius: 2, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.3rem", padding: "0.15rem 0.4rem" }}>
-                + To Do
-              </button>
             </div>
           );
         })()}
@@ -1900,7 +2266,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
             <div style={{ display: "flex" }}>
               {[
                 { label: "Area", value: `${Math.round(polygonArea(selRoom.points) / (FP_GRID * FP_GRID))} sq ft` },
-                { label: "Items", value: categoryItems[selectedRoom?.label]?.length || 0 },
+                { label: "Items", value: (categoryItems[selectedRoom?.label]?.length || 0) + (roomCrossRefItems[selectedRoom?.label]?.length || 0) },
               ].map(({ label, value }, i) => (
                 <div key={label} style={{ borderRight: i < 1 ? "1px solid var(--fm-hairline)" : "none", flex: 1, padding: "0.6rem 0.75rem" }}>
                   <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.54rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>{label}</div>
@@ -1915,7 +2281,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
               {/* Section header */}
               <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.45rem 0.75rem 0.4rem" }}>
                 <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  Items · {(categoryItems[selectedRoom?.label]?.length || 0) + selZoneItems.filter(z => !(z.cat === selectedRoom?.label)).length}
+                  Items · {(categoryItems[selectedRoom?.label]?.length || 0) + (roomCrossRefItems[selectedRoom?.label]?.length || 0)}
                 </span>
                 <button
                   onClick={() => setSelected(null)}
@@ -1928,7 +2294,12 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
               {/* Items in this category */}
               {(() => {
                 const nativeItems = categoryItems[selectedRoom?.label] || [];
-                const crossItems = selZoneItems.filter(z => z.cat !== selectedRoom?.label);
+                const cfCrossRefs = roomCrossRefItems[selectedRoom?.label] || [];
+                const cfKeys = new Set(cfCrossRefs.map(z => `${z.cat}|${z.item}`));
+                const zoneOnlyCrossRefs = selZoneItems.filter(z =>
+                  z.cat !== selectedRoom?.label && !cfKeys.has(`${z.cat}|${z.item}`)
+                );
+                const crossItems = [...cfCrossRefs, ...zoneOnlyCrossRefs];
                 const totalAssigned = nativeItems.length + crossItems.length;
                 return (
                   <div style={{ borderBottom: "1px solid var(--fm-hairline)", borderTop: "1px solid var(--fm-hairline)" }}>
@@ -2007,7 +2378,7 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
 
               {/* Search results */}
               <div style={{ flex: 1, overflowY: "auto" }}>
-                {searchResults.length === 0 ? (
+                {searchResults.length === 0 && !zoneSearch.trim() ? (
                   <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.5rem 0.75rem" }}>No matches</div>
                 ) : searchResults.map(({ cat, item }) => {
                   const isNative = cat === selectedRoom?.label && (categoryItems[selectedRoom?.label] || []).includes(item);
@@ -2028,6 +2399,26 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
                     </div>
                   );
                 })}
+                {zoneSearch.trim() && (() => {
+                  const q = zoneSearch.trim();
+                  const cat = selectedRoom?.label;
+                  const alreadyExists = (categoryItems[cat] || []).some(i => i.toLowerCase() === q.toLowerCase());
+                  if (alreadyExists || !cat || !onAddItem) return null;
+                  return (
+                    <div
+                      onClick={() => { onAddItem(cat, q); setZoneSearch(""); }}
+                      style={{ alignItems: "center", borderTop: searchResults.length > 0 ? "1px solid var(--fm-hairline)" : "none", cursor: "pointer", display: "flex", gap: "0.4rem", padding: "0.35rem 0.75rem", transition: "background 0.1s" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    >
+                      <span style={{ color: "var(--fm-brass)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        Create "{q}"
+                      </span>
+                      <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.05em" }}>{cat.slice(0, 3).toUpperCase()}</span>
+                      <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.72rem", width: "0.8rem" }}>+</span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -2049,53 +2440,105 @@ function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, o
             <div style={{ borderTop: "1px solid var(--fm-hairline)", flex: 1, overflowY: "auto" }}>
               {(() => {
                 const allDrawings = fpData.drawings?.[activeLevel] || [];
-                const regularDrawings = allDrawings.filter(dr => !dr.todoId);
                 const todoMarkers = allDrawings.filter(dr => dr.todoId);
+                const regular = allDrawings.filter(dr => !dr.todoId);
+
+                const structureDrawings = regular.filter(dr => dr.category && isStructureTypeUtil(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData));
+                const systemDrawings = regular.filter(dr => dr.category && isFunctional(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData) && !isStructureTypeUtil(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData));
+                const uncategorized = regular.filter(dr => !dr.category);
+
+                const sectionLabel = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
+                const sectionHeader = (label, count, first = false) => (
+                  <div style={{ alignItems: "center", borderTop: first ? "none" : "1px solid var(--fm-hairline)", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
+                    <span style={sectionLabel}>{label} · {count}</span>
+                  </div>
+                );
+
+                const drawingRow = (dr) => {
+                  const rowSel = selectedDrawingId === dr.id;
+                  return (
+                    <div key={dr.id}
+                      onClick={() => setSelectedDrawingId(rowSel ? null : dr.id)}
+                      style={{ alignItems: "center", background: rowSel ? "rgba(201,169,110,0.08)" : "transparent", borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem", transition: "background 0.1s" }}>
+                      <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, outline: rowSel ? `2px solid ${dr.color}` : "none", outlineOffset: 2, width: 10 }} />
+                      {editingDrawingNameId === dr.id ? (
+                        <input
+                          autoFocus
+                          defaultValue={dr.name}
+                          onClick={e => e.stopPropagation()}
+                          onBlur={e => { renameDrawing(dr.id, e.target.value); setEditingDrawingNameId(null); }}
+                          onKeyDown={e => { if (e.key === "Enter") { renameDrawing(dr.id, e.target.value); setEditingDrawingNameId(null); } if (e.key === "Escape") setEditingDrawingNameId(null); }}
+                          style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.05rem 0.3rem" }} />
+                      ) : (
+                        <span
+                          onDoubleClick={e => { e.stopPropagation(); setEditingDrawingNameId(dr.id); }}
+                          style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", fontWeight: rowSel ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
+                      )}
+                      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{dr.type}</span>
+                      <button onClick={e => { e.stopPropagation(); toggleDrawingVisibility(dr.id); }}
+                        title={dr.visible !== false ? "Hide" : "Show"}
+                        style={{ background: "none", border: "none", color: dr.visible !== false ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontSize: "0.75rem", padding: "0 0.1rem" }}>
+                        {dr.visible !== false ? "👁" : "○"}
+                      </button>
+                      <button onClick={e => { e.stopPropagation(); deleteDrawing(dr.id); }}
+                        style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
+                        onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                        onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
+                    </div>
+                  );
+                };
+
+                const hasAny = regular.length > 0 || todoMarkers.length > 0;
                 return (
                   <>
-                    <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
-                      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                        Drawings · {regularDrawings.length}
-                      </span>
-                    </div>
-                    {regularDrawings.length === 0 ? (
-                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
-                        Use the toolbar to draw paths, lines, and markers.
-                      </div>
-                    ) : regularDrawings.map(dr => (
-                      <div key={dr.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem" }}>
-                        <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, width: 10 }} />
-                        <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
-                        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{dr.type}</span>
-                        <button onClick={() => toggleDrawingVisibility(dr.id)}
-                          title={dr.visible !== false ? "Hide" : "Show"}
-                          style={{ background: "none", border: "none", color: dr.visible !== false ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontSize: "0.75rem", padding: "0 0.1rem" }}>
-                          {dr.visible !== false ? "👁" : "○"}
-                        </button>
-                        <button onClick={() => deleteDrawing(dr.id)}
-                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
-                          onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                          onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
-                      </div>
-                    ))}
+                    {!hasAny && (
+                      <>
+                        {sectionHeader("Drawings", 0, true)}
+                        <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.7rem", fontStyle: "italic", padding: "0.25rem 0.75rem 0.5rem" }}>
+                          Use the toolbar to draw paths, lines, and markers.
+                        </div>
+                      </>
+                    )}
+                    {structureDrawings.length > 0 && (
+                      <>{sectionHeader("Structures", structureDrawings.length, true)}{structureDrawings.map(drawingRow)}</>
+                    )}
+                    {systemDrawings.length > 0 && (
+                      <>{sectionHeader("Systems", systemDrawings.length, structureDrawings.length === 0)}{systemDrawings.map(drawingRow)}</>
+                    )}
+                    {uncategorized.length > 0 && (
+                      <>{sectionHeader("Drawings", uncategorized.length, structureDrawings.length === 0 && systemDrawings.length === 0)}{uncategorized.map(drawingRow)}</>
+                    )}
                     {todoMarkers.length > 0 && (
                       <>
-                        <div style={{ alignItems: "center", borderTop: "1px solid var(--fm-hairline)", display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem 0.35rem" }}>
-                          <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                            To Do Pins · {todoMarkers.length}
-                          </span>
-                        </div>
-                        {todoMarkers.map(dr => (
-                          <div key={dr.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem" }}>
-                            <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, width: 10 }} />
-                            <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
-                            <button onClick={() => removeTodoMarker(dr.id)}
-                              title="Remove from map"
-                              style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
-                              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
-                          </div>
-                        ))}
+                        {sectionHeader("To Do Pins", todoMarkers.length, regular.length === 0)}
+                        {todoMarkers.map(dr => {
+                          const rowSel = selectedDrawingId === dr.id;
+                          return (
+                            <div key={dr.id}
+                              onClick={() => setSelectedDrawingId(rowSel ? null : dr.id)}
+                              style={{ alignItems: "center", background: rowSel ? "rgba(201,169,110,0.08)" : "transparent", borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", display: "flex", gap: "0.5rem", padding: "0.35rem 0.75rem", transition: "background 0.1s" }}>
+                              <div style={{ background: dr.color, borderRadius: "50%", flexShrink: 0, height: 10, outline: rowSel ? `2px solid ${dr.color}` : "none", outlineOffset: 2, width: 10 }} />
+                              {editingDrawingNameId === dr.id ? (
+                                <input
+                                  autoFocus
+                                  defaultValue={dr.name}
+                                  onClick={e => e.stopPropagation()}
+                                  onBlur={e => { renameDrawing(dr.id, e.target.value); setEditingDrawingNameId(null); }}
+                                  onKeyDown={e => { if (e.key === "Enter") { renameDrawing(dr.id, e.target.value); setEditingDrawingNameId(null); } if (e.key === "Escape") setEditingDrawingNameId(null); }}
+                                  style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.05rem 0.3rem" }} />
+                              ) : (
+                                <span
+                                  onDoubleClick={e => { e.stopPropagation(); setEditingDrawingNameId(dr.id); }}
+                                  style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.72rem", fontWeight: rowSel ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dr.name}</span>
+                              )}
+                              <button onClick={e => { e.stopPropagation(); removeTodoMarker(dr.id); }}
+                                title="Remove from map"
+                                style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem", transition: "color 0.1s" }}
+                                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>×</button>
+                            </div>
+                          );
+                        })}
                       </>
                     )}
                   </>
@@ -3717,6 +4160,21 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       }
       const customs = loadCustomData();
       saveCustomData(customs.filter(r => !(r.category === category && r.item === item)));
+
+      const fpD = loadFpData();
+      const targetKey = `${category}|${item}`;
+      let fpChanged = false;
+      const updatedFpDrawings = Object.fromEntries(
+        Object.entries(fpD.drawings || {}).map(([lvlId, drawings]) => [
+          lvlId,
+          drawings.map(dr => {
+            if (dr.inventoryItemKey === targetKey) { fpChanged = true; const { inventoryItemKey, ...rest } = dr; return rest; }
+            return dr;
+          })
+        ])
+      );
+      if (fpChanged) saveFpData({ ...fpD, drawings: updatedFpDrawings });
+
       reload();
     } else {
       if (isDefault) {
@@ -3877,6 +4335,21 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     saveTodos(nextTodos);
 
     if (selectedItem?.category === category && selectedItem?.item === oldName) setSelectedItem({ category, item: trimmed });
+
+    const fpD = loadFpData();
+    const oldFpKey = `${category}|${oldName}`;
+    const newFpKey = `${category}|${trimmed}`;
+    let fpChanged = false;
+    const updatedFpDrawings = Object.fromEntries(
+      Object.entries(fpD.drawings || {}).map(([lvlId, drawings]) => [
+        lvlId,
+        drawings.map(dr => {
+          if (dr.inventoryItemKey === oldFpKey) { fpChanged = true; return { ...dr, name: trimmed, inventoryItemKey: newFpKey }; }
+          return dr;
+        })
+      ])
+    );
+    if (fpChanged) saveFpData({ ...fpD, drawings: updatedFpDrawings });
 
     reload();
   }
@@ -4811,7 +5284,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <FmHeader active="Inventory" tagline="Inventory" />
       <FmSubnav
-        tabs={["Item List", "Floor Plan", "Outline"]}
+        tabs={["Item List", "Outline"]}
         active={activeTab}
         onTabChange={tab => { setActiveTab(tab); setGroupFilter("all"); }}
         stats={[
@@ -4821,19 +5294,6 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
         ]}
       />
 
-      {activeTab === "Floor Plan" ? (
-        <FloorPlan
-          categories={CATEGORIES}
-          categoryTypes={effectiveCategoryTypes}
-          categoryItems={CATEGORY_ITEMS}
-          entityTypeData={entityTypeData}
-          onCreateCategory={handleCreateCategoryFromFloorPlan}
-          onRenameCategory={handleCategoryRename}
-          onDeleteCategory={handleDeleteClick}
-          onFieldChange={handleCustomFieldValueChange}
-          onChangeCategoryType={handleCategoryTypeChange}
-        />
-      ) : (
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
         <div style={activeTab === "Outline" ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
@@ -5559,7 +6019,6 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
         </div>{/* end right column */}
         </div>{/* end content row */}
       </div>
-      )}
     </div>
   );
 }

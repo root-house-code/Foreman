@@ -5,6 +5,7 @@ const FOREMAN_PAGES = [
   { key: 'Read Me' },
   { key: 'Dashboard' },
   { key: 'Calendar' },
+  { key: 'Floor Plan' },
   { key: 'Inventory' },
   { key: 'Maintenance' },
   { key: 'Chores' },
