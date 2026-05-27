@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
+import { storageGet, storageSet, storageDel } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import {
@@ -12,12 +13,13 @@ import {
 import { defaultData, loadCustomData, saveCustomData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
-import { loadCustomFieldValues, saveCustomFieldValues } from "./lib/customFields.js";
+import { loadItemFieldValues, saveItemFieldValues } from "./lib/customFields.js";
 import { extractPdfText, renderSpecificPages, chunkPageTexts } from "./lib/pdfExtract.js";
 import { extractChunk, mergeResults, resolveAppliance, associateImages } from "./lib/inspectionGroq.js";
 import { storeImageFromDataUrl } from "./lib/images.js";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
+import { useForemanStore } from "./lib/store.js";
 import { loadCategoryTypeOverrides, saveCategoryTypeOverrides } from "./lib/categoryTypes.js";
 import {
   loadEntityTypes, saveEntityTypes,
@@ -40,6 +42,7 @@ const NAV_ITEMS = [
   { key: "household",      label: "Household",          available: true  },
   { key: "categorytypes",  label: "Category Types",     available: true  },
   { key: "notifications",  label: "Notifications",      available: true  },
+  { key: "automation",     label: "Automation",         available: true  },
   { key: "integrations",   label: "Integrations",       available: true  },
   { key: "inspection",     label: "Upload Inspection",  available: true  },
 ];
@@ -51,21 +54,21 @@ const HOUSEHOLD_MEMBERS_KEY = "foreman-household-members";
 const EMPTY_ADDRESS = { street: "", street2: "", city: "", state: "", zip: "" };
 
 function loadAddress() {
-  try { return { ...EMPTY_ADDRESS, ...JSON.parse(localStorage.getItem(HOUSEHOLD_ADDRESS_KEY) || "{}") }; }
+  try { return { ...EMPTY_ADDRESS, ...(storageGet(HOUSEHOLD_ADDRESS_KEY) ?? {}) }; }
   catch { return { ...EMPTY_ADDRESS }; }
 }
 
 function saveAddress(addr) {
-  localStorage.setItem(HOUSEHOLD_ADDRESS_KEY, JSON.stringify(addr));
+  storageSet(HOUSEHOLD_ADDRESS_KEY, addr);
 }
 
 function loadMembers() {
-  try { return JSON.parse(localStorage.getItem(HOUSEHOLD_MEMBERS_KEY) || "[]"); }
+  try { return storageGet(HOUSEHOLD_MEMBERS_KEY) ?? []; }
   catch { return []; }
 }
 
 function saveMembers(members) {
-  localStorage.setItem(HOUSEHOLD_MEMBERS_KEY, JSON.stringify(members));
+  storageSet(HOUSEHOLD_MEMBERS_KEY, members);
 }
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
@@ -774,6 +777,46 @@ function NotificationsSettings() {
   );
 }
 
+// ─── AutomationSettings ───────────────────────────────────────────────────────
+
+function AutomationSettings() {
+  const [autoTodo, setAutoTodo] = useState(
+    () => storageGet("foreman-auto-todo-overdue") === true
+  );
+
+  function handleAutoTodoChange(checked) {
+    setAutoTodo(checked);
+    if (checked) {
+      storageSet("foreman-auto-todo-overdue", true);
+    } else {
+      storageDel("foreman-auto-todo-overdue");
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: "560px" }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Automation</h2>
+      <div style={subheadStyle}>To Dos</div>
+      <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={autoTodo}
+          onChange={e => handleAutoTodoChange(e.target.checked)}
+          style={{ accentColor: "var(--fm-brass)", flexShrink: 0, marginTop: "0.15rem" }}
+        />
+        <div>
+          <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
+            Auto-generate To Dos for overdue maintenance
+          </div>
+          <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, marginTop: "0.2rem" }}>
+            When a maintenance task or chore becomes overdue, automatically create a To Do for it. Off by default — turn on to opt in.
+          </div>
+        </div>
+      </label>
+    </div>
+  );
+}
+
 // ─── IntegrationsSettings ─────────────────────────────────────────────────────
 
 function IntegrationsSettings() {
@@ -1096,10 +1139,7 @@ function HouseholdSettings() {
 function UploadInspectionSettings() {
   const fileInputRef = useRef(null);
 
-  const [meta, setMeta] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(INSPECTION_META_KEY) || "null"); }
-    catch { return null; }
-  });
+  const [meta, setMeta] = useState(() => storageGet(INSPECTION_META_KEY) ?? null);
   const [file, setFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [phase, setPhase] = useState("idle"); // "idle"|"extracting"|"calling"|"review"|"success"
@@ -1129,8 +1169,8 @@ function UploadInspectionSettings() {
 
   function saveMeta(m) {
     setMeta(m);
-    if (m) localStorage.setItem(INSPECTION_META_KEY, JSON.stringify(m));
-    else localStorage.removeItem(INSPECTION_META_KEY);
+    if (m) storageSet(INSPECTION_META_KEY, m);
+    else storageDel(INSPECTION_META_KEY);
   }
 
   function handleFile(f) {
@@ -1226,7 +1266,7 @@ function UploadInspectionSettings() {
     const customRows = loadCustomData();
     const existingKeys = new Set(customRows.map(r => `${r.category}|${r.item}`));
     const newRows = [];
-    const cfValues = loadCustomFieldValues();
+    const cfValues = loadItemFieldValues();
 
     selected.appliances.forEach(a => {
       const resolved = resolveAppliance(a);
@@ -1251,7 +1291,8 @@ function UploadInspectionSettings() {
     });
 
     if (newRows.length > 0) saveCustomData([...customRows, ...newRows]);
-    saveCustomFieldValues(cfValues);
+    saveItemFieldValues(cfValues);
+    useForemanStore.getState().reloadAll();
 
     // Category type overrides for new categories
     if (selected.appliances.length > 0) {
@@ -1580,7 +1621,7 @@ function CategoryTypesSettings() {
   const [addingClass, setAddingClass] = useState(null); // "spatial" | "functional" | null
   const [newLabel, setNewLabel] = useState("");
 
-  function refresh() { setData(loadEntityTypes()); }
+  function refresh() { const d = loadEntityTypes(); setData(d); useForemanStore.getState().setEntityTypes(d); }
 
   function handleRename(typeId, label) {
     renameType(typeId, label);
@@ -1722,6 +1763,7 @@ export default function PreferencesPage({ navigate }) {
           {activeSection === "household"      && <HouseholdSettings />}
           {activeSection === "categorytypes"  && <CategoryTypesSettings />}
           {activeSection === "notifications"  && <NotificationsSettings />}
+          {activeSection === "automation"     && <AutomationSettings />}
           {activeSection === "integrations"   && <IntegrationsSettings />}
           {activeSection === "inspection"     && <UploadInspectionSettings />}
         </div>

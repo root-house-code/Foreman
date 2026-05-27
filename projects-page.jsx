@@ -3,7 +3,8 @@ import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import DatePicker from "react-datepicker";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
-import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
+import { createProject } from "./lib/projects.js";
+import { useForemanStore } from "./lib/store.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
@@ -67,7 +68,7 @@ function statusBadgeStyle(status) {
 }
 
 export default function ProjectsPage({ navigate }) {
-  const [projects, setProjects] = useState(() => loadProjects());
+  const projects = useForemanStore(s => s.projects);
   const [todos, setTodos] = useState(() => loadTodos());
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [selectedTodoId, setSelectedTodoId] = useState(null);
@@ -168,7 +169,7 @@ export default function ProjectsPage({ navigate }) {
   }, [selectedProjectId, rightPanelType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function persistTodos(next) { setTodos(next); saveTodos(next); }
-  function persistProjects(next) { setProjects(next); saveProjects(next); }
+  function persistProjects(next) { useForemanStore.getState().setProjects(next); }
 
   function saveProjectField(field, value) {
     if (!selectedProjectId) return;

@@ -1,7 +1,25 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Component } from "react";
 import { FmNavContext } from "./context/FmNavContext";
+
+class ErrorBoundary extends Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ color: "#ff6b6b", padding: "2rem", fontFamily: "monospace", background: "#1a0000", minHeight: "100vh" }}>
+          <h2 style={{ color: "#ff4444" }}>Render Error</h2>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{this.state.error.message}</pre>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.8em", opacity: 0.7 }}>{this.state.error.stack}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { migrateToEntityTypes } from "../lib/entityTypes.js";
 import { initRoomsFromCategories } from "../lib/rooms.js";
+import { runMigrations } from "../lib/migration.js";
 import HomeMaintenanceTable from "../home-maintenance.jsx";
 import InventoryPage from "../inventory-page.jsx";
 import BoardPage from "../board-page.jsx";
@@ -17,6 +35,7 @@ import FloorPlanPage from "../floor-plan-page.jsx";
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
 initRoomsFromCategories();
+runMigrations();
 
 const PAGE_KEYS = {
   readme: "Read Me",
@@ -67,7 +86,9 @@ export default function App() {
 
   return (
     <FmNavContext.Provider value={navContextValue}>
-      {pageContent()}
+      <ErrorBoundary>
+        {pageContent()}
+      </ErrorBoundary>
     </FmNavContext.Provider>
   );
 }

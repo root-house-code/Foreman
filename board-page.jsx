@@ -1,13 +1,15 @@
 import { useState, useMemo, useEffect, forwardRef } from "react";
+import { storageGet, storageSet } from "./lib/storage.js";
 import { fieldLabel, fieldInput, DueDateBtn, STATUS_COLUMNS, PRIORITY_LABELS } from "./components/ModalShared.jsx";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { createPortal } from "react-dom";
 import DatePicker from "react-datepicker";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
-import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
+import { createProject } from "./lib/projects.js";
 import { loadData } from "./lib/data.js";
 import { loadEntityTypes, isSpatial, isFunctional, isExteriorType, isStructureType, resolveTypeId } from "./lib/entityTypes.js";
+import { useForemanStore } from "./lib/store.js";
 import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
 import AssigneeInput from "./components/AssigneeInput.jsx";
 import TodoModal from "./components/TodoModal.jsx";
@@ -243,7 +245,8 @@ function MaintenanceCompletionModal({ todo, rowDataByKey, onConfirm, onClose }) 
 
 export default function BoardPage({ navigate }) {
   const [todos, setTodos] = useState(() => loadTodos());
-  const [projects, setProjects] = useState(() => loadProjects());
+  const projects = useForemanStore(s => s.projects);
+  const chores   = useForemanStore(s => s.chores);
   const [modalState, setModalState] = useState(null);
   const [maintenanceCompletionTodo, setMaintenanceCompletionTodo] = useState(null);
   const [dragging, setDragging] = useState(null);
@@ -253,7 +256,6 @@ export default function BoardPage({ navigate }) {
   const [assigneeFilter, setAssigneeFilter] = useState(null);
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
-  const [chores] = useState(() => loadChores());
   const [choreNextDates, setChoreNextDates] = useState(() => loadChoreNextDates());
   const [choreCompletedDates, setChoreCompletedDates] = useState(() => loadChoreCompletedDates());
   const [showChoresOnly, setShowChoresOnly] = useState(false);
@@ -319,9 +321,10 @@ export default function BoardPage({ navigate }) {
     return map;
   }, [rows]);
 
-  // Auto-generate overdue maintenance To Dos on mount
+  // Auto-generate overdue maintenance To Dos on mount (opt-in preference)
   useEffect(() => {
-    const nextDatesRaw = JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}");
+    if (storageGet("foreman-auto-todo-overdue") !== true) return;
+    const nextDatesRaw = storageGet("maintenance-next-dates") ?? {};
     const currentTodos = loadTodos();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -345,6 +348,7 @@ export default function BoardPage({ navigate }) {
         linkedItem: row.item,
         status: "not-started",
         priority: "high",
+        labels: ["Maintenance"],
         _maintenanceKey: key,
         _isOverdueMaintenance: true,
       }));
@@ -356,8 +360,9 @@ export default function BoardPage({ navigate }) {
     setTodos(merged);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-generate overdue chore To Dos on mount
+  // Auto-generate overdue chore To Dos on mount (opt-in preference)
   useEffect(() => {
+    if (storageGet("foreman-auto-todo-overdue") !== true) return;
     const nextDatesRaw = loadChoreNextDates();
     const currentTodos = loadTodos();
     const now = new Date();
@@ -386,7 +391,7 @@ export default function BoardPage({ navigate }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function persistTodos(next) { setTodos(next); saveTodos(next); }
-  function persistProjects(next) { setProjects(next); saveProjects(next); }
+  function persistProjects(next) { useForemanStore.getState().setProjects(next); }
 
   function advanceChoreDate(todo) {
     const chore = chores.find(c => c.id === todo._choreId);
@@ -447,7 +452,7 @@ export default function BoardPage({ navigate }) {
     const loc = todo.floorPlanLocation;
     if (!loc) return;
     const FP_KEY = "inventory-floor-plan-v2";
-    const stored = JSON.parse(localStorage.getItem(FP_KEY) || "{}");
+    const stored = storageGet(FP_KEY) ?? {};
     const drawings = stored.drawings || {};
     const lvlDrawings = drawings[loc.levelId] || [];
     const existing = lvlDrawings.find(d => d.todoId === todo.id);
@@ -466,15 +471,15 @@ export default function BoardPage({ navigate }) {
       updated = [...lvlDrawings, { id, name: todo.title || "To Do", ...markerData }];
       persistTodos(todos.map(t => t.id === todo.id ? { ...t, floorPlanLocation: { ...loc, markerId: id } } : t));
     }
-    localStorage.setItem(FP_KEY, JSON.stringify({ ...stored, drawings: { ...drawings, [loc.levelId]: updated } }));
+    storageSet(FP_KEY, { ...stored, drawings: { ...drawings, [loc.levelId]: updated } });
   }
 
   function removeTodoMarkerFromFpData(levelId, markerId) {
     const FP_KEY = "inventory-floor-plan-v2";
-    const stored = JSON.parse(localStorage.getItem(FP_KEY) || "{}");
+    const stored = storageGet(FP_KEY) ?? {};
     const drawings = stored.drawings || {};
     const lvlDrawings = (drawings[levelId] || []).filter(d => d.id !== markerId);
-    localStorage.setItem(FP_KEY, JSON.stringify({ ...stored, drawings: { ...drawings, [levelId]: lvlDrawings } }));
+    storageSet(FP_KEY, { ...stored, drawings: { ...drawings, [levelId]: lvlDrawings } });
   }
 
   function handleDelete(id) {
@@ -536,13 +541,13 @@ export default function BoardPage({ navigate }) {
     if (!todo) return;
     const key = todo._maintenanceKey;
     if (key) {
-      const completedDates = JSON.parse(localStorage.getItem("maintenance-dates") || "{}");
+      const completedDates = storageGet("maintenance-dates") ?? {};
       completedDates[key] = lastCompleted.toISOString();
-      localStorage.setItem("maintenance-dates", JSON.stringify(completedDates));
+      storageSet("maintenance-dates", completedDates);
       if (nextDate) {
-        const nextDates = JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}");
+        const nextDates = storageGet("maintenance-next-dates") ?? {};
         nextDates[key] = nextDate.toISOString();
-        localStorage.setItem("maintenance-next-dates", JSON.stringify(nextDates));
+        storageSet("maintenance-next-dates", nextDates);
       }
     }
     markDone(todo.id);

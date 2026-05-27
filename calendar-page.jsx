@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { storageGet, storageSet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import CategoryTabs from "./components/CategoryTabs.jsx";
@@ -338,8 +339,8 @@ export default function CalendarPage({ navigate }) {
     );
   });
   const [maintenanceStartDates, setMaintenanceStartDates] = useState(() => loadMaintenanceStartDates());
-  const [maintenanceDates, setMaintenanceDates]         = useState(() => { try { return JSON.parse(localStorage.getItem("maintenance-dates") || "{}"); } catch { return {}; } });
-  const [maintenanceNextDates, setMaintenanceNextDates] = useState(() => { try { return JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}"); } catch { return {}; } });
+  const [maintenanceDates, setMaintenanceDates]         = useState(() => storageGet("maintenance-dates") ?? {});
+  const [maintenanceNextDates, setMaintenanceNextDates] = useState(() => storageGet("maintenance-next-dates") ?? {});
   const [view, setView]         = useState({ y: todayYear, m: todayMonth });
   const [createDate, setCreateDate]       = useState(null);
   const [selectedTaskKey, setSelectedTaskKey] = useState(null); // maintenance task awaiting start date
@@ -534,14 +535,14 @@ export default function CalendarPage({ navigate }) {
     if (!completedDate) {
       const next = { ...maintenanceDates };
       delete next[key];
-      localStorage.setItem("maintenance-dates", JSON.stringify(next));
+      storageSet("maintenance-dates", next);
       setMaintenanceDates(next);
       setCompletionEvent(null);
       return;
     }
     saveMaintenanceCompletionRecord(key, { completedAt: completedDate.toISOString(), assignee, notes });
     const updatedDates = { ...maintenanceDates, [key]: completedDate.toISOString() };
-    localStorage.setItem("maintenance-dates", JSON.stringify(updatedDates));
+    storageSet("maintenance-dates", updatedDates);
     setMaintenanceDates(updatedDates);
     const effectiveNext = nextDateOverride || (() => {
       const months = parseMonths(row.schedule);
@@ -552,7 +553,7 @@ export default function CalendarPage({ navigate }) {
     })();
     if (effectiveNext) {
       const updatedNext = { ...maintenanceNextDates, [key]: effectiveNext.toISOString() };
-      localStorage.setItem("maintenance-next-dates", JSON.stringify(updatedNext));
+      storageSet("maintenance-next-dates", updatedNext);
       setMaintenanceNextDates(updatedNext);
     }
     setCompletionEvent(null);

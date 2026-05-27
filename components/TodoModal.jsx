@@ -58,7 +58,12 @@ export default function TodoModal({ todo, initialOverrides, categories, category
   const allRooms = useMemo(() => loadRooms(), []);
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
-  const linkedItems = form.linkedCategory ? (categoryItems[form.linkedCategory] || []) : [];
+  const linkedItems = form.linkedSystem
+    ? (categoryItems[form.linkedSystem] || [])
+    : form.linkedRoom
+      ? (categoryItems[form.linkedRoom] || [])
+      : [];
+  const hasItemContext = !!(form.linkedSystem || form.linkedRoom);
 
   function handleLocationConfirm({ levelId, zone, x, y }) {
     setShowPicker(false);
@@ -191,8 +196,8 @@ export default function TodoModal({ todo, initialOverrides, categories, category
               onChange={e => {
                 const val = e.target.value || null;
                 set("linkedRoom", val);
-                // Keep linkedCategory in sync: room takes priority
-                set("linkedCategory", val || form.linkedSystem || null);
+                // system takes priority for linkedCategory; only fall back to room when no system
+                if (!form.linkedSystem) set("linkedCategory", val);
                 set("linkedItem", null);
               }}>
               <option value="">None</option>
@@ -207,8 +212,8 @@ export default function TodoModal({ todo, initialOverrides, categories, category
               onChange={e => {
                 const val = e.target.value || null;
                 set("linkedSystem", val);
-                // Keep linkedCategory in sync: room takes priority over system
-                if (!form.linkedRoom) set("linkedCategory", val);
+                // system always wins for linkedCategory (determines item dropdown source)
+                set("linkedCategory", val || form.linkedRoom || null);
               }}>
               <option value="">None</option>
               {systemOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
@@ -217,7 +222,7 @@ export default function TodoModal({ todo, initialOverrides, categories, category
           <div style={{ flex: 1 }}>
             <label style={fieldLabel}>Item</label>
             <select value={form.linkedItem || ""} onChange={e => set("linkedItem", e.target.value || null)}
-              style={{ ...fieldSelect, opacity: !form.linkedCategory ? 0.4 : 1 }} disabled={!form.linkedCategory}>
+              style={{ ...fieldSelect, opacity: !hasItemContext ? 0.4 : 1 }} disabled={!hasItemContext}>
               <option value="">—</option>
               {linkedItems.map(item => <option key={item} value={item}>{item}</option>)}
             </select>

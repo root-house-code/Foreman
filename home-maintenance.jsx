@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { storageGet, storageSet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides, defaultData } from "./lib/data.js";
@@ -15,10 +16,10 @@ import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
-import { loadEntityTypes, resolveTypeId, isSpatial } from "./lib/entityTypes.js";
+import { loadEntityTypes, resolveTypeId, isSpatial, isFunctional, isStructureType, isExteriorType } from "./lib/entityTypes.js";
 import { getFloorsInOrder } from "./lib/floors.js";
 import { loadRooms } from "./lib/rooms.js";
-import { loadCustomFieldValues } from "./lib/customFields.js";
+import { loadItemFieldValues } from "./lib/customFields.js";
 import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
@@ -29,14 +30,14 @@ const DEFAULT_CAT_ORDER = Array.from(new Set(defaultData.map(r => r.category)));
 
 function loadFpPlacements() {
   try {
-    const raw = JSON.parse(localStorage.getItem("fp-data") || "{}");
+    const raw = storageGet("fp-data") ?? {};
     return raw.placements || {};
   } catch { return {}; }
 }
 
 function loadDates(key) {
   try {
-    const raw = JSON.parse(localStorage.getItem(key) || "{}");
+    const raw = storageGet(key) ?? {};
     return Object.fromEntries(
       Object.entries(raw).map(([k, v]) => [k, new Date(v)])
     );
@@ -46,10 +47,8 @@ function loadDates(key) {
 }
 
 function saveDates(key, dates) {
-  localStorage.setItem(key, JSON.stringify(
-    Object.fromEntries(
-      Object.entries(dates).map(([k, v]) => [k, v.toISOString()])
-    )
+  storageSet(key, Object.fromEntries(
+    Object.entries(dates).map(([k, v]) => [k, v.toISOString()])
   ));
 }
 
@@ -81,7 +80,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [fpPlacements] = useState(() => loadFpPlacements());
   const [invFloors] = useState(() => getFloorsInOrder());
   const [invRooms] = useState(() => loadRooms());
-  const [customFieldValues] = useState(() => loadCustomFieldValues());
+  const [customFieldValues] = useState(() => loadItemFieldValues());
   const pageHeaderRef = useRef(null);
   const [pageHeaderHeight, setPageHeaderHeight] = useState(0);
 
@@ -99,50 +98,45 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     if (navState.search != null) setSearch(navState.search);
   }, []);
 
+  const catTypeMap = useMemo(() => {
+    const map = {};
+    rows.forEach(row => {
+      if (!row.category) return;
+      if (!row._isCustom && deletedCategories.has(row.category)) return;
+      if (!map[row.category] && !row._isCustom && !row._isBlankCategory) {
+        if (row.categoryType) map[row.category] = row.categoryType;
+      }
+    });
+    return map;
+  }, [rows, deletedCategories]);
+
+  const allActiveCats = useMemo(() => {
+    const s = new Set();
+    rows.forEach(row => {
+      if (!row.category) return;
+      if (!row._isCustom && deletedCategories.has(row.category)) return;
+      if (row._isBlankCategory) { if (row._isCustom) s.add(row.category); return; }
+      s.add(row.category);
+    });
+    return Array.from(s);
+  }, [rows, deletedCategories]);
+
   const categoryGroups = useMemo(() => {
-    // Build fallback type map ONLY from built-in (non-custom, non-blank) rows.
-    // Sentinel/custom rows are excluded so wrongly-tagged rows don't pollute the map.
-    const catTypeMap = {};
-    rows.forEach(row => {
-      if (!row.category) return;
-      if (!row._isCustom && deletedCategories.has(row.category)) return;
-      if (!catTypeMap[row.category] && !row._isCustom && !row._isBlankCategory) {
-        if (row.categoryType) catTypeMap[row.category] = row.categoryType;
-      }
-    });
-
-    // Show categories that have tasks, plus any user-created categories (even
-    // if they have no tasks yet — user created them and expects to see them).
-    const catsWithContent = new Set();
-    rows.forEach(row => {
-      if (!row.category) return;
-      if (!row._isCustom && deletedCategories.has(row.category)) return;
-      if (row._isBlankCategory) {
-        if (row._isCustom) catsWithContent.add(row.category);
-        return;
-      }
-      catsWithContent.add(row.category);
-    });
-
     const groupTypeSet = new Set(GROUP_ORDER);
-
     return GROUP_ORDER.map(type => ({
       type,
       label: GROUP_LABELS[type],
-      tabs: Array.from(catsWithContent)
+      tabs: allActiveCats
         .filter(cat => {
           const oldType = categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system";
           const typeId = resolveTypeId(cat, oldType);
-          // Map typeId to GROUP_ORDER bucket
           if (groupTypeSet.has(typeId)) return typeId === type;
-          // User-created spatial types → "room" bucket
           if (isSpatial(typeId, entityTypeData)) return type === "room";
-          // User-created functional subtypes → "system" bucket
           return type === "system";
         })
         .sort((a, b) => a.localeCompare(b)),
     }));
-  }, [rows, deletedCategories, categoryTypeOverrides, entityTypeData]);
+  }, [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
 
   const categoryLabels = useMemo(() => {
     const labels = {};
@@ -157,20 +151,32 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   }, [categoryGroups, roomSubtypes]);
 
   const systemCats = useMemo(() =>
-    categoryGroups.filter(g => g.type === "system" || g.type === "safety").flatMap(g => g.tabs).sort()
-  , [categoryGroups]);
+    allActiveCats.filter(cat => {
+      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
+      return isFunctional(typeId, entityTypeData) && !isStructureType(typeId, entityTypeData);
+    }).sort()
+  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
 
   const structureCats = useMemo(() =>
-    categoryGroups.find(g => g.type === "structure")?.tabs ?? []
-  , [categoryGroups]);
+    allActiveCats.filter(cat => {
+      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
+      return isStructureType(typeId, entityTypeData);
+    }).sort()
+  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
 
   const exteriorCats = useMemo(() =>
-    categoryGroups.find(g => g.type === "exterior")?.tabs ?? []
-  , [categoryGroups]);
+    allActiveCats.filter(cat => {
+      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
+      return isExteriorType(typeId, entityTypeData);
+    }).sort()
+  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
 
   const roomCats = useMemo(() =>
-    categoryGroups.find(g => g.type === "room")?.tabs.slice().sort() ?? []
-  , [categoryGroups]);
+    allActiveCats.filter(cat => {
+      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
+      return isSpatial(typeId, entityTypeData) && !isExteriorType(typeId, entityTypeData);
+    }).sort()
+  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
 
   const typeOptions = useMemo(() => {
     const seen = new Set();
@@ -225,7 +231,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   function handleNoteChange(key, text) {
     setNotes(prev => {
       const next = { ...prev, [key]: text };
-      localStorage.setItem("maintenance-notes", JSON.stringify(next));
+      storageSet("maintenance-notes", next);
       return next;
     });
   }
@@ -240,14 +246,8 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
   const [completedDates, setCompletedDates] = useState(() => loadDates("maintenance-dates"));
   const [nextDates, setNextDates] = useState(() => loadDates("maintenance-next-dates"));
-  const [notes, setNotes] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("maintenance-notes") || "{}"); }
-    catch { return {}; }
-  });
-  const [followSchedule, setFollowSchedule] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("maintenance-follow") || "{}"); }
-    catch { return {}; }
-  });
+  const [notes, setNotes] = useState(() => storageGet("maintenance-notes") ?? {});
+  const [followSchedule, setFollowSchedule] = useState(() => storageGet("maintenance-follow") ?? {});
   const [reminderModes, setReminderModes] = useState(() => loadReminderModes());
   const [remindersOpen, setRemindersOpen] = useState(false);
 
@@ -298,14 +298,14 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     if (form.notes) {
       setNotes(prev => {
         const next = { ...prev, [key]: form.notes };
-        localStorage.setItem("maintenance-notes", JSON.stringify(next));
+        storageSet("maintenance-notes", next);
         return next;
       });
     }
     if (form.followSchedule) {
       setFollowSchedule(prev => {
         const next = { ...prev, [key]: true };
-        localStorage.setItem("maintenance-follow", JSON.stringify(next));
+        storageSet("maintenance-follow", next);
         return next;
       });
     }
@@ -358,7 +358,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     if (date && followSchedule[key]) {
       setFollowSchedule(prev => {
         const next = { ...prev, [key]: false };
-        localStorage.setItem("maintenance-follow", JSON.stringify(next));
+        storageSet("maintenance-follow", next);
         return next;
       });
     }
@@ -374,7 +374,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     const turningOn = !followSchedule[key];
     setFollowSchedule(prev => {
       const next = { ...prev, [key]: turningOn };
-      localStorage.setItem("maintenance-follow", JSON.stringify(next));
+      storageSet("maintenance-follow", next);
       return next;
     });
 

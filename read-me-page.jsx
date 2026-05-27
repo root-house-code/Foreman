@@ -216,16 +216,16 @@ function ArchTab() {
 
       <ArchSection id="arch-storage" label="Storage" heading="How Foreman Stores Your Data" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
-          Foreman is a local-first application. There is no server, no account, and no internet connection required to use it. Every piece of data you add — tasks, inventory, chores, projects, notes — is saved directly in your browser's built-in storage, called localStorage.
+          Foreman is a local-first application. There is no server, no account, and no internet connection required to use it. Every piece of data you add — tasks, inventory, chores, projects, notes — is saved in IndexedDB, a database built into your browser. Nothing leaves your device unless you explicitly export it.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Think of localStorage as a private filing cabinet inside your browser. Foreman writes to it whenever you make a change, and reads from it every time you open the app. Nothing leaves your device unless you explicitly export it.
+          Think of IndexedDB as a private, structured database inside your browser. Foreman writes to it whenever you make a change, and reads from it every time you open the app. Unlike the older localStorage API it replaced, IndexedDB has no meaningful storage limit — you won't run out of space from normal use.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The tradeoff: your data is private and fast to access, but it's tied to the specific browser and device you use. Clearing your browser's site data would clear Foreman's data along with it.
+          The tradeoff: your data is private and fast to access, but it's tied to the specific browser and device you use. Clearing your browser's site data would clear Foreman's data along with it. Use the Export function in Preferences to keep a portable backup.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem", color: "var(--fm-ink-mute)" }}>
-          For developers: localStorage is a synchronous key-value store with a practical limit of around 5-10MB. Foreman stores all data as JSON strings under named keys using the convention foreman-{"{domain}"} (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
+          For developers: Foreman uses <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>idb-keyval</span> as a thin wrapper over IndexedDB. All storage goes through <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span>, which maintains an in-memory cache populated at startup. Every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>load*()</span> call reads from cache synchronously (no async/await required in React state initializers); every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>save*()</span> call writes to cache immediately and fires an IndexedDB write asynchronously. Keys follow the convention <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman-{"{domain}"}</span> (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
         </p>
       </ArchSection>
 
@@ -233,7 +233,9 @@ function ArchTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {[
             ["React 18", "The UI library. React is the system that keeps the interface in sync with your data. When you mark a task done, React automatically updates every part of the screen that reflects that task without a page refresh."],
+            ["Zustand", "Lightweight global state management. A single store in lib/store.js holds named slices for every domain (rooms, projects, chores, spatial assignments, item fields, and more). Pages subscribe to slices using selectors — when a slice changes, every page that reads it re-renders automatically. This is what makes changes on the Floor Plan immediately visible in Inventory without a reload."],
             ["Vite", "The build tool. Vite packages all the source code into the files your browser actually runs. During development it runs a local server that updates the page instantly when you save a file."],
+            ["idb-keyval", "A minimal wrapper over IndexedDB that provides a simple get/set/del API. Foreman uses this as its storage backend via lib/storage.js, replacing localStorage to eliminate storage size limits."],
             ["TipTap", "The rich-text editor that powers the Notebook page. Supports formatted notes with headings, lists, bold, italic, and code."],
             ["PDF.js", "Used to parse equipment manuals uploaded as PDFs. Parsing happens locally in your browser; no file content is sent anywhere."],
             ["Inter / Newsreader / JetBrains Mono", "The three typefaces used across the design system."],
@@ -251,7 +253,7 @@ function ArchTab() {
 
       <ArchSection id="arch-structure" label="Architecture" heading="Application Structure" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Foreman has 10 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
+          Foreman has 11 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component.
@@ -259,10 +261,14 @@ function ArchTab() {
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Every page uses the same two layout components as its shell: FmHeader (the top bar with navigation) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
         </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>Code is organized into three layers:</p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          A single Zustand store in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/store.js</span> serves as the authoritative source for all cross-page data. Pages subscribe to named slices of the store using selector functions; when a write happens in one place, every subscribed page updates automatically. Each store action persists its change to IndexedDB in the same operation — there is no separate "save" step. The store is seeded from IndexedDB at startup and can be fully reloaded after profile switches or bulk imports via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>reloadAll()</span>.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>Code is organized into four layers:</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
           {[
-            ["lib/", "33 data utility modules, one per domain (chores, maintenance, inventory, rooms, floors, reminders, etc.). Pure functions that read and write localStorage, parse and format data, and compute derived values. No React code."],
+            ["lib/store.js", "The global Zustand store. Holds slices for rooms, floors, floor plan data, spatial assignments, item field values, inventory state, projects, chores, and entity types. Pages read from slices via subscriptions; store actions handle all writes. Calling load*() directly in a page is a code smell after the refactor — the store is the source of truth."],
+            ["lib/", "Data utility modules, one per domain (chores, maintenance, inventory, rooms, floors, reminders, etc.). Pure functions that read and write data via lib/storage.js, parse and format values, and compute derived results. No React code. The storage.js module is the single point of contact with IndexedDB — all other lib files call storageGet/storageSet rather than touching the browser storage API directly."],
             ["components/", "Domain-specific UI components: maintenance table, modals, date pickers, filter pills, schedule pickers."],
             ["src/components/", "Design system components shared across all pages: FmHeader, FmSubnav, FmCard, FmStatusDot, FmSysTag."],
           ].map(([name, desc]) => (
@@ -278,11 +284,12 @@ function ArchTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Maintenance tasks</div>
-            <p style={bodyText}>421 built-in default tasks live in data/maintenance.json. Each task is identified by a composite key: category|item|task (the three values joined with a pipe character). This key is used as a stable reference across multiple localStorage entries — completion records, next due dates, notes, and custom field values all reference it. Custom tasks you create are stored separately and merged in at load time.</p>
+            <p style={bodyText}>421 built-in default tasks live in data/maintenance.json. Each task is identified by a composite key: category|item|task (the three values joined with a pipe character). This key is used as a stable reference across multiple storage entries — completion records, next due dates, notes, and custom field values all reference it. Custom tasks you create are stored separately and merged in at load time.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Inventory</div>
-            <p style={bodyText}>Uses a state map: each category and item carries a status of included, hidden, or archived. Custom field values (manufacturer, model number, serial, warranty, install date) and floor plan placements are stored in separate keys and referenced by the same category/item naming convention.</p>
+            <p style={bodyText}>Uses a state map: each category and item carries a status of included, hidden, or archived. Items are referenced by a stable key — a generated ID for custom items (e.g., <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>custom-1748abc</span>) or a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>default:</span> prefix for built-in items — so renaming an item doesn't break any associated data.</p>
+            <p style={{ ...bodyText, marginTop: "0.6rem" }}>Associated data is split across two stores keyed by stable key. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Spatial assignments</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-spatial-assignments</span>) record which room or exterior zone each item is placed in — this is what the Floor Plan and Outline read to group items by location. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Item field values</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-item-field-values</span>) record detail fields like manufacturer, model number, serial number, warranty expiry, install date, and item type. Both are slices in the global store, so writes on any page propagate everywhere automatically.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Chores</div>
@@ -344,6 +351,7 @@ function ArchTab() {
 // ─── Development Roadmap tab ───────────────────────────────────────────────────
 
 const ROADMAP_SECTIONS = [
+  { id: "road-services", label: "Services" },
   { id: "road-modes",    label: "Offline / Online Mode" },
   { id: "road-mobile",   label: "Mobile App" },
   { id: "road-ha",       label: "Home Assistant" },
@@ -357,7 +365,33 @@ function RoadmapTab() {
     <div>
       <TocNav sections={ROADMAP_SECTIONS} activeSection={activeSection} onSelect={scrollTo} />
 
-      <ArchSection id="road-modes" label="Architecture" heading="Offline / Online Mode" sectionRefs={sectionRefs} first>
+      <ArchSection id="road-services" label="Entity Types" heading="Services &amp; Service Manager" sectionRefs={sectionRefs} first>
+        <p style={bodyText}>
+          Foreman currently models a home through four entity types: rooms, systems, structures, and exterior. The next entity type planned is <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Services</span> — recurring subscriptions and provider relationships that are part of running a home but don't map cleanly to a physical space or mechanical system.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          A service is anything with a recurring cost, a renewal date, and a provider: a Ring doorbell subscription, a pest control plan, a lawn care contract, a pool service, a home warranty. These are real ongoing obligations with real dollar amounts and real renewal cliffs — but Foreman currently has no place to track them.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          The planned <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Service Manager</span> page handles two things in one place:
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginTop: "0.75rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
+          {[
+            ["Subscription tracking", "Each service carries its provider name, cost, billing cycle, renewal date, and cancellation details. At a glance you can see what you're paying for, what renews next, and what you'd need to do to cancel. A renewal calendar surfaces upcoming billing dates across all active subscriptions."],
+            ["Service history", "Each service accumulates a log of visits and events: the exterminator's last quarterly treatment, the lawn care crew's most recent visit, what was done and when. The history log is the same model as maintenance completion records — timestamped entries with notes, tied to the service rather than a physical item."],
+          ].map(([name, desc]) => (
+            <div key={name}>
+              <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
+              <span style={{ ...bodyText, display: "inline" }}> — {desc}</span>
+            </div>
+          ))}
+        </div>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          Services will integrate with the existing data model: a pest control service can be linked to the rooms it covers, a pool service to the relevant exterior area, a home warranty to specific inventory items. The total monthly and annual cost across all active subscriptions will surface on the Dashboard.
+        </p>
+      </ArchSection>
+
+      <ArchSection id="road-modes" label="Architecture" heading="Offline / Online Mode" sectionRefs={sectionRefs}>
         <p style={bodyText}>
           Foreman currently runs entirely in your browser with no required server. The plan is to formalize this into an explicit Offline / Online toggle, giving you clear control over what leaves your device and which capabilities are active.
         </p>

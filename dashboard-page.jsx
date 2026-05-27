@@ -1,4 +1,5 @@
 import { useState, useMemo, forwardRef } from "react";
+import { storageGet, storageSet } from "./lib/storage.js";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -135,14 +136,8 @@ export default function DashboardPage({ navigate }) {
   const projects          = useMemo(() => loadProjects(), []);
 
   // ── Mutable state ────────────────────────────────────────────────────────────
-  const [nextDatesMap, setNextDatesMap] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}"); }
-    catch { return {}; }
-  });
-  const [completedDatesMap, setCompletedDatesMap] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("maintenance-dates") || "{}"); }
-    catch { return {}; }
-  });
+  const [nextDatesMap, setNextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
+  const [completedDatesMap, setCompletedDatesMap] = useState(() => storageGet("maintenance-dates") ?? {});
   const [choreNextDates, setChoreNextDates]           = useState(() => loadChoreNextDates());
   const [choreCompletedDates, setChoreCompletedDates] = useState(() => loadChoreCompletedDates());
   const [logItKey, setLogItKey]   = useState(null);
@@ -364,12 +359,12 @@ export default function DashboardPage({ navigate }) {
       const k = keyOf(item.row);
       const newCompleted = { ...completedDatesMap, [k]: now.toISOString() };
       setCompletedDatesMap(newCompleted);
-      localStorage.setItem("maintenance-dates", JSON.stringify(newCompleted));
+      storageSet("maintenance-dates", newCompleted);
       const nextDate = computeNextDate(now, item.row.schedule, item.row.season);
       if (nextDate) {
         const newNext = { ...nextDatesMap, [k]: nextDate.toISOString() };
         setNextDatesMap(newNext);
-        localStorage.setItem("maintenance-next-dates", JSON.stringify(newNext));
+        storageSet("maintenance-next-dates", newNext);
       }
     } else {
       const c = item.chore;

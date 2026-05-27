@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, Fragment, forwardRef } from "react";
+import { storageGet, storageSet } from "./lib/storage.js";
 import { createPortal } from "react-dom";
 import DatePicker from "react-datepicker";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -6,7 +7,7 @@ import FmSubnav from "./src/components/FmSubnav.jsx";
 import Tooltip from "./components/Tooltip.jsx";
 import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
-import { loadProjects, saveProjects, createProject } from "./lib/projects.js";
+import { createProject } from "./lib/projects.js";
 import { CATEGORY_TIPS, ITEM_TIPS } from "./lib/tooltips.js";
 import {
   loadData, defaultData,
@@ -16,9 +17,15 @@ import {
 import { getCategoriesForGroup, getAllDefaultItems } from "./lib/categoryData.js";
 import { loadDeletedCategories, saveDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems, saveDeletedItems } from "./lib/deletedItems.js";
+import { getItemStableKey } from "./lib/itemKeys.js";
+import { findCategoryStableKey } from "./lib/categoryKeys.js";
 import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
 import { loadItemDetails, saveItemDetails } from "./lib/itemDetails.js";
-import { loadItemFieldSchemas, saveItemFieldSchemas, loadCustomFieldValues, saveCustomFieldValues } from "./lib/customFields.js";
+import {
+  loadItemFieldSchemas, saveItemFieldSchemas,
+  loadSpatialAssignments, saveSpatialAssignments,
+  loadItemFieldValues, saveItemFieldValues,
+} from "./lib/customFields.js";
 import { UNIVERSAL_FIELDS, ITEM_FIELDS } from "./lib/fieldLibrary.js";
 import {
   loadCategoryTypeOverrides,
@@ -49,12 +56,13 @@ import {
   renameType,
   deleteType,
 } from "./lib/entityTypes.js";
-import { loadChores, saveChores } from "./lib/chores.js";
 import { getFloorsInOrder, loadFloors, saveFloors } from "./lib/floors.js";
-import { loadRooms, saveRooms, createRoom, updateRoom } from "./lib/rooms.js";
+import { loadRooms, createRoom, updateRoom } from "./lib/rooms.js";
 import { getManufacturers } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
 import { polygonCentroid } from "./lib/geometry.js";
+import { loadFpData, saveFpData, rectToPolygon } from "./lib/fpData.js";
+import { useForemanStore, selectZoneItems } from "./lib/store.js";
 import { SEASON_OPTIONS } from "./lib/scheduleOptions.js";
 import FollowButton from "./components/FollowButton.jsx";
 import SchedulePicker from "./components/SchedulePicker.jsx";
@@ -292,10 +300,6 @@ const FP_STROKE = {
   safety:    "rgba(224,115,106,0.7)",
 };
 
-function rectToPolygon({ x, y, w, h }) {
-  return { points: [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }] };
-}
-
 function polygonArea(points) {
   let area = 0;
   const n = points.length;
@@ -315,121 +319,6 @@ function pointInPolygon(pt, points) {
   return inside;
 }
 
-function migratePlacements(placements) {
-  const result = {};
-  for (const lvl of Object.keys(placements)) {
-    result[lvl] = {};
-    for (const cat of Object.keys(placements[lvl])) {
-      const r = placements[lvl][cat];
-      result[lvl][cat] = r.points ? r : rectToPolygon(r);
-    }
-  }
-  return result;
-}
-
-function migrateToV3(data) {
-  // 1. Migrate fpData.levels → lib/floors.js (only if floors store is empty)
-  const existingFloors = loadFloors();
-  if (existingFloors.length === 0 && Array.isArray(data.levels)) {
-    const migratedFloors = data.levels.map(level => {
-      const name = level.name || "Floor 1";
-      let kind = "floor", number = 1, glyph = "1";
-      if (name === "Basement") { kind = "basement"; glyph = "B"; number = null; }
-      else if (name === "Attic") { kind = "attic"; glyph = "A"; number = null; }
-      else if (name.toLowerCase().includes("yard") || name.toLowerCase().includes("exterior")) { kind = "yard"; glyph = "G"; number = null; }
-      else {
-        const m = name.match(/^Floor\s+(\d+)$/i);
-        number = m ? parseInt(m[1]) : 1;
-        glyph = String(number);
-      }
-      return { id: level.id, kind, number, label: name, glyph };
-    });
-    saveFloors(migratedFloors);
-  }
-
-  // 2. Rekey placements, zoneItems: catName → roomId using lib/rooms.js entities
-  let allRooms = loadRooms();
-  const newPlacements = {};
-  const newZoneItems = {};
-  const catToRoomMap = {};
-
-  for (const levelId of Object.keys(data.placements)) {
-    newPlacements[levelId] = {};
-    newZoneItems[levelId] = {};
-    catToRoomMap[levelId] = {};
-    for (const catName of Object.keys(data.placements[levelId])) {
-      // Find room matching this category on this floor (may have been seeded with floorId="lvl-1")
-      let room = Object.values(allRooms).find(r => r.floorId === levelId && (r.label === catName || r.categoryName === catName));
-      if (!room) room = Object.values(allRooms).find(r => r.label === catName || r.categoryName === catName);
-      if (!room) {
-        const id = `room-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        room = { id, floorId: levelId, label: catName, type: "room", points: [], items: [], categoryName: catName };
-        allRooms[id] = room;
-      } else if (room.floorId !== levelId) {
-        allRooms[room.id] = { ...room, floorId: levelId };
-        room = allRooms[room.id];
-      }
-      catToRoomMap[levelId][catName] = room.id;
-      newPlacements[levelId][room.id] = data.placements[levelId][catName];
-      const zi = data.zoneItems?.[levelId]?.[catName];
-      if (zi) newZoneItems[levelId][room.id] = zi;
-    }
-  }
-  saveRooms(allRooms);
-
-  // 3. Migrate pin zone refs: catName → roomId
-  const newPins = {};
-  for (const levelId of Object.keys(data.pins || {})) {
-    newPins[levelId] = (data.pins[levelId] || []).map(pin => ({
-      ...pin,
-      zone: catToRoomMap[levelId]?.[pin.zone] || pin.zone,
-    }));
-  }
-
-  const newData = { ...data, placements: newPlacements, zoneItems: newZoneItems, pins: newPins, version: 3 };
-  delete newData.levels;
-  saveFpData(newData);
-  return newData;
-}
-
-function loadFpData() {
-  try {
-    const raw = JSON.parse(localStorage.getItem("inventory-floor-plan-v2") || "null");
-    const hasLevels = raw && Array.isArray(raw.levels) && raw.levels.length > 0;
-    const isV3 = raw && raw.version >= 3 && raw.placements;
-    if (hasLevels || isV3) {
-      let data = { zoneItems: {}, pins: {}, drawings: {}, ...raw, placements: migratePlacements(raw.placements || {}) };
-      // v1 → v2: Re-center legacy 1000×680 content into new 2000×1360 canvas
-      if (!raw.version || raw.version < 2) {
-        const DX = 500, DY = 340;
-        const newPlacements = {};
-        for (const lvl of Object.keys(data.placements)) {
-          newPlacements[lvl] = {};
-          for (const cat of Object.keys(data.placements[lvl])) {
-            newPlacements[lvl][cat] = { points: data.placements[lvl][cat].points.map(p => ({ x: p.x + DX, y: p.y + DY })) };
-          }
-        }
-        const newPins = {};
-        for (const lvl of Object.keys(data.pins || {})) {
-          newPins[lvl] = (data.pins[lvl] || []).map(p => ({ ...p, x: p.x + DX, y: p.y + DY }));
-        }
-        data = { ...data, placements: newPlacements, pins: newPins, version: 2 };
-        saveFpData(data);
-      }
-      // v2 → v3: Rekey from catName to roomId, migrate levels to lib/floors.js
-      if (data.version < 3) {
-        data = migrateToV3(data);
-      }
-      return data;
-    }
-  } catch {}
-  // Default: ensure lib/floors.js has at least one floor
-  if (loadFloors().length === 0) saveFloors([{ id: "lvl-1", kind: "floor", number: 1, label: "Floor 1", glyph: "1" }]);
-  return { placements: {}, zoneItems: {}, pins: {}, drawings: {}, version: 3 };
-}
-function saveFpData(data) {
-  localStorage.setItem("inventory-floor-plan-v2", JSON.stringify(data));
-}
 function fpSnap(v) { return Math.round(v / FP_GRID) * FP_GRID; }
 // For pins: snap whichever of (center, leading edge, trailing edge) lands closest to the raw value.
 // This lets the pin edge sit flush with a zone border rather than center-snapping past it.
@@ -473,10 +362,12 @@ function ColorPickerDropdown({ value, onChange }) {
   );
 }
 
-export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onFieldChange, onChangeCategoryType, onAddItem, customFieldValues, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem }) {
+export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onChangeCategoryType, onAddItem, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem, reverseItemKeyMap, onSelectItem }) {
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
-  const [rooms, setRooms] = useState(() => loadRooms());
+  const rooms = useForemanStore(s => s.rooms);
+  const customFieldValues = useForemanStore(s => s.spatialAssignments);
+  const storeProjects = useForemanStore(s => s.projects);
   const [activeLevel, setActiveLevel] = useState(() => getFloorsInOrder()[0]?.id || "lvl-1");
   const [selected, setSelected] = useState(null);
   const [dragging, setDragging] = useState(null);
@@ -723,16 +614,14 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const lvl = activeLevelRef.current;
     const id = `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
     const levelPins = [...(d.pins?.[lvl] || []), { id, zone, cat, item, x, y }];
-    const currentZoneItems = d.zoneItems?.[lvl]?.[zone] || [];
-    const inZone = currentZoneItems.some(z => z.cat === cat && z.item === item);
-    const newZoneItems = inZone ? currentZoneItems : [...currentZoneItems, { cat, item }];
-    save({
-      ...d,
-      pins: { ...(d.pins || {}), [lvl]: levelPins },
-      zoneItems: { ...(d.zoneItems || {}), [lvl]: { ...(d.zoneItems?.[lvl] || {}), [zone]: newZoneItems } },
-    });
-    const roomLabel = rooms[zone]?.label;
-    if (roomLabel) onFieldChange?.(cat, item, "roomLabel", roomLabel);
+    save({ ...d, pins: { ...(d.pins || {}), [lvl]: levelPins } });
+    const zoneRoom = rooms[zone];
+    if (zoneRoom?.label) {
+      const catName = zoneRoom.categoryName || zoneRoom.label;
+      const isExt = isExteriorTypeUtil(resolveTypeId(catName, categoryTypes?.[catName] || "system"), entityTypeData);
+      const stableKey = itemToKeyMap[`${cat}|${item}`] || `${cat}|${item}`;
+      useForemanStore.getState().assignItemToZone(stableKey, zoneRoom.label, isExt);
+    }
   }
 
   function deletePin(pinId) {
@@ -772,12 +661,12 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const next = { ...d, drawings: { ...(d.drawings || {}), [lvl]: newDrawings } };
     save(next);
     // Update todo in localStorage
-    const todos = JSON.parse(localStorage.getItem("foreman-todos") || "[]");
+    const todos = storageGet("foreman-todos") ?? [];
     const updated = todos.map(t => t.id === dr.todoId
       ? { ...t, floorPlanLocation: { ...t.floorPlanLocation, x, y, ...(newZone ? { zone: newZone } : {}) } }
       : t
     );
-    localStorage.setItem("foreman-todos", JSON.stringify(updated));
+    storageSet("foreman-todos", updated);
   }
 
   function removeTodoMarker(drawId) {
@@ -786,15 +675,29 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const marker = (d.drawings?.[lvl] || []).find(drw => drw.id === drawId);
     if (!marker?.todoId) return;
     save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: (d.drawings?.[lvl] || []).filter(drw => drw.id !== drawId) } });
-    const todos = JSON.parse(localStorage.getItem("foreman-todos") || "[]");
-    localStorage.setItem("foreman-todos", JSON.stringify(todos.map(t => t.id === marker.todoId ? { ...t, floorPlanLocation: null } : t)));
+    const todos = storageGet("foreman-todos") ?? [];
+    storageSet("foreman-todos", todos.map(t => t.id === marker.todoId ? { ...t, floorPlanLocation: null } : t));
     setSelectedTodoMarkerId(null);
   }
 
   function renameRoom(roomId, newLabel) {
-    updateRoom(roomId, { label: newLabel });
-    setRooms(loadRooms());
+    useForemanStore.getState().renameRoom(roomId, newLabel);
     setEditingPanelName(false);
+  }
+
+  function handleDeleteRoom(roomId) {
+    const room = rooms[roomId];
+    if (!window.confirm(`Delete "${room?.label || "this room"}"? All item assignments will be cleared.`)) return;
+    useForemanStore.getState().deleteRoom(roomId);
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const { [roomId]: _, ...restPlacements } = d.placements[lvl] || {};
+    const nextPins = {};
+    for (const lid of Object.keys(d.pins || {})) {
+      nextPins[lid] = (d.pins[lid] || []).filter(p => p.zone !== roomId);
+    }
+    save({ ...d, placements: { ...d.placements, [lvl]: restPlacements }, pins: nextPins });
+    setSelected(null);
   }
 
   function addToCanvas(cat) {
@@ -828,7 +731,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
       const newRoom = createRoom(floorId, cat);
       roomId = newRoom.id;
     }
-    setRooms(loadRooms());
+    useForemanStore.getState().reloadAll();
     const d = fpDataRef.current;
     save({
       ...d,
@@ -1135,17 +1038,17 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             if (zoneRoomId) {
               const id = `pin-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
               const levelPins = [...(d.pins?.[lvl] || []), { id, zone: zoneRoomId, cat, item, x: px, y: py }];
-              const curZI = d.zoneItems?.[lvl]?.[zoneRoomId] || [];
-              const inZone = curZI.some(z => z.cat === cat && z.item === item);
-              const newZI = inZone ? curZI : [...curZI, { cat, item }];
-              const newData = {
-                ...d,
-                pins: { ...(d.pins || {}), [lvl]: levelPins },
-                zoneItems: { ...(d.zoneItems || {}), [lvl]: { ...(d.zoneItems?.[lvl] || {}), [zoneRoomId]: newZI } },
-              };
+              const newData = { ...d, pins: { ...(d.pins || {}), [lvl]: levelPins } };
               fpDataRef.current = newData;
               setFpData(newData);
               saveFpData(newData);
+              const zoneRoom = rooms[zoneRoomId];
+              if (zoneRoom?.label) {
+                const catName = zoneRoom.categoryName || zoneRoom.label;
+                const isExt = isExteriorTypeUtil(resolveTypeId(catName, categoryTypes?.[catName] || "system"), entityTypeData);
+                const stableKey = itemToKeyMap[`${cat}|${item}`] || `${cat}|${item}`;
+                useForemanStore.getState().assignItemToZone(stableKey, zoneRoom.label, isExt);
+              }
             }
           }
         }
@@ -1320,22 +1223,30 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     return (fpData.drawings?.[activeLevel] || []).find(d => d.id === selectedDrawingId) || null;
   }, [fpData, activeLevel, selectedDrawingId]);
 
-  const roomCrossRefItems = useMemo(() => {
+  // Forward map: "cat|item" → stableKey. Used when calling store assignment actions.
+  const itemToKeyMap = useMemo(() => {
     const map = {};
-    Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
-      const room = vals?.roomLabel || vals?.room;
-      if (!room) return;
-      const sep = key.indexOf("|");
-      if (sep === -1) return;
-      const cat = key.slice(0, sep);
-      const item = key.slice(sep + 1);
-      const typeId = resolveTypeId(cat, categoryTypes[cat] || "system");
-      if (isSpatial(typeId, entityTypeData)) return;
-      if (!map[room]) map[room] = [];
-      map[room].push({ cat, item });
+    Object.entries(reverseItemKeyMap || {}).forEach(([stableKey, { category, item }]) => {
+      map[`${category}|${item}`] = stableKey;
     });
     return map;
-  }, [customFieldValues, categoryTypes, entityTypeData]);
+  }, [reverseItemKeyMap]);
+
+  const spatialCrossRefItems = useMemo(() => {
+    const map = {};
+    Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
+      const ref = reverseItemKeyMap?.[key];
+      if (!ref) return;
+      const { category: cat, item } = ref;
+      const typeId = resolveTypeId(cat, categoryTypes[cat] || "system");
+      if (isSpatial(typeId, entityTypeData)) return;
+      const room = vals?.roomLabel;
+      if (room) { if (!map[room]) map[room] = []; map[room].push({ cat, item }); }
+      const ext = vals?.exteriorLabel;
+      if (ext) { if (!map[ext]) map[ext] = []; map[ext].push({ cat, item }); }
+    });
+    return map;
+  }, [customFieldValues, categoryTypes, entityTypeData, reverseItemKeyMap]);
 
   const searchResults = useMemo(() => {
     const q = zoneSearch.trim().toLowerCase();
@@ -1348,23 +1259,28 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
   const selZoneItems = useMemo(() => {
     if (!selected) return [];
-    return (fpData.zoneItems?.[activeLevel]?.[selected]) || [];
-  }, [fpData, activeLevel, selected]);
+    const zoneRoom = rooms[selected];
+    if (!zoneRoom?.label) return [];
+    const storeKeys = (selectZoneItems({ customFieldValues }) || {})[zoneRoom.label] || [];
+    return storeKeys.map(k => reverseItemKeyMap?.[k]).filter(Boolean).map(r => ({ cat: r.category, item: r.item }));
+  }, [customFieldValues, selected, rooms, reverseItemKeyMap]);
 
   function toggleZoneItem(cat, item) {
-    const d = fpDataRef.current;
-    const lvl = activeLevelRef.current;
-    const sel = selected; // roomId
+    const sel = selected;
     if (!sel) return;
-    const current = d.zoneItems?.[lvl]?.[sel] || [];
-    const exists = current.some(z => z.cat === cat && z.item === item);
-    const next = exists
-      ? current.filter(z => !(z.cat === cat && z.item === item))
-      : [...current, { cat, item }];
-    save({
-      ...d,
-      zoneItems: { ...(d.zoneItems || {}), [lvl]: { ...(d.zoneItems?.[lvl] || {}), [sel]: next } },
-    });
+    const zoneRoom = rooms[sel];
+    if (!zoneRoom?.label) return;
+    const catName = zoneRoom.categoryName || zoneRoom.label;
+    const isExt = isExteriorTypeUtil(resolveTypeId(catName, categoryTypes?.[catName] || "system"), entityTypeData);
+    const stableKey = itemToKeyMap[`${cat}|${item}`] || `${cat}|${item}`;
+    const sa = useForemanStore.getState().spatialAssignments;
+    const field = isExt ? "exteriorLabel" : "roomLabel";
+    const exists = sa[stableKey]?.[field] === zoneRoom.label;
+    if (exists) {
+      useForemanStore.getState().removeItemFromZone(stableKey, isExt);
+    } else {
+      useForemanStore.getState().assignItemToZone(stableKey, zoneRoom.label, isExt);
+    }
   }
 
   const activeLevelName = floors.find(f => f.id === activeLevel)?.label || "";
@@ -1826,7 +1742,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             const type = categoryTypes[zoneRoom.label] || "system";
             const isSel = selected === roomId;
             const isDrag = dragging === roomId;
-            const itemCount = (categoryItems[zoneRoom.label]?.length || 0) + (roomCrossRefItems[zoneRoom.label]?.length || 0);
+            const itemCount = (categoryItems[zoneRoom.label]?.length || 0) + (spatialCrossRefItems[zoneRoom.label]?.length || 0);
             const pts = zonePoly.points;
             const ptStr = pts.map(p => `${p.x},${p.y}`).join(" ");
             const { cx, cy } = polygonCentroid(pts);
@@ -2174,7 +2090,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             functionalCategories={functionalCats}
             exteriorCategories={exteriorCats}
             structureCategories={structureCats}
-            projects={loadProjects()}
+            projects={storeProjects}
             onSave={form => {
               const drawingId = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
               const newTodo = createTodo({
@@ -2266,7 +2182,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             <div style={{ display: "flex" }}>
               {[
                 { label: "Area", value: `${Math.round(polygonArea(selRoom.points) / (FP_GRID * FP_GRID))} sq ft` },
-                { label: "Items", value: (categoryItems[selectedRoom?.label]?.length || 0) + (roomCrossRefItems[selectedRoom?.label]?.length || 0) },
+                { label: "Items", value: (categoryItems[selectedRoom?.label]?.length || 0) + (spatialCrossRefItems[selectedRoom?.label]?.length || 0) },
               ].map(({ label, value }, i) => (
                 <div key={label} style={{ borderRight: i < 1 ? "1px solid var(--fm-hairline)" : "none", flex: 1, padding: "0.6rem 0.75rem" }}>
                   <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.54rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>{label}</div>
@@ -2281,7 +2197,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               {/* Section header */}
               <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.45rem 0.75rem 0.4rem" }}>
                 <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  Items · {(categoryItems[selectedRoom?.label]?.length || 0) + (roomCrossRefItems[selectedRoom?.label]?.length || 0)}
+                  Items · {(categoryItems[selectedRoom?.label]?.length || 0) + (spatialCrossRefItems[selectedRoom?.label]?.length || 0)}
                 </span>
                 <button
                   onClick={() => setSelected(null)}
@@ -2294,7 +2210,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               {/* Items in this category */}
               {(() => {
                 const nativeItems = categoryItems[selectedRoom?.label] || [];
-                const cfCrossRefs = roomCrossRefItems[selectedRoom?.label] || [];
+                const cfCrossRefs = spatialCrossRefItems[selectedRoom?.label] || [];
                 const cfKeys = new Set(cfCrossRefs.map(z => `${z.cat}|${z.item}`));
                 const zoneOnlyCrossRefs = selZoneItems.filter(z =>
                   z.cat !== selectedRoom?.label && !cfKeys.has(`${z.cat}|${z.item}`)
@@ -2323,32 +2239,34 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                         ) : (
                           <>
                             {nativeItems.map(item => (
-                              <div key={`native|${item}`} style={{ alignItems: "center", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
+                              <div key={`native|${item}`} style={{ alignItems: "center", cursor: onSelectItem ? "pointer" : "default", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
                                 onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
                                 onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                                onClick={() => onSelectItem?.({ cat: selectedRoom?.label, item })}
                               >
                                 <span
                                   title="Drag to place pin on floor plan"
                                   style={{ color: "var(--fm-ink-dim)", cursor: "grab", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1, paddingRight: "0.1rem", userSelect: "none" }}
-                                  onMouseDown={e => { e.preventDefault(); sidebarDragRef.current = { cat: selectedRoom?.label, item }; }}
+                                  onMouseDown={e => { e.preventDefault(); e.stopPropagation(); sidebarDragRef.current = { cat: selectedRoom?.label, item }; }}
                                 >⠿</span>
                                 <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
                               </div>
                             ))}
                             {crossItems.map(({ cat, item }) => (
-                              <div key={`cross|${cat}|${item}`} style={{ alignItems: "center", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
+                              <div key={`cross|${cat}|${item}`} style={{ alignItems: "center", cursor: onSelectItem ? "pointer" : "default", display: "flex", gap: "0.4rem", padding: "0.28rem 0.75rem" }}
                                 onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
                                 onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                                onClick={() => onSelectItem?.({ cat, item })}
                               >
                                 <span
                                   title="Drag to place pin on floor plan"
                                   style={{ color: "var(--fm-ink-dim)", cursor: "grab", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1, paddingRight: "0.1rem", userSelect: "none" }}
-                                  onMouseDown={e => { e.preventDefault(); sidebarDragRef.current = { cat, item }; }}
+                                  onMouseDown={e => { e.preventDefault(); e.stopPropagation(); sidebarDragRef.current = { cat, item }; }}
                                 >⠿</span>
                                 <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
                                 <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.05em" }}>{cat.slice(0, 3).toUpperCase()}</span>
                                 <button
-                                  onClick={() => toggleZoneItem(cat, item)}
+                                  onClick={e => { e.stopPropagation(); toggleZoneItem(cat, item); }}
                                   title="Remove from zone"
                                   style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1, padding: "0 0.1rem", transition: "color 0.1s" }}
                                   onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
@@ -2423,13 +2341,21 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             </div>
 
             {/* Footer */}
-            <div style={{ borderTop: "1px solid var(--fm-hairline)", padding: "0.7rem 1rem" }}>
+            <div style={{ borderTop: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.7rem 1rem" }}>
               <button
                 onClick={() => removeFromCanvas(selected)}
+                title="Remove zone polygon from canvas (keeps room entity and assignments)"
                 style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", padding: "0.45rem 0.85rem", textTransform: "uppercase", transition: "all 0.1s" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-red)"; e.currentTarget.style.color = "var(--fm-red)"; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
               >Remove Zone</button>
+              <button
+                onClick={() => handleDeleteRoom(selected)}
+                title="Permanently delete room and clear all item assignments"
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", padding: "0.45rem 0.85rem", textTransform: "uppercase", transition: "all 0.1s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-red)"; e.currentTarget.style.color = "var(--fm-red)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+              >Delete Room</button>
             </div>
           </>
         ) : (
@@ -2589,10 +2515,10 @@ const INV_STATUS_META = {
   empty:   { color: "var(--fm-ink-dim)", label: "Empty"   },
 };
 
-function getInvItemStatus(itemDetails, cat, item) {
-  const detail = itemDetails?.[`${cat}|${item}`];
+function getInvItemStatus(itemDetails, cat, item, stableKey = null) {
+  const detail = itemDetails?.[stableKey] ?? itemDetails?.[`${cat}|${item}`];
   if (!detail) return "empty";
-  if (detail.mfr || detail.model) return "active";
+  if (detail.mfr || detail.model || detail.manufacturer) return "active";
   if (detail.serial || detail.purchaseDate) return "partial";
   return "empty";
 }
@@ -2607,7 +2533,7 @@ function getInvSysTag(cat) {
   return INV_SYS_ABBR[cat] || (cat || "").slice(0, 4).toUpperCase();
 }
 
-function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, onRefreshEntityTypes, onCreateCategory, onAddItem, customFieldValues, onSelectItem, onDeleteCategory, onRenameCategory }) {
+function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, onRefreshEntityTypes, onCreateCategory, onAddItem, customFieldValues, reverseItemKeyMap, onSelectItem, onDeleteCategory, onRenameCategory }) {
   const [addingChildOf,       setAddingChildOf]       = useState(null);
   const [newChildLabel,       setNewChildLabel]       = useState("");
   const [editingTypeId,       setEditingTypeId]       = useState(null);
@@ -2621,6 +2547,8 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
   const [hoveredCat,           setHoveredCat]           = useState(null);
   const [editingCatName,       setEditingCatName]       = useState(null);
   const [editingCatLabel,      setEditingCatLabel]      = useState("");
+  const categoryCommittedRef = useRef(false);
+  const itemCommittedRef     = useRef(false);
 
   const catsByType = useMemo(() => {
     const map = {};
@@ -2634,38 +2562,65 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
 
   const crossRefByRoom = useMemo(() => {
     const map = {};
+    const seen = {};
     Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
       const room = vals?.roomLabel || vals?.room;
       if (!room) return;
-      const sepIdx = key.indexOf("|");
-      if (sepIdx === -1) return;
-      const cat  = key.slice(0, sepIdx);
-      const item = key.slice(sepIdx + 1);
+      const lookup = reverseItemKeyMap?.[key];
+      if (!lookup) return;
+      const { category: cat, item } = lookup;
       const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
       if (isSpatial(catTypeId, entityTypeData)) return;
+      const dedupeKey = `${room}\x00${cat}\x00${item}`;
+      if (seen[dedupeKey]) return;
+      seen[dedupeKey] = true;
       if (!map[room]) map[room] = [];
       map[room].push({ category: cat, item });
     });
     return map;
-  }, [customFieldValues, categoryTypes, entityTypeData]);
+  }, [customFieldValues, categoryTypes, entityTypeData, reverseItemKeyMap]);
 
   // Items from spatial categories that declare a system association → appear under that functional system
   const crossRefBySystem = useMemo(() => {
     const map = {};
+    const seen = {};
     Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
       const system = vals?.systemCategory || vals?.system;
       if (!system) return;
-      const sepIdx = key.indexOf("|");
-      if (sepIdx === -1) return;
-      const cat  = key.slice(0, sepIdx);
-      const item = key.slice(sepIdx + 1);
+      const lookup = reverseItemKeyMap?.[key];
+      if (!lookup) return;
+      const { category: cat, item } = lookup;
       const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
       if (isFunctional(catTypeId, entityTypeData)) return;
+      const dedupeKey = `${system}\x00${cat}\x00${item}`;
+      if (seen[dedupeKey]) return;
+      seen[dedupeKey] = true;
       if (!map[system]) map[system] = [];
       map[system].push({ category: cat, item });
     });
     return map;
-  }, [customFieldValues, categoryTypes, entityTypeData]);
+  }, [customFieldValues, categoryTypes, entityTypeData, reverseItemKeyMap]);
+
+  // Items from non-exterior categories that declare an exterior association → appear under that exterior
+  const crossRefByExterior = useMemo(() => {
+    const map = {};
+    const seen = {};
+    Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
+      const ext = ('exteriorLabel' in (vals || {})) ? vals.exteriorLabel : null;
+      if (!ext) return;
+      const lookup = reverseItemKeyMap?.[key];
+      if (!lookup) return;
+      const { category: cat, item } = lookup;
+      const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
+      if (isExteriorTypeUtil(catTypeId, entityTypeData)) return;
+      const dedupeKey = `${ext}\x00${cat}\x00${item}`;
+      if (seen[dedupeKey]) return;
+      seen[dedupeKey] = true;
+      if (!map[ext]) map[ext] = [];
+      map[ext].push({ category: cat, item });
+    });
+    return map;
+  }, [customFieldValues, categoryTypes, entityTypeData, reverseItemKeyMap]);
 
   function commitAdd(parentId) {
     const label = newChildLabel.trim();
@@ -2690,16 +2645,18 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
 
   function commitAddCategory(typeId) {
     const name = newCategoryName.trim();
-    if (name) onCreateCategory(name, typeId);
     setAddingCategoryToType(null);
     setNewCategoryName("");
+    if (name) onCreateCategory?.(name, typeId);
+    categoryCommittedRef.current = false;
   }
 
   function commitAddItem(cat) {
     const name = newItemName.trim();
-    if (name) onAddItem(cat, name);
     setAddingItemToCategory(null);
     setNewItemName("");
+    if (name) onAddItem?.(cat, name);
+    itemCommittedRef.current = false;
   }
 
   function commitCatRename(oldName) {
@@ -2720,10 +2677,13 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
     const cats = catsByType[type.id] || [];
     const mergedCat = cats.find(c => c.toLowerCase() === type.label.toLowerCase()) || null;
     const mergedCatItems = mergedCat ? (categoryItems?.[mergedCat] || []) : [];
-    const mergedCrossRefs = mergedCat && isSpatial(resolveTypeId(mergedCat, categoryTypes?.[mergedCat] || "system"), entityTypeData)
+    const mergedCatTypeId = mergedCat ? resolveTypeId(mergedCat, categoryTypes?.[mergedCat] || "system") : null;
+    const mergedCrossRefs = mergedCat && isSpatial(mergedCatTypeId, entityTypeData) && !isExteriorTypeUtil(mergedCatTypeId, entityTypeData)
       ? (crossRefByRoom[mergedCat] || []) : [];
-    const mergedSystemCrossRefs = mergedCat && isFunctional(resolveTypeId(mergedCat, categoryTypes?.[mergedCat] || "system"), entityTypeData)
+    const mergedSystemCrossRefs = mergedCat && isFunctional(mergedCatTypeId, entityTypeData)
       ? (crossRefBySystem[mergedCat] || []) : [];
+    const mergedExteriorCrossRefs = mergedCat && isExteriorTypeUtil(mergedCatTypeId, entityTypeData)
+      ? (crossRefByExterior[mergedCat] || []) : [];
     const isEditing    = editingTypeId === type.id;
     const isHovered    = hoveredTypeId === type.id;
     const isAddingHere = addingChildOf === type.id;
@@ -2772,7 +2732,7 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
             </span>
           )}
           {mergedCat
-            ? (mergedCatItems.length + mergedCrossRefs.length + mergedSystemCrossRefs.length) > 0 && <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{mergedCatItems.length + mergedCrossRefs.length + mergedSystemCrossRefs.length}</span>
+            ? (mergedCatItems.length + mergedCrossRefs.length + mergedSystemCrossRefs.length + mergedExteriorCrossRefs.length) > 0 && <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{mergedCatItems.length + mergedCrossRefs.length + mergedSystemCrossRefs.length + mergedExteriorCrossRefs.length}</span>
             : cats.length > 0 && <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>{cats.length}</span>
           }
           {isHovered && (
@@ -2825,9 +2785,9 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
               placeholder="Category name…"
               value={newCategoryName}
               onChange={e => setNewCategoryName(e.target.value)}
-              onBlur={() => commitAddCategory(type.id)}
+              onBlur={() => { if (!categoryCommittedRef.current) commitAddCategory(type.id); }}
               onKeyDown={e => {
-                if (e.key === "Enter") commitAddCategory(type.id);
+                if (e.key === "Enter") { e.preventDefault(); categoryCommittedRef.current = true; commitAddCategory(type.id); }
                 if (e.key === "Escape") { setAddingCategoryToType(null); setNewCategoryName(""); }
               }}
               style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 180 }}
@@ -2839,8 +2799,9 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
         {!isCollapsed && cats.map(cat => {
           const items = categoryItems?.[cat] || [];
           const catTypeId = resolveTypeId(cat, categoryTypes?.[cat] || "system");
-          const crossRefs = isSpatial(catTypeId, entityTypeData) ? (crossRefByRoom[cat] || []) : [];
+          const crossRefs = (isSpatial(catTypeId, entityTypeData) && !isExteriorTypeUtil(catTypeId, entityTypeData)) ? (crossRefByRoom[cat] || []) : [];
           const systemCrossRefs = isFunctional(catTypeId, entityTypeData) ? (crossRefBySystem[cat] || []) : [];
+          const exteriorCrossRefs = isExteriorTypeUtil(catTypeId, entityTypeData) ? (crossRefByExterior[cat] || []) : [];
           const crossRefStyle = { alignItems: "center", color: "var(--fm-ink-mute)", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", gap: "0.3rem", paddingBottom: "0.05rem", paddingTop: "0.05rem", transition: "color 0.1s" };
 
           if (cat.toLowerCase() === type.label.toLowerCase()) {
@@ -2874,6 +2835,15 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
                   {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
                 </div>
               )),
+              ...exteriorCrossRefs.map(({ category: xCat, item: xItem }) => (
+                <div key={`xref-ext-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
+                  style={{ ...crossRefStyle, paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem` }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >
+                  {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
+                </div>
+              )),
               addingItemToCategory === cat && (
                 <div key="__add-item" style={{ paddingLeft: `${(depth + 1) * 1.4 + 0.5}rem`, paddingTop: "0.15rem", paddingBottom: "0.1rem" }}>
                   <input
@@ -2881,9 +2851,9 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
                     placeholder="Item name…"
                     value={newItemName}
                     onChange={e => setNewItemName(e.target.value)}
-                    onBlur={() => commitAddItem(cat)}
+                    onBlur={() => { if (!itemCommittedRef.current) commitAddItem(cat); }}
                     onKeyDown={e => {
-                      if (e.key === "Enter") commitAddItem(cat);
+                      if (e.key === "Enter") { e.preventDefault(); itemCommittedRef.current = true; commitAddItem(cat); }
                       if (e.key === "Escape") { setAddingItemToCategory(null); setNewItemName(""); }
                     }}
                     style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 180 }}
@@ -2918,7 +2888,7 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
                     style={{ cursor: "text" }}
                   >{cat}</span>
                 )}
-                {editingCatName !== cat && (items.length + crossRefs.length + systemCrossRefs.length) > 0 && <span style={{ color: "var(--fm-ink-mute)" }}>{items.length + crossRefs.length + systemCrossRefs.length}</span>}
+                {editingCatName !== cat && (items.length + crossRefs.length + systemCrossRefs.length + exteriorCrossRefs.length) > 0 && <span style={{ color: "var(--fm-ink-mute)" }}>{items.length + crossRefs.length + systemCrossRefs.length + exteriorCrossRefs.length}</span>}
                 {hoveredCat === cat && (
                   <>
                     <button
@@ -2941,9 +2911,9 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
                     placeholder="Item name…"
                     value={newItemName}
                     onChange={e => setNewItemName(e.target.value)}
-                    onBlur={() => commitAddItem(cat)}
+                    onBlur={() => { if (!itemCommittedRef.current) commitAddItem(cat); }}
                     onKeyDown={e => {
-                      if (e.key === "Enter") commitAddItem(cat);
+                      if (e.key === "Enter") { e.preventDefault(); itemCommittedRef.current = true; commitAddItem(cat); }
                       if (e.key === "Escape") { setAddingItemToCategory(null); setNewItemName(""); }
                     }}
                     style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem", outline: "none", padding: "0.15rem 0.4rem", width: 180 }}
@@ -2972,6 +2942,15 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
               ))}
               {systemCrossRefs.map(({ category: xCat, item: xItem }) => (
                 <div key={`xref-sys-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
+                  style={{ ...crossRefStyle, paddingLeft: `${(depth + 2) * 1.4 + 0.5}rem` }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                >
+                  {xItem}<span style={{ color: "var(--fm-ink-mute)", fontSize: "0.52rem", opacity: 0.6 }}>· {xCat}</span>
+                </div>
+              ))}
+              {exteriorCrossRefs.map(({ category: xCat, item: xItem }) => (
+                <div key={`xref-ext-${xCat}|${xItem}`} onClick={() => onSelectItem?.({ category: xCat, item: xItem })}
                   style={{ ...crossRefStyle, paddingLeft: `${(depth + 2) * 1.4 + 0.5}rem` }}
                   onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
                   onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
@@ -3039,7 +3018,281 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
   );
 }
 
-function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTypeData, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange }) {
+// ─── Overview Tab ────────────────────────────────────────────────────────────
+
+const OVERVIEW_GRID_KEY = "foreman-overview-grid";
+const OVERVIEW_DEFAULT_COL_LABELS = ["Appliances", "Fixtures", "Construction", "Column 4", "Column 5", "Column 6", "Column 7", "Column 8"];
+const OVERVIEW_DEFAULT_COLS = OVERVIEW_DEFAULT_COL_LABELS.map((label, i) => ({
+  id: `ov-col-${i + 1}`,
+  label,
+}));
+
+function loadOverviewGrid() {
+  try {
+    const stored = storageGet(OVERVIEW_GRID_KEY);
+    if (stored && Array.isArray(stored.columns)) return stored;
+  } catch {}
+  return { columns: OVERVIEW_DEFAULT_COLS, cells: {} };
+}
+
+function saveOverviewGrid(data) {
+  storageSet(OVERVIEW_GRID_KEY, data);
+}
+
+function OverviewTab({ rooms, exteriors }) {
+  const [grid, setGrid]               = useState(() => loadOverviewGrid());
+  const [editingCell, setEditingCell] = useState(null); // { row, colId }
+  const [editValue, setEditValue]     = useState("");
+  const [editingColId, setEditingColId] = useState(null);
+  const [editColLabel, setEditColLabel] = useState("");
+  const colCommittedRef = useRef(false);
+  const [dragCol, setDragCol] = useState(null);
+  const [dragOverCol, setDragOverCol] = useState(null);
+
+  const { columns, cells } = grid;
+
+  function cellKey(row, colId) { return `${row}\x00${colId}`; }
+  function getCell(row, colId) { return cells[cellKey(row, colId)] ?? null; }
+
+  function openCellEdit(row, colId) {
+    const val = getCell(row, colId);
+    const text = val == null ? "" : Array.isArray(val) ? val.join("\n") : val;
+    setEditingCell({ row, colId });
+    setEditValue(text);
+  }
+
+  function commitCell() {
+    if (!editingCell) return;
+    const { row, colId } = editingCell;
+    const lines = editValue.split("\n").map(l => l.trim()).filter(Boolean);
+    const newVal = lines.length === 0 ? null : lines.length === 1 ? lines[0] : lines;
+    const key = cellKey(row, colId);
+    const next = { ...grid, cells: { ...cells, [key]: newVal } };
+    setGrid(next);
+    saveOverviewGrid(next);
+    setEditingCell(null);
+    setEditValue("");
+  }
+
+  function reorderColumns(fromId, toId) {
+    if (fromId === toId) return;
+    const cols = [...columns];
+    const fromIdx = cols.findIndex(c => c.id === fromId);
+    const toIdx   = cols.findIndex(c => c.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = cols.splice(fromIdx, 1);
+    cols.splice(toIdx, 0, moved);
+    const next = { ...grid, columns: cols };
+    setGrid(next);
+    saveOverviewGrid(next);
+  }
+
+  function commitColRename() {
+    if (!editingColId) return;
+    const label = editColLabel.trim() || columns.find(c => c.id === editingColId)?.label || editingColId;
+    const next = { ...grid, columns: columns.map(c => c.id === editingColId ? { ...c, label } : c) };
+    setGrid(next);
+    saveOverviewGrid(next);
+    setEditingColId(null);
+    setEditColLabel("");
+    colCommittedRef.current = false;
+  }
+
+  function renderCellValue(val) {
+    if (val == null) return null;
+    if (Array.isArray(val)) {
+      return (
+        <ul style={{ listStyle: "disc", margin: 0, padding: "0 0 0 1.1rem" }}>
+          {val.map((v, i) => (
+            <li key={i} style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", lineHeight: 1.5 }}>{v}</li>
+          ))}
+        </ul>
+      );
+    }
+    return <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5 }}>{val}</span>;
+  }
+
+  const COL_W = 180;
+
+  const thBase = {
+    background: "var(--fm-bg-panel)",
+    borderBottom: "2px solid var(--fm-hairline2)",
+    borderRight: "1px solid var(--fm-hairline)",
+    color: "var(--fm-brass-dim)",
+    fontFamily: "var(--fm-mono)",
+    fontSize: "0.58rem",
+    letterSpacing: "0.12em",
+    padding: "0.55rem 0.75rem",
+    textAlign: "left",
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+  };
+
+  const tdLabel = {
+    background: "var(--fm-bg-panel)",
+    borderBottom: "1px solid var(--fm-hairline)",
+    borderRight: "2px solid var(--fm-hairline2)",
+    color: "var(--fm-ink)",
+    fontFamily: "var(--fm-mono)",
+    fontSize: "0.7rem",
+    fontWeight: 500,
+    left: 0,
+    minWidth: COL_W,
+    padding: "0.5rem 0.75rem",
+    position: "sticky",
+    userSelect: "none",
+    verticalAlign: "middle",
+    zIndex: 1,
+  };
+
+  const tdCell = {
+    borderBottom: "1px solid var(--fm-hairline)",
+    borderRight: "1px solid var(--fm-hairline)",
+    cursor: "pointer",
+    minWidth: COL_W,
+    padding: "0.45rem 0.6rem",
+    verticalAlign: "top",
+    width: COL_W,
+  };
+
+  const sectionHeaderTd = {
+    background: "var(--fm-bg-sunk)",
+    borderBottom: "1px solid var(--fm-hairline2)",
+    borderTop: "1px solid var(--fm-hairline2)",
+    color: "var(--fm-brass)",
+    fontFamily: "var(--fm-mono)",
+    fontSize: "0.54rem",
+    letterSpacing: "0.15em",
+    padding: "0.3rem 0.75rem",
+    textTransform: "uppercase",
+  };
+
+  function renderSection(label, rows) {
+    if (rows.length === 0) return null;
+    return (
+      <>
+        <tr>
+          <td style={{ ...sectionHeaderTd, left: 0, position: "sticky", zIndex: 1 }}>{label}</td>
+          {columns.map(col => <td key={col.id} style={{ ...sectionHeaderTd, borderLeft: "none" }} />)}
+        </tr>
+        {rows.map(row => (
+          <tr key={row}>
+            <td style={tdLabel}>{row}</td>
+            {columns.map(col => {
+              const val = getCell(row, col.id);
+              const isEditing = editingCell?.row === row && editingCell?.colId === col.id;
+              return (
+                <td
+                  key={col.id}
+                  style={{ ...tdCell, background: isEditing ? "var(--fm-bg-sunk)" : "transparent" }}
+                  onClick={() => !isEditing && openCellEdit(row, col.id)}
+                >
+                  {isEditing ? (
+                    <textarea
+                      autoFocus
+                      value={editValue}
+                      onChange={e => setEditValue(e.target.value)}
+                      onBlur={commitCell}
+                      onKeyDown={e => {
+                        if (e.key === "Escape") { setEditingCell(null); setEditValue(""); }
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitCell(); }
+                      }}
+                      placeholder={"Enter value…\n(Shift+Enter for list items)"}
+                      style={{ background: "transparent", border: "none", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5, minHeight: 64, outline: "none", padding: 0, resize: "vertical", width: "100%" }}
+                    />
+                  ) : (
+                    <div style={{ minHeight: 20 }}>{renderCellValue(val)}</div>
+                  )}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.06em", marginBottom: "0.4rem", paddingLeft: "0.1rem" }}>
+        Drag a column header to reorder · Double-click to rename · Click a cell to edit · Enter to save · Shift+Enter for multiple values · Escape to cancel
+      </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <table style={{ borderCollapse: "collapse", tableLayout: "fixed", width: "max-content" }}>
+          <thead>
+            <tr>
+              <th style={{ ...thBase, left: 0, minWidth: COL_W, position: "sticky", top: 0, zIndex: 3 }}>
+                Spatial Location
+              </th>
+              {columns.map(col => {
+                const isDragging  = dragCol === col.id;
+                const isDragOver  = dragOverCol === col.id && dragCol !== col.id;
+                return (
+                  <th
+                    key={col.id}
+                    draggable={editingColId !== col.id}
+                    onDragStart={e => {
+                      setDragCol(col.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={e => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragOverCol !== col.id) setDragOverCol(col.id);
+                    }}
+                    onDrop={e => {
+                      e.preventDefault();
+                      if (dragCol) reorderColumns(dragCol, col.id);
+                      setDragCol(null);
+                      setDragOverCol(null);
+                    }}
+                    onDragEnd={() => { setDragCol(null); setDragOverCol(null); }}
+                    style={{
+                      ...thBase,
+                      borderLeft: isDragOver ? "2px solid var(--fm-brass)" : undefined,
+                      cursor: editingColId === col.id ? "text" : "grab",
+                      minWidth: COL_W,
+                      opacity: isDragging ? 0.35 : 1,
+                      position: "sticky",
+                      top: 0,
+                      transition: "opacity 0.1s",
+                      width: COL_W,
+                      zIndex: 2,
+                    }}
+                  >
+                    {editingColId === col.id ? (
+                      <input
+                        autoFocus
+                        value={editColLabel}
+                        onChange={e => setEditColLabel(e.target.value)}
+                        onBlur={() => { if (!colCommittedRef.current) commitColRename(); }}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") { colCommittedRef.current = true; commitColRename(); }
+                          if (e.key === "Escape") { setEditingColId(null); setEditColLabel(""); }
+                        }}
+                        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", outline: "none", padding: "0.15rem 0.4rem", textTransform: "none", width: "100%" }}
+                      />
+                    ) : (
+                      <span onDoubleClick={() => { setEditingColId(col.id); setEditColLabel(col.label); }} style={{ cursor: "text", userSelect: "none" }} title="Drag to reorder · Double-click to rename">
+                        {col.label}
+                      </span>
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {renderSection("Rooms", rooms)}
+            {renderSection("Exterior", exteriors)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTypeData, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange, itemStableKeyMap }) {
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [newItemCat, setNewItemCat] = useState("");
@@ -3050,6 +3303,8 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
   const [editingTypeDraft, setEditingTypeDraft] = useState("");
   const [editingRoomRow, setEditingRoomRow] = useState(null);
   const [editingRoomDraft, setEditingRoomDraft] = useState("");
+  const [editingExteriorRow, setEditingExteriorRow] = useState(null);
+  const [editingExteriorDraft, setEditingExteriorDraft] = useState("");
   const [editingSystemRow, setEditingSystemRow] = useState(null);
   const [editingSystemDraft, setEditingSystemDraft] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -3066,8 +3321,8 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
 
   const allRows = useMemo(() =>
     categories.flatMap(cat =>
-      (categoryItems[cat] || []).map(item => ({ cat, item, key: `${cat}|${item}` }))
-    ), [categories, categoryItems]);
+      (categoryItems[cat] || []).map(item => ({ cat, item, key: itemStableKeyMap?.[`${cat}|${item}`] ?? `${cat}|${item}` }))
+    ), [categories, categoryItems, itemStableKeyMap]);
 
   // Walk up parent chain to check if a typeId is rooted at "structure"
   const isStructureType = useMemo(() => (typeId) => {
@@ -3136,17 +3391,23 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
 
   const filtered = useMemo(() => {
     let rows = allRows;
-    if (statusFilter !== "ALL") rows = rows.filter(r => getInvItemStatus(itemDetails, r.cat, r.item) === statusFilter.toLowerCase());
+    if (statusFilter !== "ALL") rows = rows.filter(r => getInvItemStatus(itemDetails, r.cat, r.item, r.key) === statusFilter.toLowerCase());
     if (systemFilter !== "ALL") rows = rows.filter(r => {
       if (r.cat === systemFilter) return true;
       const cf = customFieldValues?.[r.key];
       return (cf?.systemCategory || cf?.system || "") === systemFilter;
     });
     if (structureFilter !== "ALL") rows = rows.filter(r => r.cat === structureFilter);
-    if (exteriorFilter !== "ALL") rows = rows.filter(r => r.cat === exteriorFilter);
+    if (exteriorFilter !== "ALL") rows = rows.filter(r => {
+      const cf = customFieldValues?.[r.key] || {};
+      const ext = ('exteriorLabel' in cf) ? (cf.exteriorLabel || "") : "";
+      return r.cat === exteriorFilter || ext === exteriorFilter;
+    });
     if (roomFilter !== "ALL") rows = rows.filter(r => {
       if (r.cat === roomFilter) return true;
-      return (customFieldValues?.[r.key]?.roomLabel || customFieldValues?.[r.key]?.room || "") === roomFilter;
+      const cf = customFieldValues?.[r.key] || {};
+      const rm = ('roomLabel' in cf) ? (cf.roomLabel || "") : (cf.room || "");
+      return rm === roomFilter;
     });
     if (levelFilter !== "ALL") {
       const placedRoomIds = Object.keys(fpData.placements[levelFilter] || {});
@@ -3162,7 +3423,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       let cmp = 0;
       if (sortCol.col === "status") {
         const order = { active: 0, partial: 1, empty: 2 };
-        cmp = (order[getInvItemStatus(itemDetails, a.cat, a.item)] ?? 3) - (order[getInvItemStatus(itemDetails, b.cat, b.item)] ?? 3);
+        cmp = (order[getInvItemStatus(itemDetails, a.cat, a.item, a.key)] ?? 3) - (order[getInvItemStatus(itemDetails, b.cat, b.item, b.key)] ?? 3);
       } else if (sortCol.col === "item") {
         cmp = a.item.localeCompare(b.item) || a.cat.localeCompare(b.cat);
       } else if (sortCol.col === "manufacturer") {
@@ -3175,11 +3436,16 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
         cmp = ma.localeCompare(mb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "type") {
         cmp = (customFieldValues?.[a.key]?.item_type || "").localeCompare(customFieldValues?.[b.key]?.item_type || "") || a.item.localeCompare(b.item);
+      } else if (sortCol.col === "exterior") {
+        const cfA = customFieldValues?.[a.key] || {}, cfB = customFieldValues?.[b.key] || {};
+        const ea = ('exteriorLabel' in cfA) ? (cfA.exteriorLabel || "") : (isExteriorType(resolveTypeId(a.cat, categoryTypes?.[a.cat] || "system")) ? a.cat : "");
+        const eb = ('exteriorLabel' in cfB) ? (cfB.exteriorLabel || "") : (isExteriorType(resolveTypeId(b.cat, categoryTypes?.[b.cat] || "system")) ? b.cat : "");
+        cmp = ea.localeCompare(eb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "room") {
-        const aOldType = categoryTypes?.[a.cat] || "system";
-        const bOldType = categoryTypes?.[b.cat] || "system";
-        const ra = (customFieldValues?.[a.key]?.roomLabel || customFieldValues?.[a.key]?.room) || (isSpatial(resolveTypeId(a.cat, aOldType), entityTypeData) ? a.cat : "");
-        const rb = (customFieldValues?.[b.key]?.roomLabel || customFieldValues?.[b.key]?.room) || (isSpatial(resolveTypeId(b.cat, bOldType), entityTypeData) ? b.cat : "");
+        const aOldType = categoryTypes?.[a.cat] || "system", bOldType = categoryTypes?.[b.cat] || "system";
+        const cfA = customFieldValues?.[a.key] || {}, cfB = customFieldValues?.[b.key] || {};
+        const ra = ('roomLabel' in cfA) ? (cfA.roomLabel || "") : (cfA.room || (isSpatial(resolveTypeId(a.cat, aOldType), entityTypeData) ? a.cat : ""));
+        const rb = ('roomLabel' in cfB) ? (cfB.roomLabel || "") : (cfB.room || (isSpatial(resolveTypeId(b.cat, bOldType), entityTypeData) ? b.cat : ""));
         cmp = ra.localeCompare(rb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "system") {
         const sa = customFieldValues?.[a.key]?.system || a.cat;
@@ -3327,6 +3593,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
               { label: "System",       col: "system",       width: "65px"  },
               { label: "Type",         col: "type",         width: "100px" },
               { label: "Room",         col: "room",         width: "130px" },
+              { label: "Exterior",     col: "exterior",     width: "120px" },
               { label: "Item",         col: "item",         width: "200px" },
               { label: "Manufacturer", col: "manufacturer", width: "160px" },
               { label: "Model",        col: "model",        width: "160px" },
@@ -3348,7 +3615,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
         </thead>
         <tbody>
           {filtered.map(({ cat, item, key }) => {
-            const status = getInvItemStatus(itemDetails, cat, item);
+            const status = getInvItemStatus(itemDetails, cat, item, key);
             const { color, label } = INV_STATUS_META[status];
             const hasDetail = !!(itemDetails?.[key]);
             const existingTypes = [...new Set(Object.values(customFieldValues || {}).map(v => v?.item_type).filter(Boolean))].sort();
@@ -3359,12 +3626,15 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             const catTypeId = resolveTypeId(cat, catOldType);
             const catIsSpatial = isSpatial(catTypeId, entityTypeData);
             const catIsFunctional = isFunctional(catTypeId, entityTypeData);
+            const catIsExterior = catIsSpatial && isExteriorType(catTypeId);
 
-            // Room: if item's category is already Spatial, the category IS the room (read-only)
-            // Otherwise, user picks which Spatial category this item lives in
-            const resolvedRoom = catIsSpatial
-              ? cat
-              : (customFieldValues?.[key]?.roomLabel || customFieldValues?.[key]?.room || "");
+            const cfVals = customFieldValues?.[key] || {};
+            const resolvedRoom = 'roomLabel' in cfVals
+              ? (cfVals.roomLabel ?? "")
+              : (cfVals.room || (catIsSpatial ? cat : ""));
+            const resolvedExterior = 'exteriorLabel' in cfVals
+              ? (cfVals.exteriorLabel ?? "")
+              : (catIsExterior ? cat : "");
 
             // System: if item's category is already Functional, the category IS the system (read-only)
             // Otherwise, user picks which Functional category this item belongs to
@@ -3448,16 +3718,14 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                   )}
                 </td>
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
-                  {catIsSpatial ? (
-                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }} title="Category is a room — location is the category itself">{cat}</span>
-                  ) : editingRoomRow === key ? (
+                  {editingRoomRow === key ? (
                     <ComboInput
                       autoFocus
                       value={editingRoomDraft}
                       onChange={v => setEditingRoomDraft(v)}
-                      onBlur={() => { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim()); setEditingRoomRow(null); }}
+                      onBlur={() => { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim() || null); setEditingRoomRow(null); }}
                       onKeyDown={e => {
-                        if (e.key === "Enter") { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim()); setEditingRoomRow(null); }
+                        if (e.key === "Enter") { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim() || null); setEditingRoomRow(null); }
                         if (e.key === "Escape") setEditingRoomRow(null);
                       }}
                       options={roomOptions}
@@ -3470,6 +3738,30 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                       title="Double-click to set room location"
                     >
                       {resolvedRoom || "—"}
+                    </span>
+                  )}
+                </td>
+                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
+                  {editingExteriorRow === key ? (
+                    <ComboInput
+                      autoFocus
+                      value={editingExteriorDraft}
+                      onChange={v => setEditingExteriorDraft(v)}
+                      onBlur={() => { onFieldChange?.(cat, item, "exteriorLabel", editingExteriorDraft.trim() || null); setEditingExteriorRow(null); }}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") { onFieldChange?.(cat, item, "exteriorLabel", editingExteriorDraft.trim() || null); setEditingExteriorRow(null); }
+                        if (e.key === "Escape") setEditingExteriorRow(null);
+                      }}
+                      options={exteriorCats}
+                      style={{ border: "1px solid var(--fm-brass)", fontSize: "0.78rem", padding: "0.15rem 0.4rem" }}
+                    />
+                  ) : (
+                    <span
+                      style={{ color: resolvedExterior ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minHeight: "1.2em", minWidth: "2rem" }}
+                      onDoubleClick={() => { setEditingExteriorDraft(resolvedExterior || ""); setEditingExteriorRow(key); }}
+                      title="Double-click to set exterior location"
+                    >
+                      {resolvedExterior || "—"}
                     </span>
                   )}
                 </td>
@@ -3536,7 +3828,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
           })}
           {filtered.length === 0 && (
             <tr>
-              <td colSpan={8} style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "2rem 0.5rem", textAlign: "center" }}>
+              <td colSpan={9} style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "2rem 0.5rem", textAlign: "center" }}>
                 No items match the current filters.
               </td>
             </tr>
@@ -3569,7 +3861,7 @@ export default function InventoryPage({ navigate, navState }) {
         return;
       }
       if (!row.category || !row.item) return;
-      if (deletedItems.has(`${row.category}|${row.item}`)) return;
+      if (deletedItems.has(getItemStableKey(row))) return;
       if (!map[row.category]) map[row.category] = [];
       if (!map[row.category].includes(row.item)) map[row.category].push(row.item);
     });
@@ -3577,6 +3869,29 @@ export default function InventoryPage({ navigate, navState }) {
   }, [rows, deletedCategories, deletedItems]);
 
   const CATEGORIES = Object.keys(CATEGORY_ITEMS);
+
+  const itemStableKeyMap = useMemo(() => {
+    const map = {};
+    rows.forEach(r => {
+      if (r.category && r.item) {
+        const nameKey = `${r.category}|${r.item}`;
+        if (!(nameKey in map)) map[nameKey] = getItemStableKey(r);
+      }
+    });
+    return map;
+  }, [rows]);
+
+  // Reverse of itemStableKeyMap: stableKey → { category, item }
+  const reverseItemKeyMap = useMemo(() => {
+    const map = {};
+    rows.forEach(r => {
+      if (r.category && r.item) {
+        const stableKey = getItemStableKey(r);
+        if (!(stableKey in map)) map[stableKey] = { category: r.category, item: r.item };
+      }
+    });
+    return map;
+  }, [rows]);
 
   const defaultCategoryTypes = useMemo(() => {
     const map = {};
@@ -3596,6 +3911,8 @@ export default function InventoryPage({ navigate, navState }) {
   const [activeTab, setActiveTab] = useState("Item List");
   const [customGroupTypes, setCustomGroupTypes] = useState(() => loadCustomGroupTypes());
   const [groupLabelOverrides, setGroupLabelOverrides] = useState(() => loadGroupLabelOverrides());
+  const [groupFilter, setGroupFilter] = useState("all");
+  const [deleteGroupPrompt, setDeleteGroupPrompt] = useState(null);
 
 
   const effectiveCategoryTypes = useMemo(() => {
@@ -3676,7 +3993,7 @@ export default function InventoryPage({ navigate, navState }) {
   const [todos, setTodos] = useState(() => loadTodos());
   const [addingTodo, setAddingTodo] = useState(false);
   const [newTodoTitle, setNewTodoTitle] = useState("");
-  const [projects, setProjects] = useState(() => loadProjects());
+  const projects = useForemanStore(s => s.projects);
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [deleteProjectPrompt, setDeleteProjectPrompt] = useState(null);
@@ -3688,21 +4005,49 @@ export default function InventoryPage({ navigate, navState }) {
   const [deleteTodoPrompt, setDeleteTodoPrompt] = useState(null);
   const [hoveredTodoId, setHoveredTodoId] = useState(null);
   const [deletedRows, setDeletedRows] = useState(() => loadDeletedRows());
-  const [nextDatesMap, setNextDatesMapInv] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}"); }
-    catch { return {}; }
-  });
+  const [nextDatesMap, setNextDatesMapInv] = useState(() => storageGet("maintenance-next-dates") ?? {});
   const [suggestedTasks, setSuggestedTasks] = useState(null); // null | Array<{task,schedule,season,selected}>
   const [suggestedFor, setSuggestedFor] = useState(null); // { category, item }
   const [fetchingTasks, setFetchingTasks] = useState(false);
   const [fetchError, setFetchError] = useState(null);
   const [itemFieldSchemas, setItemFieldSchemas] = useState(() => loadItemFieldSchemas());
-  const [customFieldValues, setCustomFieldValues] = useState(() => loadCustomFieldValues());
+  const _spatialAssignments = useForemanStore(s => s.spatialAssignments);
+  const _itemFieldValues    = useForemanStore(s => s.itemFieldValues);
+  const customFieldValues   = useMemo(() => {
+    const out = {};
+    const keys = new Set([...Object.keys(_spatialAssignments), ...Object.keys(_itemFieldValues)]);
+    keys.forEach(k => {
+      out[k] = { ...(_spatialAssignments[k] || {}), ...(_itemFieldValues[k] || {}) };
+    });
+    return out;
+  }, [_spatialAssignments, _itemFieldValues]);
+  const selectedItemKey   = useForemanStore(s => s.selectedItemKey);
   const [showFieldPicker, setShowFieldPicker] = useState(false);
   const [newField, setNewField] = useState({ name: "", type: "text", options: "" });
   const [roomSubtypes, setRoomSubtypes] = useState(() => loadRoomSubtypes());
-  const [entityTypeData, setEntityTypeData] = useState(() => loadEntityTypes());
-  function refreshEntityTypes() { setEntityTypeData(loadEntityTypes()); }
+  const entityTypeData = useForemanStore(s => s.entityTypes);
+  function refreshEntityTypes() { useForemanStore.getState().setEntityTypes(loadEntityTypes()); }
+
+  // Wrapper around setSelectedItem that enriches the selection with a stable key
+  // so the detail panel can look up customFieldValues / itemDetails by ID, not name.
+  function handleSelectItem(spec) {
+    const r = rows.find(rr => rr._isCustom && rr.category === spec.category && rr.item === spec.item)
+           ?? rows.find(rr => rr.category === spec.category && rr.item === spec.item);
+    setSelectedItem({ ...spec, stableKey: r ? getItemStableKey(r) : `${spec.category}|${spec.item}` });
+  }
+
+  // When another page calls openItemDetail(stableKey) and navigates here, auto-open the panel.
+  useEffect(() => {
+    if (!selectedItemKey) return;
+    const ref = reverseItemKeyMap[selectedItemKey];
+    if (ref) {
+      handleSelectItem({ category: ref.category, item: ref.item });
+    } else {
+      const [cat, ...parts] = selectedItemKey.split("|");
+      if (cat && parts.length) handleSelectItem({ category: cat, item: parts.join("|") });
+    }
+    useForemanStore.getState().closeItemDetail();
+  }, [selectedItemKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const itemTasks = useMemo(() => {
     if (!selectedItem) return [];
@@ -3712,7 +4057,7 @@ export default function InventoryPage({ navigate, navState }) {
       !r._isBlankCategory &&
       r.task &&
       !(!r._isCustom && deletedCategories.has(r.category)) &&
-      !deletedItems.has(`${r.category}|${r.item}`) &&
+      !deletedItems.has(getItemStableKey(r)) &&
       !deletedRows.has(`${r.category}|${r.item}|${r.task}`)
     );
   }, [rows, selectedItem, deletedRows, deletedCategories, deletedItems]);
@@ -3738,7 +4083,7 @@ export default function InventoryPage({ navigate, navState }) {
     rows.forEach(row => {
       if (row._isBlankCategory || !row.category || !row.item || !row.task) return;
       if (!row._isCustom && deletedCategories.has(row.category)) return;
-      if (deletedItems.has(`${row.category}|${row.item}`)) return;
+      if (deletedItems.has(getItemStableKey(row))) return;
       const drKey = `${row.category}|${row.item}|${row.task}`;
       if (deletedRows.has(drKey)) return;
       const itemKey = `${row.category}|${row.item}`;
@@ -3766,24 +4111,24 @@ export default function InventoryPage({ navigate, navState }) {
     const customs = loadCustomData();
     saveCustomData([...customs, newRow]);
     if (newTask.lastCompleted) {
-      const dates = JSON.parse(localStorage.getItem("maintenance-dates") || "{}");
+      const dates = storageGet("maintenance-dates") ?? {};
       dates[key] = new Date(newTask.lastCompleted).toISOString();
-      localStorage.setItem("maintenance-dates", JSON.stringify(dates));
+      storageSet("maintenance-dates", dates);
     }
     if (newTask.nextDate) {
-      const nextDates = JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}");
+      const nextDates = storageGet("maintenance-next-dates") ?? {};
       nextDates[key] = new Date(newTask.nextDate).toISOString();
-      localStorage.setItem("maintenance-next-dates", JSON.stringify(nextDates));
+      storageSet("maintenance-next-dates", nextDates);
     }
     if (newTask.notes) {
-      const notes = JSON.parse(localStorage.getItem("maintenance-notes") || "{}");
+      const notes = storageGet("maintenance-notes") ?? {};
       notes[key] = newTask.notes;
-      localStorage.setItem("maintenance-notes", JSON.stringify(notes));
+      storageSet("maintenance-notes", notes);
     }
     if (newTask.followSchedule) {
-      const follow = JSON.parse(localStorage.getItem("maintenance-follow") || "{}");
+      const follow = storageGet("maintenance-follow") ?? {};
       follow[key] = true;
-      localStorage.setItem("maintenance-follow", JSON.stringify(follow));
+      storageSet("maintenance-follow", follow);
     }
     reload();
     setAddingTask(false);
@@ -3807,24 +4152,24 @@ export default function InventoryPage({ navigate, navState }) {
     const customs = loadCustomData();
     saveCustomData([...customs, newRow]);
     if (form.lastCompleted) {
-      const dates = JSON.parse(localStorage.getItem("maintenance-dates") || "{}");
+      const dates = storageGet("maintenance-dates") ?? {};
       dates[key] = new Date(form.lastCompleted).toISOString();
-      localStorage.setItem("maintenance-dates", JSON.stringify(dates));
+      storageSet("maintenance-dates", dates);
     }
     if (form.nextDate) {
-      const nextDates = JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}");
+      const nextDates = storageGet("maintenance-next-dates") ?? {};
       nextDates[key] = new Date(form.nextDate).toISOString();
-      localStorage.setItem("maintenance-next-dates", JSON.stringify(nextDates));
+      storageSet("maintenance-next-dates", nextDates);
     }
     if (form.notes) {
-      const notes = JSON.parse(localStorage.getItem("maintenance-notes") || "{}");
+      const notes = storageGet("maintenance-notes") ?? {};
       notes[key] = form.notes;
-      localStorage.setItem("maintenance-notes", JSON.stringify(notes));
+      storageSet("maintenance-notes", notes);
     }
     if (form.followSchedule) {
-      const follow = JSON.parse(localStorage.getItem("maintenance-follow") || "{}");
+      const follow = storageGet("maintenance-follow") ?? {};
       follow[key] = true;
-      localStorage.setItem("maintenance-follow", JSON.stringify(follow));
+      storageSet("maintenance-follow", follow);
     }
     reload();
     setAddTaskModalOpen(false);
@@ -3910,22 +4255,25 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     setSuggestedFor(null);
   }
 
-  function handleCustomFieldValueChange(category, item, fieldId, value) {
-    const key = `${category}|${item}`;
-    const next = { ...customFieldValues, [key]: { ...(customFieldValues[key] || {}), [fieldId]: value } };
-    setCustomFieldValues(next);
-    saveCustomFieldValues(next);
+  function handleCustomFieldValueChange(category, item, fieldId, value, stableKey = null) {
+    let key = stableKey;
+    if (!key) {
+      const row = rows.find(r => r._isCustom && r.category === category && r.item === item)
+               ?? rows.find(r => r.category === category && r.item === item);
+      key = row ? getItemStableKey(row) : `${category}|${item}`;
+    }
+    useForemanStore.getState().setCustomField(key, fieldId, value);
   }
 
-  function handleAddItemField(category, item, field) {
-    const key = `${category}|${item}`;
+  function handleAddItemField(category, item, field, stableKey = null) {
+    const key = stableKey ?? `${category}|${item}`;
     const next = { ...itemFieldSchemas, [key]: [...(itemFieldSchemas[key] || []), field] };
     setItemFieldSchemas(next);
     saveItemFieldSchemas(next);
   }
 
-  function handleDeleteItemField(category, item, fieldId) {
-    const key = `${category}|${item}`;
+  function handleDeleteItemField(category, item, fieldId, stableKey = null) {
+    const key = stableKey ?? `${category}|${item}`;
     const next = { ...itemFieldSchemas, [key]: (itemFieldSchemas[key] || []).filter(f => f.id !== fieldId) };
     setItemFieldSchemas(next);
     saveItemFieldSchemas(next);
@@ -3956,21 +4304,17 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
   function handleAddProject() {
     const name = newProjectName.trim();
     if (!name || !selectedItem) return;
-    const next = [...projects, createProject({
+    useForemanStore.getState().addProject(createProject({
       name,
       linkedCategory: selectedItem.category,
       linkedItem: selectedItem.item,
-    })];
-    setProjects(next);
-    saveProjects(next);
+    }));
     setNewProjectName("");
     setAddingProject(false);
   }
 
   function handleDeleteProject(project) {
-    const next = projects.filter(p => p.id !== project.id);
-    setProjects(next);
-    saveProjects(next);
+    useForemanStore.getState().deleteProject(project.id);
     setDeleteProjectPrompt(null);
   }
 
@@ -3982,7 +4326,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
   useEffect(() => {
     const legacyDetails = loadItemDetails();
     if (!legacyDetails || Object.keys(legacyDetails).length === 0) return;
-    const existingValues = loadCustomFieldValues();
+    const existingValues = loadItemFieldValues();
     const existingSchemas = loadItemFieldSchemas();
     let valuesChanged = false;
     let schemasChanged = false;
@@ -4010,7 +4354,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
         }
       });
     });
-    if (valuesChanged) { saveCustomFieldValues(existingValues); setCustomFieldValues(existingValues); }
+    if (valuesChanged) { saveItemFieldValues(existingValues); useForemanStore.getState().reloadAll(); }
     if (schemasChanged) { saveItemFieldSchemas(existingSchemas); setItemFieldSchemas(existingSchemas); }
   }, []);
 
@@ -4105,7 +4449,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
 
   function handleItemDetailChange(category, item, field, value) {
-    const key = `${category}|${item}`;
+    const row = rows.find(r => r._isCustom && r.category === category && r.item === item)
+             ?? rows.find(r => r.category === category && r.item === item);
+    const key = row ? getItemStableKey(row) : `${category}|${item}`;
     const next = { ...itemDetails, [key]: { ...(itemDetails[key] || {}), [field]: value } };
     setItemDetails(next);
     saveItemDetails(next);
@@ -4153,13 +4499,34 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     setDeletePrompt(null);
 
     if (item) {
+      // Resolve the stable key for this item
+      const targetRow = rows.find(r => r._isCustom && r.category === category && r.item === item)
+                     ?? rows.find(r => r.category === category && r.item === item);
+      const stableKey = targetRow ? getItemStableKey(targetRow) : `${category}|${item}`;
+
       if (isDefault) {
-        const next = new Set([...deletedItems, `${category}|${item}`]);
+        const next = new Set([...deletedItems, stableKey]);
         saveDeletedItems(next);
         setDeletedItems(next);
       }
       const customs = loadCustomData();
-      saveCustomData(customs.filter(r => !(r.category === category && r.item === item)));
+      // For custom items: filter by _id to avoid hitting a same-named custom item
+      if (targetRow?._isCustom && targetRow?._id) {
+        saveCustomData(customs.filter(r => r._id !== targetRow._id));
+      } else {
+        saveCustomData(customs.filter(r => !(r.category === category && r.item === item)));
+      }
+
+      // Clear from lookup stores by stable key
+      const sp = loadSpatialAssignments();
+      const spHad = stableKey in sp;
+      if (spHad) { delete sp[stableKey]; saveSpatialAssignments(sp); }
+      const ifv = loadItemFieldValues();
+      const ifvHad = stableKey in ifv;
+      if (ifvHad) { delete ifv[stableKey]; saveItemFieldValues(ifv); }
+      if (spHad || ifvHad) useForemanStore.getState().reloadAll();
+      const detailsMap = loadItemDetails();
+      if (detailsMap[stableKey] !== undefined) { delete detailsMap[stableKey]; saveItemDetails(detailsMap); setItemDetails(detailsMap); }
 
       const fpD = loadFpData();
       const targetKey = `${category}|${item}`;
@@ -4188,9 +4555,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       saveCustomData(customs.filter(r => r.category !== category));
 
       // Phase 4: null out chore.room / todo.linkedRoom / project.linkedRoom references
-      const chores = loadChores();
+      const chores = useForemanStore.getState().chores;
       const updatedChores = chores.map(c => c.room === category ? { ...c, room: null, roomId: null } : c);
-      if (updatedChores.some((c, i) => c !== chores[i])) saveChores(updatedChores);
+      if (updatedChores.some((c, i) => c !== chores[i])) useForemanStore.getState().setChores(updatedChores);
 
       const todos = loadTodos();
       const updatedTodos = todos.map(t => {
@@ -4202,14 +4569,14 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       });
       if (updatedTodos.some((t, i) => t !== todos[i])) saveTodos(updatedTodos);
 
-      const projects = loadProjects();
-      const updatedProjects = projects.map(p => {
+      const currentProjects = useForemanStore.getState().projects;
+      const updatedProjects = currentProjects.map(p => {
         const updates = {};
         if (p.linkedRoom === category) updates.linkedRoom = null;
         if (p.linkedSystem === category) updates.linkedSystem = null;
         return Object.keys(updates).length ? { ...p, ...updates } : p;
       });
-      if (updatedProjects.some((p, i) => p !== projects[i])) saveProjects(updatedProjects);
+      if (updatedProjects.some((p, i) => p !== currentProjects[i])) useForemanStore.getState().setProjects(updatedProjects);
 
       reload();
     }
@@ -4268,13 +4635,13 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     }
 
     // Phase 4: cascade rename to chores, todos, projects
-    const etData = loadEntityTypes();
+    const etData = useForemanStore.getState().entityTypes;
     const typeId = resolveTypeId(oldName, effectiveCategoryTypes[oldName] || "system");
     const isRoomRename = isSpatial(typeId, etData);
 
-    const chores = loadChores();
-    const updatedChores = chores.map(c => c.room === oldName ? { ...c, room: trimmed } : c);
-    if (updatedChores.some((c, i) => c.room !== chores[i].room)) saveChores(updatedChores);
+    const storeChores = useForemanStore.getState().chores;
+    const updatedChores = storeChores.map(c => c.room === oldName ? { ...c, room: trimmed } : c);
+    if (updatedChores.some((c, i) => c.room !== storeChores[i].room)) useForemanStore.getState().setChores(updatedChores);
 
     const todos = loadTodos();
     const updatedTodos = todos.map(t => {
@@ -4285,13 +4652,13 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     });
     if (updatedTodos.some((t, i) => t !== todos[i])) saveTodos(updatedTodos);
 
-    const projects = loadProjects();
-    const updatedProjects = projects.map(p => {
+    const storeProjects = useForemanStore.getState().projects;
+    const updatedProjects = storeProjects.map(p => {
       if (isRoomRename && p.linkedRoom === oldName) return { ...p, linkedRoom: trimmed };
       if (!isRoomRename && p.linkedSystem === oldName) return { ...p, linkedSystem: trimmed };
       return p;
     });
-    if (updatedProjects.some((p, i) => p !== projects[i])) saveProjects(updatedProjects);
+    if (updatedProjects.some((p, i) => p !== storeProjects[i])) useForemanStore.getState().setProjects(updatedProjects);
 
     reload();
   }
@@ -4313,17 +4680,29 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     });
     saveOverrides(overrides);
 
-    const oldKey = `${category}|${oldName}`;
-    const newKey = `${category}|${trimmed}`;
+    // For custom items the stable key is _id — unchanged by rename, no re-keying needed.
+    // For default items the stable key encodes the name, so we must re-key.
+    const renamedRow = rows.find(r => r._isCustom && r.category === category && r.item === oldName)
+                    ?? rows.find(r => r.category === category && r.item === oldName);
+    const isCustomItem = renamedRow?._isCustom;
 
-    const details = loadItemDetails();
-    if (details[oldKey] !== undefined) { details[newKey] = details[oldKey]; delete details[oldKey]; saveItemDetails(details); setItemDetails(details); }
+    if (!isCustomItem) {
+      const oldKey = `default:${category}|${oldName}`;
+      const newKey = `default:${category}|${trimmed}`;
 
-    const cfVals = loadCustomFieldValues();
-    if (cfVals[oldKey] !== undefined) { cfVals[newKey] = cfVals[oldKey]; delete cfVals[oldKey]; saveCustomFieldValues(cfVals); setCustomFieldValues(cfVals); }
+      const details = loadItemDetails();
+      if (details[oldKey] !== undefined) { details[newKey] = details[oldKey]; delete details[oldKey]; saveItemDetails(details); setItemDetails(details); }
 
-    const cfSchemas = loadItemFieldSchemas();
-    if (cfSchemas[oldKey] !== undefined) { cfSchemas[newKey] = cfSchemas[oldKey]; delete cfSchemas[oldKey]; saveItemFieldSchemas(cfSchemas); setItemFieldSchemas(cfSchemas); }
+      const sp = loadSpatialAssignments();
+      const ifv = loadItemFieldValues();
+      let rekey = false;
+      if (oldKey in sp)  { sp[newKey]  = sp[oldKey];  delete sp[oldKey];  saveSpatialAssignments(sp);  rekey = true; }
+      if (oldKey in ifv) { ifv[newKey] = ifv[oldKey]; delete ifv[oldKey]; saveItemFieldValues(ifv);    rekey = true; }
+      if (rekey) useForemanStore.getState().reloadAll();
+
+      const cfSchemas = loadItemFieldSchemas();
+      if (cfSchemas[oldKey] !== undefined) { cfSchemas[newKey] = cfSchemas[oldKey]; delete cfSchemas[oldKey]; saveItemFieldSchemas(cfSchemas); setItemFieldSchemas(cfSchemas); }
+    }
 
     const oldPrefix = `${category}|${oldName}|`;
     const newDels = new Set([...deletedRows].map(k => k.startsWith(oldPrefix) ? `${category}|${trimmed}|${k.slice(oldPrefix.length)}` : k));
@@ -4334,7 +4713,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     setTodos(nextTodos);
     saveTodos(nextTodos);
 
-    if (selectedItem?.category === category && selectedItem?.item === oldName) setSelectedItem({ category, item: trimmed });
+    if (selectedItem?.category === category && selectedItem?.item === oldName) handleSelectItem({ category, item: trimmed });
 
     const fpD = loadFpData();
     const oldFpKey = `${category}|${oldName}`;
@@ -4364,8 +4743,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       saveCustomData(customs.map(r => r._id === originalRow._id ? { ...r, task: taskName, schedule: newTask.schedule || "", season: newTask.season || null } : r));
       if (taskName !== originalRow.task) {
         ["maintenance-dates", "maintenance-next-dates", "maintenance-notes", "maintenance-follow"].forEach(k => {
-          const d = JSON.parse(localStorage.getItem(k) || "{}");
-          if (d[oldKey] !== undefined) { d[newKey] = d[oldKey]; delete d[oldKey]; localStorage.setItem(k, JSON.stringify(d)); }
+          const d = storageGet(k) ?? {};
+          if (d[oldKey] !== undefined) { d[newKey] = d[oldKey]; delete d[oldKey]; storageSet(k, d); }
         });
       }
     } else {
@@ -4390,9 +4769,6 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     }]);
     reload();
     setCollapsedGroups(prev => ({ ...prev, [groupType]: false }));
-    setGroupFilter(groupType);
-    setShowAddCategoryForm(false);
-    setNewCatName("");
   }
 
   function handleRenameGroupType(groupType, newLabel) {
@@ -4415,11 +4791,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     const cats = groupedCategories[groupType] ?? [];
     const itemCount = cats.reduce((n, cat) => n + (CATEGORY_ITEMS[cat]?.length || 0), 0);
     const taskCount = rows.filter(r => cats.includes(r.category) && r.task && !r._isBlankCategory).length;
-    const allChores = loadChores();
+    const allChores = useForemanStore.getState().chores;
     const choreCount = allChores.filter(c => cats.includes(c.room)).length;
     const allTodos = loadTodos();
     const todoCount = allTodos.filter(t => cats.includes(t.linkedCategory)).length;
-    const allProjects = loadProjects();
+    const allProjects = useForemanStore.getState().projects;
     const projectCount = allProjects.filter(p =>
       allTodos.some(t => t.projectId === p.id && cats.includes(t.linkedCategory))
     ).length;
@@ -4702,9 +5078,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
             {items.map((item, idx) => {
               const isLast = idx === items.length - 1 && pendingItems.length === 0;
               const isItemDragging = draggingItem?.item === item && draggingItem?.fromCategory === category;
-              const itemKey = `${category}|${item}`;
+              const itemRow = rows.find(r => r._isCustom && r.category === category && r.item === item)
+                           ?? rows.find(r => r.category === category && r.item === item);
+              const itemStableKey = itemRow ? getItemStableKey(itemRow) : `${category}|${item}`;
               const isSelected = selectedItem?.category === category && selectedItem?.item === item;
-              const details = itemDetails[itemKey] || {};
+              const details = itemDetails[itemStableKey] || itemDetails[`${category}|${item}`] || {};
               const rowBg = idx % 2 === 0 ? "var(--fm-bg-raised)" : "#161920";
               return (
                 <Fragment key={item}>
@@ -4740,7 +5118,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                     ) : (
                       <Tooltip text={ITEM_TIPS[item]}>
                         <span
-                          onClick={e => { e.stopPropagation(); setSelectedItem({ category, item }); }}
+                          onClick={e => { e.stopPropagation(); handleSelectItem({ category, item }); }}
                           onDoubleClick={e => { e.stopPropagation(); setEditingItemName({ category, item }); }}
                           style={{
                             color: isSelected ? "var(--fm-brass)" : "var(--fm-ink-dim)",
@@ -5284,7 +5662,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <FmHeader active="Inventory" tagline="Inventory" />
       <FmSubnav
-        tabs={["Item List", "Outline"]}
+        tabs={["Item List", "Outline", "Overview"]}
         active={activeTab}
         onTabChange={tab => { setActiveTab(tab); setGroupFilter("all"); }}
         stats={[
@@ -5296,7 +5674,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
-        <div style={activeTab === "Outline" ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={activeTab === "Overview" ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : activeTab === "Outline" ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (
           <ItemInventoryView
@@ -5305,23 +5683,37 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
             categoryTypes={effectiveCategoryTypes}
             entityTypeData={entityTypeData}
             itemDetails={itemDetails}
-            onSelectItem={setSelectedItem}
+            onSelectItem={handleSelectItem}
             customFieldValues={customFieldValues}
             onAddItem={handleAddItemNamed}
             onDeleteItem={handleItemDeleteClick}
             onRenameItem={handleItemRename}
             onFieldChange={handleCustomFieldValueChange}
+            itemStableKeyMap={itemStableKeyMap}
           />
         ) : null}
 
 
         {activeTab === "Outline" && (
-          <OutlineTab categories={CATEGORIES} categoryTypes={effectiveCategoryTypes} categoryItems={CATEGORY_ITEMS} entityTypeData={entityTypeData} onRefreshEntityTypes={refreshEntityTypes} onCreateCategory={handleAddCategoryDirect} onAddItem={handleAddItemNamed} onSelectItem={setSelectedItem} customFieldValues={customFieldValues} onDeleteCategory={handleDeleteClick} onRenameCategory={handleCategoryRename} />
+          <OutlineTab categories={CATEGORIES} categoryTypes={effectiveCategoryTypes} categoryItems={CATEGORY_ITEMS} entityTypeData={entityTypeData} onRefreshEntityTypes={refreshEntityTypes} onCreateCategory={handleAddCategoryDirect} onAddItem={handleAddItemNamed} onSelectItem={handleSelectItem} customFieldValues={customFieldValues} reverseItemKeyMap={reverseItemKeyMap} onDeleteCategory={handleDeleteClick} onRenameCategory={handleCategoryRename} />
+        )}
+
+        {activeTab === "Overview" && (
+          <OverviewTab
+            rooms={CATEGORIES.filter(c => {
+              const tid = resolveTypeId(c, effectiveCategoryTypes[c] || "system");
+              return isSpatial(tid, entityTypeData) && !isExteriorTypeUtil(tid, entityTypeData);
+            }).sort()}
+            exteriors={CATEGORIES.filter(c => {
+              const tid = resolveTypeId(c, effectiveCategoryTypes[c] || "system");
+              return isExteriorTypeUtil(tid, entityTypeData);
+            }).sort()}
+          />
         )}
 
         </div>
 
-        <div style={{
+        {activeTab !== "Overview" && <div style={{
           display: "flex",
           flex: 1,
           flexDirection: "column",
@@ -5384,11 +5776,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           ) : (
             <div style={{ padding: "0.75rem 1rem 0.85rem" }}>
               {(() => {
-                const cfKey = `${selectedItem.category}|${selectedItem.item}`;
+                const cfKey = selectedItem.stableKey ?? `${selectedItem.category}|${selectedItem.item}`;
                 const itmFields = itemFieldSchemas[cfKey] || [];
                 const vals = customFieldValues[cfKey] || {};
                 const itemTypeField = UNIVERSAL_FIELDS.find(f => f.id === "item_type");
-                const addedIds = new Set([...itmFields.map(f => f.id), "item_type", "system", "room"]);
+                const addedIds = new Set([...itmFields.map(f => f.id), "item_type", "system", "room", "exterior"]);
                 const svgArrow = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5460'/%3E%3C/svg%3E")`;
                 const fieldStyle = { background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", outline: "none", padding: "0.3rem 0.5rem", width: "100%" };
                 const labelStyle = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
@@ -5396,7 +5788,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
                 function renderFieldInput(field) {
                   const val = vals[field.id] ?? "";
-                  const onChange = v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, field.id, v);
+                  const onChange = v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, field.id, v, selectedItem.stableKey);
 
                   if (field.id === "item_type") {
                     const existingTypes = [...new Set(Object.values(customFieldValues).map(v => v?.item_type).filter(Boolean))].sort();
@@ -5406,13 +5798,19 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                     const systemVal = vals.systemCategory || vals.system || "";
                     const systemOptions = CATEGORIES.filter(c => isFunctional(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
                     const defaultSystem = isFunctional(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData) ? selectedItem.category : "";
-                    return <ModelComboField value={systemVal || defaultSystem} models={systemOptions} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "systemCategory", v)} />;
+                    return <ModelComboField value={systemVal || defaultSystem} models={systemOptions} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "systemCategory", v, selectedItem.stableKey)} />;
                   }
                   if (field.id === "room") {
                     const catIsSpatialItem = isSpatial(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData);
                     const roomOpts = CATEGORIES.filter(c => isSpatial(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
-                    const roomVal = vals.roomLabel || vals.room || (catIsSpatialItem ? selectedItem.category : "");
-                    return <ModelComboField value={roomVal} models={roomOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", v)} />;
+                    const roomVal = 'roomLabel' in vals ? (vals.roomLabel ?? "") : (vals.room || (catIsSpatialItem ? selectedItem.category : ""));
+                    return <ModelComboField value={roomVal} models={roomOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", v || null, selectedItem.stableKey)} />;
+                  }
+                  if (field.id === "exterior") {
+                    const catIsExteriorItem = isExteriorTypeUtil(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData);
+                    const extOpts = CATEGORIES.filter(c => isExteriorTypeUtil(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
+                    const extVal = 'exteriorLabel' in vals ? (vals.exteriorLabel ?? "") : (catIsExteriorItem ? selectedItem.category : "");
+                    return <ModelComboField value={extVal} models={extOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "exteriorLabel", v || null, selectedItem.stableKey)} />;
                   }
                   if (field.id === "manufacturer") {
                     const mfrs = getManufacturers(selectedItem.item);
@@ -5473,11 +5871,17 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                       </div>
                       {renderFieldInput({ id: "room", name: "Room", type: "text" })}
                     </div>
+                    <div style={{ marginBottom: "0.45rem" }}>
+                      <div style={{ marginBottom: "0.2rem" }}>
+                        <span style={labelStyle}>Exterior</span>
+                      </div>
+                      {renderFieldInput({ id: "exterior", name: "Exterior", type: "text" })}
+                    </div>
                     {itmFields.map(field => (
                       <div key={field.id} style={{ marginBottom: "0.45rem" }}>
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.2rem" }}>
                           <span style={labelStyle}>{field.name}</span>
-                          <button onClick={() => handleDeleteItemField(selectedItem.category, selectedItem.item, field.id)} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", lineHeight: 1, padding: "0 0.1rem", transition: "color 0.15s" }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>×</button>
+                          <button onClick={() => handleDeleteItemField(selectedItem.category, selectedItem.item, field.id, selectedItem.stableKey)} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", lineHeight: 1, padding: "0 0.1rem", transition: "color 0.15s" }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>×</button>
                         </div>
                         {renderFieldInput(field)}
                       </div>
@@ -5490,7 +5894,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                             <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", marginBottom: "0.4rem", textTransform: "uppercase" }}>Common</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem" }}>
                               {universalAvail.map(f => (
-                                <button key={f.id} onClick={() => handleAddItemField(selectedItem.category, selectedItem.item, f)} style={chipBtn} onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}>{f.name}</button>
+                                <button key={f.id} onClick={() => handleAddItemField(selectedItem.category, selectedItem.item, f, selectedItem.stableKey)} style={chipBtn} onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}>{f.name}</button>
                               ))}
                             </div>
                           </>
@@ -5500,7 +5904,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                             <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", marginBottom: "0.4rem", textTransform: "uppercase" }}>For {selectedItem.item}</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem" }}>
                               {itemLibAvail.map(f => (
-                                <button key={f.id} onClick={() => handleAddItemField(selectedItem.category, selectedItem.item, f)} style={chipBtn} onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}>{f.name}</button>
+                                <button key={f.id} onClick={() => handleAddItemField(selectedItem.category, selectedItem.item, f, selectedItem.stableKey)} style={chipBtn} onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}>{f.name}</button>
                               ))}
                             </div>
                           </>
@@ -5523,7 +5927,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                         )}
                         <div style={{ display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                           <button onClick={() => { setShowFieldPicker(false); setNewField({ name: "", type: "text", options: "" }); }} style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.25rem 0" }}>Close</button>
-                          <button onClick={() => { if (!newField.name.trim()) return; handleAddItemField(selectedItem.category, selectedItem.item, { id: crypto.randomUUID(), name: newField.name.trim(), type: newField.type, options: newField.type === "list" ? newField.options.split(",").map(s => s.trim()).filter(Boolean) : [] }); setNewField({ name: "", type: "text", options: "" }); }} disabled={!newField.name.trim()} style={{ background: newField.name.trim() ? "var(--fm-brass)18" : "transparent", border: `1px solid ${newField.name.trim() ? "var(--fm-brass)40" : "var(--fm-ink-dim)"}`, borderRadius: "3px", color: newField.name.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: newField.name.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.25rem 0.65rem" }}>+ Add custom</button>
+                          <button onClick={() => { if (!newField.name.trim()) return; handleAddItemField(selectedItem.category, selectedItem.item, { id: crypto.randomUUID(), name: newField.name.trim(), type: newField.type, options: newField.type === "list" ? newField.options.split(",").map(s => s.trim()).filter(Boolean) : [] }, selectedItem.stableKey); setNewField({ name: "", type: "text", options: "" }); }} disabled={!newField.name.trim()} style={{ background: newField.name.trim() ? "var(--fm-brass)18" : "transparent", border: `1px solid ${newField.name.trim() ? "var(--fm-brass)40" : "var(--fm-ink-dim)"}`, borderRadius: "3px", color: newField.name.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: newField.name.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.25rem 0.65rem" }}>+ Add custom</button>
                         </div>
                       </div>
                     )}
@@ -5595,10 +5999,10 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                       <button
                           onClick={() => {
                             const key = `${row.category}|${row.item}|${row.task}`;
-                            const dates = JSON.parse(localStorage.getItem("maintenance-dates") || "{}");
-                            const nextDates = JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}");
-                            const notes = JSON.parse(localStorage.getItem("maintenance-notes") || "{}");
-                            const follow = JSON.parse(localStorage.getItem("maintenance-follow") || "{}");
+                            const dates = storageGet("maintenance-dates") ?? {};
+                            const nextDates = storageGet("maintenance-next-dates") ?? {};
+                            const notes = storageGet("maintenance-notes") ?? {};
+                            const follow = storageGet("maintenance-follow") ?? {};
                             const d = dates[key];
                             setNewTask({ task: row.task, schedule: row.schedule || "", season: row.season || null, lastCompleted: d ? new Date(d).toISOString().slice(0, 10) : null, nextDate: nextDates[key] ? new Date(nextDates[key]).toISOString().slice(0, 10) : null, notes: notes[key] || "", followSchedule: !!follow[key] });
                             setEditingTask(row);
@@ -5730,9 +6134,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
                 >+ Add Task</button>
                 {(() => {
-                  const cfKey = `${selectedItem.category}|${selectedItem.item}`;
+                  const cfKey = selectedItem.stableKey ?? `${selectedItem.category}|${selectedItem.item}`;
                   const cfVals = customFieldValues[cfKey] || {};
-                  const det = itemDetails[cfKey] || {};
+                  const det = itemDetails[cfKey] || itemDetails[`${selectedItem.category}|${selectedItem.item}`] || {};
                   const manufacturer = cfVals.manufacturer || det.manufacturer || "";
                   const model = cfVals.model || det.model || "";
                   return manufacturer && manufacturer !== "Other" ? (
@@ -6016,7 +6420,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
           </div>{/* end tab content */}
           </div>{/* end unified panel card */}
-        </div>{/* end right column */}
+        </div>}{/* end right column */}
         </div>{/* end content row */}
       </div>
     </div>

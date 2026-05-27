@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { storageGet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import AssigneeInput from "./components/AssigneeInput.jsx";
@@ -9,7 +10,7 @@ import ReminderSettings from "./components/ReminderSettings.jsx";
 import { getScheduleColor } from "./lib/scheduleColor.js";
 import { parseMonths } from "./lib/scheduleInterval.js";
 import {
-  loadChores, saveChores, createChore,
+  loadChores, createChore,
   loadChoreNextDates, saveChoreNextDates,
   loadChoreCompletedDates, saveChoreCompletedDates,
   loadChoreNotes, saveChoreNotes,
@@ -26,6 +27,7 @@ import {
 } from "./lib/choreCompletions.js";
 import { FilterPill } from "./components/FilterPill.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
+import { useForemanStore } from "./lib/store.js";
 import {
   loadChoreReminderModes, saveChoreReminderModes,
   loadReminderModes, REMINDER_MODES, syncReminders,
@@ -658,7 +660,7 @@ const TH = { color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSiz
 const TD = { padding: "0.45rem 0.6rem", verticalAlign: "middle" };
 
 export default function ChoresPage({ navigate, navState }) {
-  const [chores, setChores]               = useState(() => loadChores());
+  const chores = useForemanStore(s => s.chores);
   const [notes, setNotes]                 = useState(() => loadChoreNotes());
   const [reminderModes, setReminderModes] = useState(() => loadChoreReminderModes());
   const [remindersOpen, setRemindersOpen] = useState(false);
@@ -813,16 +815,14 @@ export default function ChoresPage({ navigate, navState }) {
   // ── Handlers ────────────────────────────────────────────────────────────────
   function handleChoreEdit(id, field, value) {
     const updated = chores.map(c => c.id === id ? { ...c, [field]: value } : c);
-    setChores(updated);
-    saveChores(updated);
+    useForemanStore.getState().setChores(updated);
   }
 
   function handleAddChoreModalSave(form, date) {
     const startDate = date ? date.toISOString() : new Date().toISOString();
     const newChore = createChore({ ...form, startDate });
     const updated = [newChore, ...chores];
-    setChores(updated);
-    saveChores(updated);
+    useForemanStore.getState().setChores(updated);
     if (form.dayOfWeek != null && newChore.schedule) {
       const start = date ?? new Date(); start.setHours(0,0,0,0);
       const next = computeNextOccurrenceFromStart(start, newChore.schedule, newChore.dayOfWeek, newChore.timeOfDay);
@@ -842,8 +842,7 @@ export default function ChoresPage({ navigate, navState }) {
 
   function handleDeleteChore(chore) {
     const updated = chores.filter(c => c.id !== chore.id);
-    setChores(updated);
-    saveChores(updated);
+    useForemanStore.getState().setChores(updated);
     const completed = loadChoreCompletedDates(); delete completed[chore.id]; saveChoreCompletedDates(completed);
     const next = { ...choreNextDates };           delete next[chore.id];     saveChoreNextDates(next); setChoreNextDates(next);
     const n = { ...notes };                       delete n[chore.id];        saveChoreNotes(n); setNotes(n);
@@ -907,7 +906,7 @@ export default function ChoresPage({ navigate, navState }) {
   async function handleSyncReminders() {
     const maintenanceRows = loadData();
     let maintenanceNextDates = {};
-    try { maintenanceNextDates = JSON.parse(localStorage.getItem("maintenance-next-dates") || "{}"); } catch {}
+    try { maintenanceNextDates = storageGet("maintenance-next-dates") ?? {}; } catch {}
     return syncReminders({ rows: maintenanceRows, nextDates: maintenanceNextDates, modes: loadReminderModes() });
   }
 

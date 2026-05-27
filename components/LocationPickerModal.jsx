@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { storageGet } from "../lib/storage.js";
 import { getFloorsInOrder } from "../lib/floors.js";
 import { loadRooms } from "../lib/rooms.js";
 import { polygonCentroid, pointInPolygon } from "../lib/geometry.js";
@@ -33,7 +34,7 @@ export default function LocationPickerModal({ initialLocation, onConfirm, onCanc
   const floors = useMemo(() => getFloorsInOrder(), []);
   const allRooms = useMemo(() => loadRooms(), []);
   const fpData = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem("inventory-floor-plan-v2") || "{}"); }
+    try { return storageGet("inventory-floor-plan-v2") ?? {}; }
     catch { return {}; }
   }, []);
 

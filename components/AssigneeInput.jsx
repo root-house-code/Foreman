@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import ComboInput from "./ComboInput.jsx";
+import { storageGet } from "../lib/storage.js";
 
 const MEMBERS_KEY = "foreman-household-members";
 
 function loadMembers() {
-  try { return JSON.parse(localStorage.getItem(MEMBERS_KEY) || "[]"); }
+  try { return storageGet(MEMBERS_KEY) ?? []; }
   catch { return []; }
 }
 
