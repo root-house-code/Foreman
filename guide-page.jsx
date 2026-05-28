@@ -12,7 +12,8 @@ import { loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
 import { MANUFACTURERS_BY_ITEM } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
 import { loadItemDetails } from "./lib/itemDetails.js";
-import { loadCategoryFieldSchemas, loadItemFieldSchemas, loadItemFieldValues } from "./lib/customFields.js";
+import { loadCategoryFieldSchemas, loadItemFieldSchemas } from "./lib/customFields.js";
+import { useForemanStore } from "./lib/store.js";
 import { loadGuideNotes, saveGuideNotes } from "./lib/guideNotes.js";
 
 const EDITOR_STYLES = `
@@ -220,7 +221,7 @@ export default function GuidePage({ navigate }) {
   const [itemDetails]          = useState(() => loadItemDetails());
   const [categoryFieldSchemas] = useState(() => loadCategoryFieldSchemas());
   const [itemFieldSchemas]     = useState(() => loadItemFieldSchemas());
-  const [customFieldValues]    = useState(() => loadItemFieldValues());
+  const customFieldValues = useForemanStore(s => s.itemFieldValues);
   const [notes, setNotes]      = useState(() => loadGuideNotes());
   const [roomSubtypes]         = useState(() => loadRoomSubtypes());
 

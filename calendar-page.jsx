@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useForemanStore } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
@@ -6,7 +7,7 @@ import CategoryTabs from "./components/CategoryTabs.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import MaintenanceCompleteModal from "./components/MaintenanceCompleteModal.jsx";
 import {
-  loadChores, saveChores, createChore,
+  createChore,
   loadChoreNextDates, saveChoreNextDates,
   computeNextOccurrenceFromStart, computeChoreNextDate,
 } from "./lib/chores.js";
@@ -328,7 +329,7 @@ export default function CalendarPage({ navigate }) {
   const todayMonth = todayRaw.getMonth();
   const todayDay   = todayRaw.getDate();
 
-  const [chores, setChores]     = useState(() => loadChores());
+  const chores = useForemanStore(s => s.chores);
   const [maintenanceRows]       = useState(() => {
     const deletedCats   = loadDeletedCategories();
     const deletedItems  = loadDeletedItems();
@@ -496,9 +497,8 @@ export default function CalendarPage({ navigate }) {
 
   function handleCreateChore(form, date) {
     const newChore = createChore({ ...form, startDate: date?.toISOString() ?? null });
-    const updated  = [newChore, ...chores];
-    setChores(updated);
-    saveChores(updated);
+    const updated = [newChore, ...chores];
+    useForemanStore.getState().setChores(updated);
     if (date && newChore.schedule) {
       const next      = computeNextOccurrenceFromStart(date, newChore.schedule, newChore.dayOfWeek, newChore.timeOfDay);
       const nextDates = { ...loadChoreNextDates(), [newChore.id]: next.toISOString() };

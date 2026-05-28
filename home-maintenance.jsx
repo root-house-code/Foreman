@@ -16,10 +16,8 @@ import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
-import { loadEntityTypes, resolveTypeId, isSpatial, isFunctional, isStructureType, isExteriorType } from "./lib/entityTypes.js";
-import { getFloorsInOrder } from "./lib/floors.js";
-import { loadRooms } from "./lib/rooms.js";
-import { loadItemFieldValues } from "./lib/customFields.js";
+import { resolveTypeId, isSpatial, isFunctional, isStructureType, isExteriorType } from "./lib/entityTypes.js";
+import { useForemanStore } from "./lib/store.js";
 import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
@@ -27,13 +25,6 @@ import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
 const DEFAULT_CAT_SET = new Set(defaultData.map(d => d.category));
 const DEFAULT_CAT_ORDER = Array.from(new Set(defaultData.map(r => r.category)));
 
-
-function loadFpPlacements() {
-  try {
-    const raw = storageGet("fp-data") ?? {};
-    return raw.placements || {};
-  } catch { return {}; }
-}
 
 function loadDates(key) {
   try {
@@ -76,11 +67,11 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [deletedItems] = useState(() => loadDeletedItems());
   const [categoryTypeOverrides] = useState(() => loadCategoryTypeOverrides());
   const [roomSubtypes] = useState(() => loadRoomSubtypes());
-  const [entityTypeData] = useState(() => loadEntityTypes());
-  const [fpPlacements] = useState(() => loadFpPlacements());
-  const [invFloors] = useState(() => getFloorsInOrder());
-  const [invRooms] = useState(() => loadRooms());
-  const [customFieldValues] = useState(() => loadItemFieldValues());
+  const entityTypeData    = useForemanStore(s => s.entityTypes);
+  const fpPlacements      = useForemanStore(s => s.fpData.placements ?? {});
+  const invFloors         = useForemanStore(s => s.floors);
+  const invRooms          = useForemanStore(s => s.rooms);
+  const customFieldValues = useForemanStore(s => s.itemFieldValues);
   const pageHeaderRef = useRef(null);
   const [pageHeaderHeight, setPageHeaderHeight] = useState(0);
 

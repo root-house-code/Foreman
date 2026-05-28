@@ -1,15 +1,15 @@
 import { useState, useMemo, forwardRef } from "react";
+import { useForemanStore } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import FmHeader from "./src/components/FmHeader.jsx";
 import { loadTodos } from "./lib/todos.js";
-import { loadProjects } from "./lib/projects.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import {
-  loadChores, loadChoreNextDates, loadChoreCompletedDates,
+  loadChoreNextDates, loadChoreCompletedDates,
   computeNextOccurrenceFromStart, computeChoreNextDate,
   saveChoreNextDates, saveChoreCompletedDates,
 } from "./lib/chores.js";
@@ -131,9 +131,9 @@ export default function DashboardPage({ navigate }) {
   const rows              = useMemo(() => loadData(), []);
   const deletedCategories = useMemo(() => loadDeletedCategories(), []);
   const deletedItems      = useMemo(() => loadDeletedItems(), []);
-  const chores            = useMemo(() => loadChores(), []);
-  const todos             = useMemo(() => loadTodos(), []);
-  const projects          = useMemo(() => loadProjects(), []);
+  const chores   = useForemanStore(s => s.chores);
+  const todos    = useMemo(() => loadTodos(), []);
+  const projects = useForemanStore(s => s.projects);
 
   // ── Mutable state ────────────────────────────────────────────────────────────
   const [nextDatesMap, setNextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
