@@ -27,6 +27,7 @@ import {
   loadItemFieldValues, saveItemFieldValues,
 } from "./lib/customFields.js";
 import { UNIVERSAL_FIELDS, ITEM_FIELDS } from "./lib/fieldLibrary.js";
+import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
 import {
   loadCategoryTypeOverrides,
   saveCategoryTypeOverrides,
@@ -282,8 +283,8 @@ function ModelComboField({ value = "", models = [], fieldStyle, onChange }) {
 // ── Floor Plan ────────────────────────────────────────────────────────────────
 
 const FP_GRID = 20;
-const FP_W = 2000;
-const FP_H = 1360;
+const FP_W = 3200;
+const FP_H = 2400;
 
 const FP_FILL = {
   room:      "rgba(122,181,217,0.12)",
@@ -362,6 +363,22 @@ function ColorPickerDropdown({ value, onChange }) {
   );
 }
 
+function XButton({ x, y, onDelete, onHoverEnter, onHoverLeave }) {
+  return (
+    <g
+      transform={`translate(${x},${y})`}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+      onClick={e => { e.stopPropagation(); onDelete(); }}
+      style={{ cursor: "pointer" }}
+    >
+      <circle r={9} fill="var(--fm-red)" opacity={0.85} />
+      <text textAnchor="middle" dominantBaseline="central" fill="white" fontSize={13} fontWeight="bold"
+        style={{ pointerEvents: "none", userSelect: "none" }}>×</text>
+    </g>
+  );
+}
+
 export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onChangeCategoryType, onAddItem, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem, reverseItemKeyMap, onSelectItem }) {
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
@@ -411,6 +428,11 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const [editingDrawingNameId, setEditingDrawingNameId] = useState(null);
   const drawCategoryRef = useRef(null);
   const markerIsTodoRef = useRef(false);
+  const [hoveredEntity, setHoveredEntity] = useState(null);
+  const hoverLeaveTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(hoverLeaveTimerRef.current), []);
+  const [ghostZone, setGhostZone] = useState(null);
+  const ghostZoneRef = useRef(null);
 
   useEffect(() => { fpDataRef.current = fpData; }, [fpData]);
   useEffect(() => { activeLevelRef.current = activeLevel; }, [activeLevel]);
@@ -421,6 +443,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   useEffect(() => { drawNameRef.current = drawName; }, [drawName]);
   useEffect(() => { drawCategoryRef.current = drawCategory; }, [drawCategory]);
   useEffect(() => { markerIsTodoRef.current = markerIsTodo; }, [markerIsTodo]);
+  useEffect(() => { ghostZoneRef.current = ghostZone; }, [ghostZone]);
 
   const currentPlaced = fpData.placements[activeLevel] || {};
   // Build roomId ↔ label maps for the active floor
@@ -431,6 +454,21 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     fpDataRef.current = newData;
     setFpData(newData);
     saveFpData(newData);
+  }
+
+  function onEntityHoverEnter(type, id) {
+    if (drawModeRef.current !== "select") return;
+    clearTimeout(hoverLeaveTimerRef.current);
+    setHoveredEntity({ type, id });
+  }
+  function onEntityHoverLeave() {
+    hoverLeaveTimerRef.current = setTimeout(() => setHoveredEntity(null), 80);
+  }
+  function drawingXAnchor(drw) {
+    if (drw.type === "marker") return { x: drw.x + 16, y: drw.y - 10 };
+    if (!drw.points?.length) return { x: 0, y: 0 };
+    const mid = drw.points[Math.floor(drw.points.length / 2)];
+    return { x: mid.x, y: mid.y - 14 };
   }
 
   function commitDrawing(drawing) {
@@ -627,6 +665,16 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   function deletePin(pinId) {
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
+    const pin = (d.pins?.[lvl] || []).find(p => p.id === pinId);
+    if (pin) {
+      const zoneRoom = rooms[pin.zone];
+      if (zoneRoom?.label) {
+        const catName = zoneRoom.categoryName || zoneRoom.label;
+        const isExt = isExteriorTypeUtil(resolveTypeId(catName, categoryTypes?.[catName] || "system"), entityTypeData);
+        const stableKey = itemToKeyMap[`${pin.cat}|${pin.item}`] || `${pin.cat}|${pin.item}`;
+        useForemanStore.getState().removeItemFromZone(stableKey, isExt);
+      }
+    }
     save({ ...d, pins: { ...(d.pins || {}), [lvl]: (d.pins?.[lvl] || []).filter(p => p.id !== pinId) } });
     setSelectedPin(null);
   }
@@ -701,25 +749,14 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   }
 
   function addToCanvas(cat) {
+    setGhostZone({ cat });
+    ghostZoneRef.current = { cat };
+  }
+
+  function placeZoneOnCanvas(cat, x, y) {
+    const W = 200, H = 120;
     const floorId = activeLevelRef.current;
     const existing = fpDataRef.current.placements[floorId] || {};
-    const taken = Object.values(existing);
-    let x = FP_GRID * 4, y = FP_GRID * 4;
-    const W = 200, H = 120;
-    outer: for (let row = 0; row < 20; row++) {
-      for (let col = 0; col < 20; col++) {
-        const tx = FP_GRID * 4 + col * (W + FP_GRID);
-        const ty = FP_GRID * 4 + row * (H + FP_GRID);
-        if (tx + W > FP_W || ty + H > FP_H) continue;
-        const overlaps = taken.some(r => {
-          const bx = Math.min(...r.points.map(p => p.x)), bx2 = Math.max(...r.points.map(p => p.x));
-          const by = Math.min(...r.points.map(p => p.y)), by2 = Math.max(...r.points.map(p => p.y));
-          return tx < bx2 && tx + W > bx && ty < by2 && ty + H > by;
-        });
-        if (!overlaps) { x = tx; y = ty; break outer; }
-      }
-    }
-    // Find or create Room entity for this category on this floor
     const allRooms = loadRooms();
     let room = Object.values(allRooms).find(r => r.floorId === floorId && (r.label === cat || r.categoryName === cat));
     if (!room) room = Object.values(allRooms).find(r => r.label === cat || r.categoryName === cat);
@@ -731,12 +768,12 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
       const newRoom = createRoom(floorId, cat);
       roomId = newRoom.id;
     }
-    useForemanStore.getState().reloadAll();
     const d = fpDataRef.current;
     save({
       ...d,
       placements: { ...d.placements, [floorId]: { ...existing, [roomId]: rectToPolygon({ x, y, w: W, h: H }) } },
     });
+    useForemanStore.getState().reloadAll();
     setSelected(roomId); setEditingPanelName(false);
   }
 
@@ -795,8 +832,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
       const scaleX = vb.w / svgRect.width;
       const scaleY = vb.h / svgRect.height;
 
-      // Update draw cursor ghost
-      if (drawModeRef.current !== "select") {
+      // Update draw cursor ghost (also used for ghost zone placement)
+      if (drawModeRef.current !== "select" || ghostZoneRef.current) {
         const rawX = vb.x + (e.clientX - svgRect.left) * scaleX;
         const rawY = vb.y + (e.clientY - svgRect.top) * scaleY;
         setCursorPt({ x: fpSnap(Math.max(0, Math.min(FP_W, rawX))), y: fpSnap(Math.max(0, Math.min(FP_H, rawY))) });
@@ -1101,6 +1138,16 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
+  // Escape cancels ghost zone placement
+  useEffect(() => {
+    if (!ghostZone) return;
+    function onKeyDown(e) {
+      if (e.key === "Escape") { setGhostZone(null); ghostZoneRef.current = null; setCursorPt(null); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [ghostZone]);
+
   // Keydown: Escape cancels draw, Enter commits path
   useEffect(() => {
     if (drawMode === "select") return;
@@ -1261,7 +1308,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     if (!selected) return [];
     const zoneRoom = rooms[selected];
     if (!zoneRoom?.label) return [];
-    const storeKeys = (selectZoneItems({ customFieldValues }) || {})[zoneRoom.label] || [];
+    const storeKeys = (selectZoneItems({ spatialAssignments: customFieldValues }) || {})[zoneRoom.label] || [];
     return storeKeys.map(k => reverseItemKeyMap?.[k]).filter(Boolean).map(r => ({ cat: r.category, item: r.item }));
   }, [customFieldValues, selected, rooms, reverseItemKeyMap]);
 
@@ -1300,8 +1347,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     return [...categories]
       .filter(cat => {
         if (placedOnAnyLevel.has(cat)) return false;
-        // Only Spatial categories can be drawn as floor plan zones
-        return isSpatial(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData);
+        const typeId = resolveTypeId(cat, categoryTypes[cat] || "system");
+        return isSpatial(typeId, entityTypeData) || isStructureTypeUtil(typeId, entityTypeData);
       })
       .sort((a, b) => {
         const ga = GROUP_ORDER.indexOf(categoryTypes[a] || "system");
@@ -1344,63 +1391,83 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             )}
 
             {sortedCategories.length === 0 && !newCatType ? (
-              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.3rem 1rem" }}>All rooms assigned</div>
-            ) : sortedCategories.map(cat => {
-              const type = categoryTypes[cat] || "system";
-              const isHov = hoveredCatId === cat;
-              const isEditing = editingCatId === cat;
-              return (
-                <div
-                  key={cat}
-                  onMouseEnter={() => setHoveredCatId(cat)}
-                  onMouseLeave={() => setHoveredCatId(null)}
-                  style={{ alignItems: "center", background: isHov ? "var(--fm-bg-raised)" : "transparent", display: "flex", gap: "0.4rem", padding: "0.3rem 1rem", transition: "background 0.1s" }}
-                >
-                  <div style={{ background: "transparent", border: `1px solid ${FP_STROKE[type]}`, borderRadius: 2, flexShrink: 0, height: 10, width: 10 }} />
-                  {isEditing ? (
-                    <input
-                      autoFocus
-                      defaultValue={cat}
-                      onBlur={e => { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); const rid = catToRoomId[cat]; if (rid) renameRoom(rid, v); } setEditingCatId(null); }}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); const rid = catToRoomId[cat]; if (rid) renameRoom(rid, v); } setEditingCatId(null); }
-                        if (e.key === "Escape") { setEditingCatId(null); }
-                      }}
-                      onClick={e => e.stopPropagation()}
-                      style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", minWidth: 0, outline: "none", padding: "0.15rem 0.3rem" }}
-                    />
-                  ) : (
+              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.3rem 1rem" }}>All zones assigned</div>
+            ) : (() => {
+              const renderCatRow = cat => {
+                const type = categoryTypes[cat] || "system";
+                const isHov = hoveredCatId === cat;
+                const isEditing = editingCatId === cat;
+                return (
+                  <div
+                    key={cat}
+                    onMouseEnter={() => setHoveredCatId(cat)}
+                    onMouseLeave={() => setHoveredCatId(null)}
+                    style={{ alignItems: "center", background: isHov ? "var(--fm-bg-raised)" : "transparent", display: "flex", gap: "0.4rem", padding: "0.3rem 1rem", transition: "background 0.1s" }}
+                  >
+                    <div style={{ background: "transparent", border: `1px solid ${FP_STROKE[type]}`, borderRadius: 2, flexShrink: 0, height: 10, width: 10 }} />
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        defaultValue={cat}
+                        onBlur={e => { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); const rid = catToRoomId[cat]; if (rid) renameRoom(rid, v); } setEditingCatId(null); }}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") { const v = e.target.value.trim(); if (v && v !== cat) { onRenameCategory(cat, v); const rid = catToRoomId[cat]; if (rid) renameRoom(rid, v); } setEditingCatId(null); }
+                          if (e.key === "Escape") { setEditingCatId(null); }
+                        }}
+                        onClick={e => e.stopPropagation()}
+                        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", minWidth: 0, outline: "none", padding: "0.15rem 0.3rem" }}
+                      />
+                    ) : (
+                      <span
+                        style={{ color: "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                        onDoubleClick={() => setEditingCatId(cat)}
+                      >{cat}</span>
+                    )}
+                    {isHov && !isEditing && (
+                      <>
+                        <button
+                          onClick={e => { e.stopPropagation(); setEditingCatId(cat); }}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontSize: "0.7rem", lineHeight: 1, padding: "0", transition: "color 0.1s" }}
+                          onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                          onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                          title="Rename"
+                        >✎</button>
+                        <button
+                          onClick={e => { e.stopPropagation(); onDeleteCategory(cat); }}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontSize: "0.78rem", lineHeight: 1, padding: "0", transition: "color 0.1s" }}
+                          onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                          onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                          title="Delete"
+                        >×</button>
+                      </>
+                    )}
                     <span
-                      style={{ color: "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      onDoubleClick={() => setEditingCatId(cat)}
-                    >{cat}</span>
-                  )}
-                  {isHov && !isEditing && (
-                    <>
-                      <button
-                        onClick={e => { e.stopPropagation(); setEditingCatId(cat); }}
-                        style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontSize: "0.7rem", lineHeight: 1, padding: "0", transition: "color 0.1s" }}
-                        onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
-                        onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                        title="Rename"
-                      >✎</button>
-                      <button
-                        onClick={e => { e.stopPropagation(); onDeleteCategory(cat); }}
-                        style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontSize: "0.78rem", lineHeight: 1, padding: "0", transition: "color 0.1s" }}
-                        onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                        onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                        title="Delete"
-                      >×</button>
-                    </>
-                  )}
-                  <span
-                    onClick={() => addToCanvas(cat)}
-                    style={{ color: "var(--fm-brass)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1 }}
-                    title="Add to canvas"
-                  >+</span>
-                </div>
+                      onClick={() => addToCanvas(cat)}
+                      style={{ color: "var(--fm-brass)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1 }}
+                      title="Add to canvas"
+                    >+</span>
+                  </div>
+                );
+              };
+              const roomCats = sortedCategories.filter(cat => { const tid = resolveTypeId(cat, categoryTypes[cat] || "system"); return !isExteriorTypeUtil(tid, entityTypeData) && !isStructureTypeUtil(tid, entityTypeData); });
+              const structureCats = sortedCategories.filter(cat => isStructureTypeUtil(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData));
+              const exteriorCats = sortedCategories.filter(cat => isExteriorTypeUtil(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData));
+              const groups = [
+                { label: "Rooms", cats: roomCats, color: FP_STROKE.room },
+                { label: "Structures", cats: structureCats, color: FP_STROKE.structure },
+                { label: "Exteriors", cats: exteriorCats, color: FP_STROKE.exterior },
+              ].filter(g => g.cats.length > 0);
+              return (
+                <>
+                  {groups.map((g, i) => (
+                    <Fragment key={g.label}>
+                      <div style={{ borderTop: i > 0 ? "1px solid var(--fm-hairline)" : "none", color: g.color, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", padding: "0.6rem 1rem 0.2rem", textTransform: "uppercase" }}>{g.label}</div>
+                      {g.cats.map(renderCatRow)}
+                    </Fragment>
+                  ))}
+                </>
               );
-            })}
+            })()}
           </div>
 
           {/* Add category button */}
@@ -1686,14 +1753,31 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         <svg
           ref={svgRef}
           viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-          style={{ cursor: dragging ? "grabbing" : isPanning ? "grabbing" : drawMode !== "select" ? "crosshair" : "grab", display: "block", flex: 1, userSelect: "none", width: "100%", touchAction: "none" }}
+          style={{ cursor: dragging ? "grabbing" : isPanning ? "grabbing" : ghostZone ? "crosshair" : drawMode !== "select" ? "crosshair" : "grab", display: "block", flex: 1, userSelect: "none", width: "100%", touchAction: "none" }}
           onMouseDown={e => {
             if (e.button !== 0) return;
             if (drawMode !== "select") return; // draw clicks handled via onClick
+            if (ghostZoneRef.current) return; // ghost zone placement handled in onClick
             panDragRef.current = { startX: e.clientX, startY: e.clientY, startVbX: viewBoxRef.current.x, startVbY: viewBoxRef.current.y };
             setIsPanning(true);
           }}
-          onClick={e => { if (drawMode !== "select") handleDrawClick(e); }}
+          onMouseLeave={() => { if (ghostZoneRef.current) setCursorPt(null); }}
+          onClick={e => {
+            if (ghostZoneRef.current) {
+              const gz = ghostZoneRef.current;
+              ghostZoneRef.current = null;
+              setGhostZone(null);
+              setCursorPt(null);
+              const r = svgRef.current.getBoundingClientRect();
+              const vb = viewBoxRef.current;
+              const rawX = vb.x + (e.clientX - r.left) / r.width * vb.w;
+              const rawY = vb.y + (e.clientY - r.top) / r.height * vb.h;
+              const W = 200, H = 120;
+              placeZoneOnCanvas(gz.cat, fpSnap(Math.max(0, Math.min(FP_W - W, rawX - W / 2))), fpSnap(Math.max(0, Math.min(FP_H - H, rawY - H / 2))));
+              return;
+            }
+            if (drawMode !== "select") handleDrawClick(e);
+          }}
           onDoubleClick={e => { if (drawMode === "path") handleDrawDoubleClick(e); }}
           onTouchStart={e => {
             if (e.touches.length !== 2) return;
@@ -1747,7 +1831,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             const ptStr = pts.map(p => `${p.x},${p.y}`).join(" ");
             const { cx, cy } = polygonCentroid(pts);
             return (
-              <g key={roomId}>
+              <Fragment key={roomId}>
+              <g>
                 <polygon
                   points={ptStr}
                   fill={FP_FILL[type]}
@@ -1831,6 +1916,15 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   </>
                 )}
               </g>
+              {isSel && (
+                <XButton
+                  x={Math.max(...pts.map(p => p.x)) + 12} y={Math.min(...pts.map(p => p.y)) - 12}
+                  onDelete={() => removeFromCanvas(roomId)}
+                  onHoverEnter={null}
+                  onHoverLeave={null}
+                />
+              )}
+              </Fragment>
             );
           })}
 
@@ -1839,12 +1933,14 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             const isSelected = selectedPin === pin.id;
             const stroke = FP_STROKE[categoryTypes[pin.cat] || "system"];
             return (
+              <Fragment key={pin.id}>
               <g
-                key={pin.id}
                 transform={`translate(${pin.x},${pin.y})`}
                 style={{ cursor: isSelected ? "grab" : "pointer" }}
                 onMouseDown={e => handlePinMouseDown(e, pin.id)}
                 onClick={e => { e.stopPropagation(); setSelectedPin(isSelected ? null : pin.id); }}
+                onMouseEnter={() => onEntityHoverEnter("pin", pin.id)}
+                onMouseLeave={onEntityHoverLeave}
               >
                 <rect x={-18} y={-9} width={36} height={18} rx={3}
                   fill="var(--fm-bg-panel)" stroke={isSelected ? "var(--fm-brass)" : stroke} strokeWidth={1.5} />
@@ -1852,14 +1948,33 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   style={{ fill: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "7px", letterSpacing: "0.06em", pointerEvents: "none" }}>
                   {pinAbbr(pin.item)}
                 </text>
-                {isSelected && (
-                  <text x={21} y={-8}
-                    style={{ cursor: "pointer", fill: "var(--fm-red)", fontSize: "11px", pointerEvents: "all" }}
-                    onMouseDown={e => { e.stopPropagation(); deletePin(pin.id); }}>×</text>
-                )}
               </g>
+              {hoveredEntity?.id === pin.id && (
+                <XButton
+                  x={pin.x + 22} y={pin.y - 12}
+                  onDelete={() => deletePin(pin.id)}
+                  onHoverEnter={() => onEntityHoverEnter("pin", pin.id)}
+                  onHoverLeave={onEntityHoverLeave}
+                />
+              )}
+              </Fragment>
             );
           })}
+
+          {/* Ghost zone during click-to-place */}
+          {ghostZone && cursorPt && (() => {
+            const W = 200, H = 120;
+            const x = fpSnap(Math.max(0, Math.min(FP_W - W, cursorPt.x - W / 2)));
+            const y = fpSnap(Math.max(0, Math.min(FP_H - H, cursorPt.y - H / 2)));
+            const type = categoryTypes[ghostZone.cat] || "system";
+            const ptStr = `${x},${y} ${x+W},${y} ${x+W},${y+H} ${x},${y+H}`;
+            return (
+              <g style={{ pointerEvents: "none" }} opacity={0.65}>
+                <polygon points={ptStr} fill={FP_FILL[type]} stroke={FP_STROKE[type]} strokeWidth={1.5} strokeDasharray="6 3" />
+                <text x={x + W / 2} y={y + H / 2 + 5} textAnchor="middle" fill="var(--fm-ink)" fontSize={11} fontFamily="var(--fm-mono)">{ghostZone.cat}</text>
+              </g>
+            );
+          })()}
 
           {/* Ghost pin during sidebar drag */}
           {ghostPin && (
@@ -1879,13 +1994,17 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
             if (dr.type === "path" && dr.points?.length >= 2) {
               const ptStr = dr.points.map(p => `${p.x},${p.y}`).join(" ");
+              const anchor = drawingXAnchor(dr);
               return (
-                <g key={dr.id}>
+                <Fragment key={dr.id}>
+                <g>
                   {isSel && <polyline points={ptStr} stroke={dr.color} strokeWidth={7} fill="none" opacity={0.18} strokeLinecap="round" style={{ pointerEvents: "none" }} />}
                   <polyline points={ptStr} stroke={dr.color} strokeWidth={isSel ? 3 : 2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }} />
                   {/* Hit area — drag moves whole path, click inserts vertex */}
                   <polyline points={ptStr} stroke="transparent" strokeWidth={14} fill="none"
                     style={{ cursor: isSel ? "crosshair" : "pointer", pointerEvents: "auto" }}
+                    onMouseEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                    onMouseLeave={onEntityHoverLeave}
                     onMouseDown={e => {
                       e.preventDefault(); e.stopPropagation();
                       if (!isSel) { setSelectedDrawingId(dr.id); return; }
@@ -1902,18 +2021,31 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     />
                   ))}
                 </g>
+                {hoveredEntity?.id === dr.id && (
+                  <XButton
+                    x={anchor.x} y={anchor.y}
+                    onDelete={() => deleteDrawing(dr.id)}
+                    onHoverEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                    onHoverLeave={onEntityHoverLeave}
+                  />
+                )}
+                </Fragment>
               );
             }
 
             if (dr.type === "line" && dr.points?.length >= 2) {
               const [p0, p1] = dr.points;
+              const anchor = drawingXAnchor(dr);
               return (
-                <g key={dr.id}>
+                <Fragment key={dr.id}>
+                <g>
                   {isSel && <line x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke={dr.color} strokeWidth={7} opacity={0.18} strokeLinecap="round" style={{ pointerEvents: "none" }} />}
                   <line x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke={dr.color} strokeWidth={isSel ? 3 : 2.5} strokeLinecap="round" style={{ pointerEvents: "none" }} />
                   {/* Hit area — drag moves whole line */}
                   <line x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke="transparent" strokeWidth={14}
                     style={{ cursor: isSel ? "grab" : "pointer", pointerEvents: "auto" }}
+                    onMouseEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                    onMouseLeave={onEntityHoverLeave}
                     onMouseDown={e => {
                       e.preventDefault(); e.stopPropagation();
                       if (!isSel) { setSelectedDrawingId(dr.id); return; }
@@ -1930,15 +2062,28 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     />
                   ))}
                 </g>
+                {hoveredEntity?.id === dr.id && (
+                  <XButton
+                    x={anchor.x} y={anchor.y}
+                    onDelete={() => deleteDrawing(dr.id)}
+                    onHoverEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                    onHoverLeave={onEntityHoverLeave}
+                  />
+                )}
+                </Fragment>
               );
             }
 
             if (dr.type === "marker") {
+              const anchor = drawingXAnchor(dr);
               if (dr.todoId) {
                 const isTodoSel = selectedTodoMarkerId === dr.id;
                 return (
-                  <g key={dr.id} style={{ cursor: "grab", pointerEvents: "auto" }}
-                    onMouseDown={e => handleTodoMarkerMouseDown(e, dr)}>
+                  <Fragment key={dr.id}>
+                  <g style={{ cursor: "grab", pointerEvents: "auto" }}
+                    onMouseDown={e => handleTodoMarkerMouseDown(e, dr)}
+                    onMouseEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                    onMouseLeave={onEntityHoverLeave}>
                     <circle cx={dr.x} cy={dr.y} r={8}
                       fill={dr.color} stroke={isTodoSel ? "var(--fm-ink)" : "var(--fm-bg)"} strokeWidth={isTodoSel ? 2 : 1.5} />
                     <text x={dr.x} y={dr.y - 13} textAnchor="middle"
@@ -1946,15 +2091,27 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                       {(dr.label || "").slice(0, 12)}
                     </text>
                   </g>
+                  {hoveredEntity?.id === dr.id && (
+                    <XButton
+                      x={anchor.x} y={anchor.y}
+                      onDelete={() => deleteDrawing(dr.id)}
+                      onHoverEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                      onHoverLeave={onEntityHoverLeave}
+                    />
+                  )}
+                  </Fragment>
                 );
               }
               return (
-                <g key={dr.id} style={{ cursor: isSel ? "grab" : "pointer", pointerEvents: "auto" }}
+                <Fragment key={dr.id}>
+                <g style={{ cursor: isSel ? "grab" : "pointer", pointerEvents: "auto" }}
                   onMouseDown={e => {
                     e.preventDefault(); e.stopPropagation();
                     if (!isSel) { setSelectedDrawingId(dr.id); return; }
                     drawingDragRef.current = { id: dr.id, type: "marker", origX: dr.x, origY: dr.y, startClientX: e.clientX, startClientY: e.clientY, hasDragged: false };
-                  }}>
+                  }}
+                  onMouseEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                  onMouseLeave={onEntityHoverLeave}>
                   <circle cx={dr.x} cy={dr.y} r={isSel ? 7 : 5} fill={dr.color}
                     stroke={isSel ? "var(--fm-bg)" : "none"} strokeWidth={1.5} />
                   <text x={dr.x} y={dr.y - 10} textAnchor="middle"
@@ -1962,6 +2119,15 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     {dr.label || dr.name}
                   </text>
                 </g>
+                {hoveredEntity?.id === dr.id && (
+                  <XButton
+                    x={anchor.x} y={anchor.y}
+                    onDelete={() => deleteDrawing(dr.id)}
+                    onHoverEnter={() => onEntityHoverEnter("drawing", dr.id)}
+                    onHoverLeave={onEntityHoverLeave}
+                  />
+                )}
+                </Fragment>
               );
             }
             return null;
@@ -5791,7 +5957,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                   const onChange = v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, field.id, v, selectedItem.stableKey);
 
                   if (field.id === "item_type") {
-                    const existingTypes = [...new Set(Object.values(customFieldValues).map(v => v?.item_type).filter(Boolean))].sort();
+                    const userTypes = Object.values(customFieldValues).map(v => v?.item_type).filter(Boolean);
+                    const existingTypes = [...new Set([...BUILT_IN_ITEM_TYPES, ...userTypes])].sort();
                     return <ModelComboField value={val} models={existingTypes} fieldStyle={fieldStyle} onChange={onChange} />;
                   }
                   if (field.id === "system") {

@@ -1,6 +1,22 @@
 import { useContext } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
 
+function buildDateStrip() {
+  const now = new Date();
+  const DOW   = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+  const MONTH = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  const day = DOW[now.getDay()];
+  const mon = MONTH[now.getMonth()];
+  const date = now.getDate();
+  const year = now.getFullYear();
+  // ISO week number
+  const tmp = new Date(Date.UTC(year, now.getMonth(), date));
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+  const weekStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((tmp - weekStart) / 86400000 + 1) / 7);
+  return `${day} · ${mon} ${date} · ${year} · WEEK ${week}`;
+}
+
 const FOREMAN_PAGES = [
   { key: 'Read Me' },
   { key: 'Dashboard' },
@@ -15,7 +31,7 @@ const FOREMAN_PAGES = [
   { key: 'Preferences' },
 ];
 
-export default function FmHeader({ active, dateStrip = 'WED · MAY 14 · 2026 · WEEK 20', tagline = 'your house, in order' }) {
+export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline = 'your house, in order' }) {
   const nav = useContext(FmNavContext);
   const currentActive = active || nav.current;
 

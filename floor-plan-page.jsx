@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import { FloorPlan } from "./inventory-page.jsx";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides, defaultData } from "./lib/data.js";
@@ -15,6 +15,8 @@ import { loadTodos, saveTodos } from "./lib/todos.js";
 import { loadProjects, saveProjects } from "./lib/projects.js";
 
 export default function FloorPlanPage({ navigate }) {
+  useEffect(() => { useForemanStore.getState().reloadAll(); }, []);
+
   const [rows, setRows] = useState(() => loadData());
   const [deletedCategories, setDeletedCategories] = useState(() => loadDeletedCategories());
   const [deletedItems, setDeletedItems] = useState(() => loadDeletedItems());

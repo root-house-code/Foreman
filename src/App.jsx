@@ -18,7 +18,6 @@ class ErrorBoundary extends Component {
   }
 }
 import { migrateToEntityTypes } from "../lib/entityTypes.js";
-import { initRoomsFromCategories } from "../lib/rooms.js";
 import { runMigrations } from "../lib/migration.js";
 import HomeMaintenanceTable from "../home-maintenance.jsx";
 import InventoryPage from "../inventory-page.jsx";
@@ -34,7 +33,6 @@ import FloorPlanPage from "../floor-plan-page.jsx";
 
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
-initRoomsFromCategories();
 runMigrations();
 
 const PAGE_KEYS = {

@@ -27,6 +27,7 @@ import {
   getBehaviorClass, getSubtypes, getRootTypesForClass, getLabelForType,
   BUILT_IN_TYPES,
 } from "./lib/entityTypes.js";
+import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
 import InspectionReview from "./components/InspectionReview.jsx";
 import {
   getWebhookUrl, setWebhookUrl,
@@ -39,12 +40,11 @@ import {
 
 const NAV_ITEMS = [
   { key: "profile",        label: "Profile",           available: true  },
-  { key: "household",      label: "Household",          available: true  },
-  { key: "categorytypes",  label: "Category Types",     available: true  },
   { key: "notifications",  label: "Notifications",      available: true  },
   { key: "automation",     label: "Automation",         available: true  },
   { key: "integrations",   label: "Integrations",       available: true  },
-  { key: "inspection",     label: "Upload Inspection",  available: true  },
+  { key: "display",        label: "Display",            available: true  },
+  { key: "importexport",   label: "Import / Export",    available: true  },
 ];
 
 const INSPECTION_META_KEY   = "foreman-inspection-meta";
@@ -69,6 +69,17 @@ function loadMembers() {
 
 function saveMembers(members) {
   storageSet(HOUSEHOLD_MEMBERS_KEY, members);
+}
+
+const HOUSEHOLD_PROVIDERS_KEY = "foreman-service-providers";
+
+function loadServiceProviders() {
+  try { return storageGet(HOUSEHOLD_PROVIDERS_KEY) ?? []; }
+  catch { return []; }
+}
+
+function saveServiceProviders(providers) {
+  storageSet(HOUSEHOLD_PROVIDERS_KEY, providers);
 }
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
@@ -208,56 +219,51 @@ function ProfileSettings() {
     setSeedTasks(true);
   }
 
-  // ── Export ──
-  const [exportTarget, setExportTarget] = useState(activeProfile);
-  const exportHasData = hasProfileSnapshot(exportTarget);
+  // ── Address ──
+  const [address, setAddressState]       = useState(() => loadAddress());
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [draft, setDraft]                = useState(EMPTY_ADDRESS);
+  const [focusedField, setFocusedField]  = useState(null);
 
-  // ── Import ──
-  const fileInputRef                      = useRef(null);
-  const [importFile, setImportFile]       = useState(null);
-  const [importTarget, setImportTarget]   = useState(activeProfile);
-  const [importing, setImporting]         = useState(false);
-  const [importSuccess, setImportSuccess] = useState(false);
+  const hasAddress = address.street.trim() !== "" || address.city.trim() !== "";
 
-  function handleFileSelect(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = evt => {
-      try {
-        const parsed = JSON.parse(evt.target.result);
-        if (!parsed?._foreman || parsed.version !== 1) { setImportFile("error"); return; }
-        setImportFile({ name: file.name, data: parsed });
-        setImportSuccess(false);
-      } catch {
-        setImportFile("error");
-      }
+  function startEditAddress() { setDraft({ ...address }); setEditingAddress(true); }
+
+  function handleSaveAddress() {
+    const cleaned = {
+      street:  draft.street.trim(),
+      street2: draft.street2.trim(),
+      city:    draft.city.trim(),
+      state:   draft.state.trim().toUpperCase().slice(0, 2),
+      zip:     draft.zip.trim().slice(0, 10),
     };
-    reader.readAsText(file);
-    e.target.value = "";
+    saveAddress(cleaned);
+    setAddressState(cleaned);
+    setEditingAddress(false);
   }
 
-  function handleImport() {
-    if (!importFile || importFile === "error") return;
-    setImporting(true);
-    const err = importProfileData(importFile.data, importTarget);
-    if (err) {
-      setImportFile("error");
-      setImporting(false);
-    } else if (importTarget !== activeProfile) {
-      setImportFile(null);
-      setImporting(false);
-      setImportSuccess(true);
-    }
+  function handleClearAddress() {
+    saveAddress(EMPTY_ADDRESS);
+    setAddressState({ ...EMPTY_ADDRESS });
+    setEditingAddress(false);
   }
 
-  function handleCancelImport() {
-    setImportFile(null);
-    setImporting(false);
-    setImportTarget(activeProfile);
+  function field(key, placeholder, opts = {}) {
+    return (
+      <input
+        value={draft[key]}
+        placeholder={placeholder}
+        onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
+        onFocus={() => setFocusedField(key)}
+        onBlur={() => setFocusedField(null)}
+        onKeyDown={e => {
+          if (e.key === "Escape") { e.preventDefault(); setEditingAddress(false); }
+        }}
+        maxLength={opts.maxLength}
+        style={{ ...inputStyle(focusedField === key), ...opts.style }}
+      />
+    );
   }
-
-  const importTargetMeta = allProfiles.find(p => p.key === importTarget);
 
   return (
     <div style={{ maxWidth: "560px" }}>
@@ -266,16 +272,88 @@ function ProfileSettings() {
         Switch between profiles to use different data sets. Each profile's data is saved independently — switching away and back restores it exactly as you left it.
       </p>
 
-      {/* ── Active profile selector ── */}
-      <div style={{ marginBottom: "1.5rem" }}>
-        <label style={labelStyle}>Active Profile</label>
-        <select
-          value={selected}
-          onChange={e => { setSelected(e.target.value); setSwitching(false); setRenamingKey(null); setConfirmDelete(false); }}
-          style={selectStyle}
-        >
-          {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-        </select>
+      {/* ── Active profile selector + Address ── */}
+      <div style={{ alignItems: "flex-start", display: "flex", gap: "1.5rem", marginBottom: "1.5rem" }}>
+        <div style={{ flexShrink: 0 }}>
+          <label style={labelStyle}>Active Profile</label>
+          <select
+            value={selected}
+            onChange={e => { setSelected(e.target.value); setSwitching(false); setRenamingKey(null); setConfirmDelete(false); }}
+            style={selectStyle}
+          >
+            {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <label style={labelStyle}>Address</label>
+          {editingAddress ? (
+            <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+              <div style={{ marginBottom: "0.7rem" }}>
+                {field("street", "Street address", { style: { width: "100%" } })}
+              </div>
+              <div style={{ marginBottom: "0.7rem" }}>
+                {field("street2", "Apt, suite, unit (optional)", { style: { width: "100%" } })}
+              </div>
+              <div style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "1fr 72px 100px", marginBottom: "1rem" }}>
+                {field("city", "City")}
+                {field("state", "ST", { maxLength: 2, style: { textTransform: "uppercase" } })}
+                {field("zip", "ZIP", { maxLength: 10 })}
+              </div>
+              <div style={{ display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+                <div>
+                  {hasAddress && (
+                    <button
+                      onClick={handleClearAddress}
+                      style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0, transition: "color 0.12s" }}
+                      onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                      onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                    >Clear address</button>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "0.6rem" }}>
+                  <button
+                    onClick={() => setEditingAddress(false)}
+                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+                  >Cancel</button>
+                  <button
+                    onClick={handleSaveAddress}
+                    style={{ background: "#c9a96e22", border: "1px solid #c9a96e", borderRadius: "3px", color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "#c9a96e35"}
+                    onMouseLeave={e => e.currentTarget.style.background = "#c9a96e22"}
+                  >Save</button>
+                </div>
+              </div>
+            </div>
+          ) : hasAddress ? (
+            <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+              <div style={{ alignItems: "flex-start", display: "flex", gap: "1rem", justifyContent: "space-between" }}>
+                <address style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", fontStyle: "normal", lineHeight: 1.65 }}>
+                  <div style={{ color: "var(--fm-ink)" }}>{address.street}</div>
+                  {address.street2 && <div>{address.street2}</div>}
+                  <div>{[address.city, address.state].filter(Boolean).join(", ")}{address.zip ? ` ${address.zip}` : ""}</div>
+                </address>
+                <button
+                  onClick={startEditAddress}
+                  style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.67rem", letterSpacing: "0.05em", padding: 0, transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >Edit</button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={startEditAddress}
+              style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px dashed #2a3040", borderRadius: "6px", color: "#4a4458", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", gap: "0.5rem", letterSpacing: "0.05em", padding: "1rem 1.25rem", textAlign: "left", transition: "all 0.15s", width: "100%" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "#c9a96e50"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "#4a4458"; }}
+            >
+              + Add address
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Profile description card */}
@@ -463,128 +541,6 @@ function ProfileSettings() {
         </div>
       )}
 
-      {/* ── Divider ── */}
-      <div style={{ borderTop: "1px solid var(--fm-hairline)", margin: "0 0 1.75rem" }} />
-
-      {/* ── Export ── */}
-      <div style={{ marginBottom: "2rem" }}>
-        <div style={subheadStyle}>Export</div>
-        <p style={bodyTextStyle}>
-          Download a profile's data as a JSON backup file. Store it somewhere safe — it can be used to restore your data at any time.
-        </p>
-        <div style={{ alignItems: "flex-end", display: "flex", gap: "0.6rem" }}>
-          <div>
-            <label style={labelStyle}>Profile</label>
-            <select value={exportTarget} onChange={e => setExportTarget(e.target.value)} style={selectStyle}>
-              {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-            </select>
-          </div>
-          <button
-            onClick={() => exportProfile(exportTarget)}
-            disabled={!exportHasData}
-            style={{
-              background: exportHasData ? "var(--fm-bg-panel)" : "transparent",
-              border: `1px solid ${exportHasData ? "var(--fm-ink-dim)" : "var(--fm-hairline)"}`,
-              borderRadius: "3px",
-              color: exportHasData ? "var(--fm-brass-dim)" : "var(--fm-ink-dim)",
-              cursor: exportHasData ? "pointer" : "default",
-              fontFamily: "var(--fm-mono)", fontSize: "0.75rem",
-              letterSpacing: "0.05em", padding: "0.5rem 1.1rem", transition: "all 0.15s",
-            }}
-            onMouseEnter={e => { if (exportHasData) { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; } }}
-            onMouseLeave={e => { if (exportHasData) { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; } }}
-          >
-            Download
-          </button>
-        </div>
-        {!exportHasData && (
-          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", margin: "0.5rem 0 0" }}>
-            No data saved for this profile yet. Switch to it first to generate data.
-          </p>
-        )}
-      </div>
-
-      {/* ── Import ── */}
-      <div>
-        <div style={subheadStyle}>Import</div>
-        <p style={bodyTextStyle}>
-          Restore from a previously exported backup file. Choose which profile slot to load the data into.
-        </p>
-
-        {importSuccess && (
-          <div style={{ alignItems: "center", background: "#4ade8010", border: "1px solid #4ade8030", borderRadius: "4px", display: "flex", gap: "0.5rem", marginBottom: "0.9rem", padding: "0.6rem 0.85rem" }}>
-            <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>Import complete — data saved to {importTargetMeta?.label}.</span>
-            <button onClick={() => setImportSuccess(false)} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginLeft: "auto", padding: 0 }}>×</button>
-          </div>
-        )}
-
-        {!importFile ? (
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.5rem 1.1rem", transition: "all 0.15s" }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >
-            Choose File…
-          </button>
-        ) : importFile === "error" ? (
-          <div style={{ background: "#f8717110", border: "1px solid #f8717130", borderRadius: "4px", padding: "0.75rem 1rem" }}>
-            <div style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", marginBottom: "0.5rem" }}>
-              Invalid file — make sure you're importing a Foreman backup.
-            </div>
-            <button
-              onClick={() => { setImportFile(null); fileInputRef.current?.click(); }}
-              style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0 }}
-              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}
-              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-            >
-              Try again
-            </button>
-          </div>
-        ) : (
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", padding: "0.9rem 1rem" }}>
-            <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", marginBottom: "0.9rem" }}>
-              <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>✓</span>
-              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>{importFile.name}</span>
-              {importFile.data.label && (
-                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>· from {importFile.data.label}</span>
-              )}
-            </div>
-            <div style={{ marginBottom: "0.75rem" }}>
-              <label style={labelStyle}>Load into</label>
-              <select value={importTarget} onChange={e => setImportTarget(e.target.value)} style={selectStyle}>
-                {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-              </select>
-            </div>
-            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5, margin: "0 0 0.85rem" }}>
-              {importTarget === activeProfile
-                ? `This will replace all current ${activeMeta?.label} data. The page will reload.`
-                : `This will replace the saved ${importTargetMeta?.label} snapshot. No reload needed.`
-              }
-            </p>
-            <div style={{ display: "flex", gap: "0.6rem" }}>
-              <button
-                onClick={handleImport} disabled={importing}
-                style={{ background: importing ? "transparent" : "#c9a96e22", border: `1px solid ${importing ? "var(--fm-ink-dim)" : "var(--fm-brass)"}`, borderRadius: "3px", color: importing ? "var(--fm-ink-dim)" : "var(--fm-brass)", cursor: importing ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.45rem 1.1rem", transition: "all 0.15s" }}
-                onMouseEnter={e => { if (!importing) e.currentTarget.style.background = "#c9a96e35"; }}
-                onMouseLeave={e => { if (!importing) e.currentTarget.style.background = "#c9a96e22"; }}
-              >
-                {importing ? "Importing…" : `Import into ${importTargetMeta?.label}`}
-              </button>
-              <button
-                onClick={handleCancelImport} disabled={importing}
-                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: importing ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.45rem 1rem", transition: "all 0.15s" }}
-                onMouseEnter={e => { if (!importing) { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; } }}
-                onMouseLeave={e => { if (!importing) { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; } }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        <input ref={fileInputRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleFileSelect} />
-      </div>
     </div>
   );
 }
@@ -592,10 +548,58 @@ function ProfileSettings() {
 // ─── NotificationsSettings ────────────────────────────────────────────────────
 
 function NotificationsSettings() {
+  return (
+    <div style={{ maxWidth: "560px" }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Notifications</h2>
+    </div>
+  );
+}
+
+// ─── AutomationSettings ───────────────────────────────────────────────────────
+
+function AutomationSettings() {
+  const [autoTodo, setAutoTodo] = useState(
+    () => storageGet("foreman-auto-todo-overdue") === true
+  );
+
+  function handleAutoTodoChange(checked) {
+    setAutoTodo(checked);
+    if (checked) {
+      storageSet("foreman-auto-todo-overdue", true);
+    } else {
+      storageDel("foreman-auto-todo-overdue");
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: "560px" }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Automation</h2>
+      <div style={subheadStyle}>To Dos</div>
+      <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={autoTodo}
+          onChange={e => handleAutoTodoChange(e.target.checked)}
+          style={{ accentColor: "var(--fm-brass)", flexShrink: 0, marginTop: "0.15rem" }}
+        />
+        <div>
+          <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
+            Auto-generate To Dos for overdue maintenance
+          </div>
+          <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, marginTop: "0.2rem" }}>
+            When a maintenance task or chore becomes overdue, automatically create a To Do for it. Off by default — turn on to opt in.
+          </div>
+        </div>
+      </label>
+    </div>
+  );
+}
+
+// ─── IntegrationsSettings ─────────────────────────────────────────────────────
+
+function IntegrationsSettings() {
   const [webhookUrl, setWebhookUrlState] = useState(() => getWebhookUrl());
   const [showModal, setShowModal]         = useState(false);
-
-  // Modal draft state
   const [draftWebhook, setDraftWebhook]   = useState("");
   const [draftHour, setDraftHour]         = useState(9);
   const [draftLeadDays, setDraftLeadDays] = useState(7);
@@ -627,50 +631,85 @@ function NotificationsSettings() {
 
   return (
     <div style={{ maxWidth: "560px" }}>
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Notifications</h2>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Integrations</h2>
       <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", margin: "0 0 2rem" }}>
-        Get reminders about upcoming and overdue maintenance tasks delivered to your Discord server.
+        Connect Foreman with external tools to get your data where it needs to go.
       </p>
 
-      {/* Discord card */}
-      <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
-        <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
-          <svg width="18" height="18" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, opacity: 0.7 }}>
-            <path d="M60.1 4.9A58.5 58.5 0 0 0 45.8.7a.2.2 0 0 0-.2.1 40.7 40.7 0 0 0-1.8 3.7 54 54 0 0 0-16.2 0A38.3 38.3 0 0 0 25.8.8a.2.2 0 0 0-.2-.1A58.4 58.4 0 0 0 11.3 5a.2.2 0 0 0-.1.1C1.6 19.1-1 32.8.3 46.4a.2.2 0 0 0 .1.2 58.8 58.8 0 0 0 17.7 9 .2.2 0 0 0 .2-.1 42 42 0 0 0 3.6-5.9.2.2 0 0 0-.1-.3 38.7 38.7 0 0 1-5.5-2.6.2.2 0 0 1 0-.4c.4-.3.7-.6 1.1-.9a.2.2 0 0 1 .2 0c11.5 5.3 24 5.3 35.4 0a.2.2 0 0 1 .2 0c.4.3.8.6 1.1.9a.2.2 0 0 1 0 .4 36 36 0 0 1-5.5 2.6.2.2 0 0 0-.1.3 47.2 47.2 0 0 0 3.6 5.9.2.2 0 0 0 .2.1 58.7 58.7 0 0 0 17.8-9 .2.2 0 0 0 .1-.2C73.5 30.6 69.2 17 60.2 5a.2.2 0 0 0-.1-.1ZM23.7 38.3c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2 6.5 3.3 6.4 7.2c0 4-2.9 7.2-6.4 7.2Zm23.7 0c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2 6.5 3.3 6.4 7.2c0 4-2.9 7.2-6.4 7.2Z" fill="#5865F2"/>
-          </svg>
-          <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>Discord</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        {/* Discord card */}
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
+            <svg width="18" height="18" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, opacity: 0.7 }}>
+              <path d="M60.1 4.9A58.5 58.5 0 0 0 45.8.7a.2.2 0 0 0-.2.1 40.7 40.7 0 0 0-1.8 3.7 54 54 0 0 0-16.2 0A38.3 38.3 0 0 0 25.8.8a.2.2 0 0 0-.2-.1A58.4 58.4 0 0 0 11.3 5a.2.2 0 0 0-.1.1C1.6 19.1-1 32.8.3 46.4a.2.2 0 0 0 .1.2 58.8 58.8 0 0 0 17.7 9 .2.2 0 0 0 .2-.1 42 42 0 0 0 3.6-5.9.2.2 0 0 0-.1-.3 38.7 38.7 0 0 1-5.5-2.6.2.2 0 0 1 0-.4c.4-.3.7-.6 1.1-.9a.2.2 0 0 1 .2 0c11.5 5.3 24 5.3 35.4 0a.2.2 0 0 1 .2 0c.4.3.8.6 1.1.9a.2.2 0 0 1 0 .4 36 36 0 0 1-5.5 2.6.2.2 0 0 0-.1.3 47.2 47.2 0 0 0 3.6 5.9.2.2 0 0 0 .2.1 58.7 58.7 0 0 0 17.8-9 .2.2 0 0 0 .1-.2C73.5 30.6 69.2 17 60.2 5a.2.2 0 0 0-.1-.1ZM23.7 38.3c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2 6.5 3.3 6.4 7.2c0 4-2.9 7.2-6.4 7.2Zm23.7 0c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2 6.5 3.3 6.4 7.2c0 4-2.9 7.2-6.4 7.2Z" fill="#5865F2"/>
+            </svg>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>Discord</span>
+            {isConnected && (
+              <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", marginLeft: "auto" }}>
+                <span style={{ background: "var(--fm-green)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+                <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em" }}>Connected</span>
+              </div>
+            )}
+          </div>
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 0.85rem" }}>
+            {isConnected
+              ? "Discord webhook is configured. Reminders will be posted to your channel on the schedule below."
+              : "Connect a Discord webhook to receive daily maintenance reminders in your server."}
+          </p>
           {isConnected && (
-            <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", marginLeft: "auto" }}>
-              <span style={{ background: "var(--fm-green)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
-              <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em" }}>Connected</span>
+            <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", marginBottom: "0.85rem", padding: "0.6rem 0.75rem" }}>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.25rem" }}>
+                <span style={{ color: "var(--fm-brass-dim)", minWidth: "70px" }}>Send time</span>
+                <span style={{ color: "var(--fm-ink-dim)" }}>{formatHour12(getSendHourLocal())}</span>
+              </div>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+                <span style={{ color: "var(--fm-brass-dim)", minWidth: "70px" }}>Lead days</span>
+                <span style={{ color: "var(--fm-ink-dim)" }}>{getLeadDays()} {getLeadDays() === 1 ? "day" : "days"} before due</span>
+              </div>
             </div>
           )}
+          <button
+            onClick={openModal}
+            style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+          >
+            {isConnected ? "Edit" : "Set up Discord"}
+          </button>
         </div>
-        <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 0.85rem" }}>
-          {isConnected
-            ? "Discord webhook is configured. Reminders will be posted to your channel on the schedule below."
-            : "Connect a Discord webhook to receive daily maintenance reminders in your server."}
-        </p>
-        {isConnected && (
-          <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", marginBottom: "0.85rem", padding: "0.6rem 0.75rem" }}>
-            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.25rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", minWidth: "70px" }}>Send time</span>
-              <span style={{ color: "var(--fm-ink-dim)" }}>{formatHour12(getSendHourLocal())}</span>
-            </div>
-            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", minWidth: "70px" }}>Lead days</span>
-              <span style={{ color: "var(--fm-ink-dim)" }}>{getLeadDays()} {getLeadDays() === 1 ? "day" : "days"} before due</span>
-            </div>
+
+        {/* ICS Export card */}
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.4rem" }}>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>ICS Export</span>
+            <span style={{ background: "var(--fm-hairline)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", padding: "0.15rem 0.5rem", textTransform: "uppercase" }}>Coming Soon</span>
           </div>
-        )}
-        <button
-          onClick={openModal}
-          style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-        >
-          {isConnected ? "Edit" : "Set up Discord"}
-        </button>
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: 0 }}>
+            Export your maintenance schedule and chore due dates as a .ics file for import into Google Calendar, Apple Calendar, Outlook, or any other calendar application.
+          </p>
+        </div>
+
+        {/* Google Calendar card */}
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.4rem" }}>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>Google Calendar</span>
+            <span style={{ background: "var(--fm-hairline)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", padding: "0.15rem 0.5rem", textTransform: "uppercase" }}>Coming Soon</span>
+          </div>
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: 0 }}>
+            Push maintenance due dates and completion reminders directly to Google Calendar so Foreman fits into the tools your household already uses.
+          </p>
+        </div>
+
+        {/* Home Assistant card */}
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.4rem" }}>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>Home Assistant</span>
+            <span style={{ background: "var(--fm-hairline)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", padding: "0.15rem 0.5rem", textTransform: "uppercase" }}>Coming Soon</span>
+          </div>
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: 0 }}>
+            Connect Foreman's maintenance and inventory data with Home Assistant's device registry and automation engine. Sensor anomalies can trigger tasks in Foreman; completing a task in Foreman can trigger automations in Home Assistant.
+          </p>
+        </div>
       </div>
 
       {/* Discord setup modal */}
@@ -690,7 +729,6 @@ function NotificationsSettings() {
               >×</button>
             </div>
 
-            {/* Webhook URL */}
             <div style={{ marginBottom: "1.1rem" }}>
               <label style={labelStyle}>Webhook URL</label>
               <input
@@ -706,7 +744,6 @@ function NotificationsSettings() {
               </p>
             </div>
 
-            {/* Send hour */}
             <div style={{ marginBottom: "1.1rem" }}>
               <label style={labelStyle}>Daily Send Time</label>
               <select
@@ -723,7 +760,6 @@ function NotificationsSettings() {
               </p>
             </div>
 
-            {/* Lead days */}
             <div style={{ marginBottom: "1.5rem" }}>
               <label style={labelStyle}>Remind me</label>
               <div style={{ alignItems: "center", display: "flex", gap: "0.6rem" }}>
@@ -777,130 +813,44 @@ function NotificationsSettings() {
   );
 }
 
-// ─── AutomationSettings ───────────────────────────────────────────────────────
-
-function AutomationSettings() {
-  const [autoTodo, setAutoTodo] = useState(
-    () => storageGet("foreman-auto-todo-overdue") === true
-  );
-
-  function handleAutoTodoChange(checked) {
-    setAutoTodo(checked);
-    if (checked) {
-      storageSet("foreman-auto-todo-overdue", true);
-    } else {
-      storageDel("foreman-auto-todo-overdue");
-    }
-  }
-
-  return (
-    <div style={{ maxWidth: "560px" }}>
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Automation</h2>
-      <div style={subheadStyle}>To Dos</div>
-      <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
-        <input
-          type="checkbox"
-          checked={autoTodo}
-          onChange={e => handleAutoTodoChange(e.target.checked)}
-          style={{ accentColor: "var(--fm-brass)", flexShrink: 0, marginTop: "0.15rem" }}
-        />
-        <div>
-          <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
-            Auto-generate To Dos for overdue maintenance
-          </div>
-          <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, marginTop: "0.2rem" }}>
-            When a maintenance task or chore becomes overdue, automatically create a To Do for it. Off by default — turn on to opt in.
-          </div>
-        </div>
-      </label>
-    </div>
-  );
-}
-
-// ─── IntegrationsSettings ─────────────────────────────────────────────────────
-
-function IntegrationsSettings() {
-  return (
-    <div style={{ maxWidth: "560px" }}>
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Integrations</h2>
-      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", margin: "0 0 2rem" }}>
-        Connect Foreman with external tools to get your data where it needs to go.
-      </p>
-
-      {/* ICS Export card */}
-      <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
-        <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.4rem" }}>
-          <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>ICS Export</span>
-          <span style={{
-            background: "var(--fm-hairline)",
-            border: "1px solid var(--fm-hairline2)",
-            borderRadius: "3px",
-            color: "var(--fm-ink-dim)",
-            fontFamily: "var(--fm-mono)",
-            fontSize: "0.58rem",
-            letterSpacing: "0.1em",
-            padding: "0.15rem 0.5rem",
-            textTransform: "uppercase",
-          }}>Coming Soon</span>
-        </div>
-        <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: 0 }}>
-          Export your maintenance schedule and chore due dates as a .ics file for import into Google Calendar, Apple Calendar, Outlook, or any other calendar application.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ─── HouseholdSettings ───────────────────────────────────────────────────────
 
 function HouseholdSettings() {
-  // ── Address ──
-  const [address, setAddressState]   = useState(() => loadAddress());
-  const [editingAddress, setEditingAddress] = useState(false);
-  const [draft, setDraft]            = useState(EMPTY_ADDRESS);
-  const [focusedField, setFocusedField] = useState(null);
+  // ── Service Providers ──
+  const [providers, setProvidersState]           = useState(() => loadServiceProviders());
+  const [addingProvider, setAddingProvider]       = useState(false);
+  const [newProviderName, setNewProviderName]     = useState("");
+  const [newProviderTrade, setNewProviderTrade]   = useState("");
+  const [editingProviderId, setEditingProviderId] = useState(null);
+  const [editingProviderName, setEditingProviderName]   = useState("");
+  const [editingProviderTrade, setEditingProviderTrade] = useState("");
+  const [hoveredProviderId, setHoveredProviderId] = useState(null);
+  const [confirmDeleteProviderId, setConfirmDeleteProviderId] = useState(null);
+  const [newProviderNameFocused, setNewProviderNameFocused]   = useState(false);
+  const [newProviderTradeFocused, setNewProviderTradeFocused] = useState(false);
+  const [editProviderNameFocused, setEditProviderNameFocused]   = useState(false);
+  const [editProviderTradeFocused, setEditProviderTradeFocused] = useState(false);
 
-  const hasAddress = address.street.trim() !== "" || address.city.trim() !== "";
+  function persistProviders(next) { setProvidersState(next); saveServiceProviders(next); }
 
-  function startEditAddress() {
-    setDraft({ ...address });
-    setEditingAddress(true);
+  function handleAddProvider() {
+    const name = newProviderName.trim();
+    if (!name) return;
+    persistProviders([...providers, { id: `sp-${Date.now()}`, name, trade: newProviderTrade.trim() }]);
+    setNewProviderName("");
+    setNewProviderTrade("");
+    setAddingProvider(false);
   }
 
-  function handleSaveAddress() {
-    const cleaned = {
-      street:  draft.street.trim(),
-      street2: draft.street2.trim(),
-      city:    draft.city.trim(),
-      state:   draft.state.trim().toUpperCase().slice(0, 2),
-      zip:     draft.zip.trim().slice(0, 10),
-    };
-    saveAddress(cleaned);
-    setAddressState(cleaned);
-    setEditingAddress(false);
+  function handleCommitProviderEdit() {
+    const name = editingProviderName.trim();
+    if (name) persistProviders(providers.map(p => p.id === editingProviderId ? { ...p, name, trade: editingProviderTrade.trim() } : p));
+    setEditingProviderId(null);
   }
 
-  function handleClearAddress() {
-    saveAddress(EMPTY_ADDRESS);
-    setAddressState({ ...EMPTY_ADDRESS });
-    setEditingAddress(false);
-  }
-
-  function field(key, placeholder, opts = {}) {
-    return (
-      <input
-        value={draft[key]}
-        placeholder={placeholder}
-        onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
-        onFocus={() => setFocusedField(key)}
-        onBlur={() => setFocusedField(null)}
-        onKeyDown={e => {
-          if (e.key === "Escape") { e.preventDefault(); setEditingAddress(false); }
-        }}
-        maxLength={opts.maxLength}
-        style={{ ...inputStyle(focusedField === key), ...opts.style }}
-      />
-    );
+  function handleDeleteProvider(id) {
+    persistProviders(providers.filter(p => p.id !== id));
+    setConfirmDeleteProviderId(null);
   }
 
   // ── Members ──
@@ -937,82 +887,10 @@ function HouseholdSettings() {
 
   return (
     <div style={{ maxWidth: "560px" }}>
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Household</h2>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>People</h2>
       <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", margin: "0 0 2.25rem" }}>
-        Basic information about your home and the people who live in it.
+        Residents and the service providers who have worked on this home.
       </p>
-
-      {/* ── Address ── */}
-      <div style={{ marginBottom: "2.5rem" }}>
-        <div style={subheadStyle}>Address</div>
-
-        {editingAddress ? (
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
-            <div style={{ marginBottom: "0.7rem" }}>
-              {field("street", "Street address", { style: { width: "100%" } })}
-            </div>
-            <div style={{ marginBottom: "0.7rem" }}>
-              {field("street2", "Apt, suite, unit (optional)", { style: { width: "100%" } })}
-            </div>
-            <div style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "1fr 72px 100px", marginBottom: "1rem" }}>
-              {field("city", "City")}
-              {field("state", "ST", { maxLength: 2, style: { textTransform: "uppercase" } })}
-              {field("zip", "ZIP", { maxLength: 10 })}
-            </div>
-            <div style={{ display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
-              <div>
-                {hasAddress && (
-                  <button
-                    onClick={handleClearAddress}
-                    style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0, transition: "color 0.12s" }}
-                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                  >Clear address</button>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: "0.6rem" }}>
-                <button
-                  onClick={() => setEditingAddress(false)}
-                  style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-                >Cancel</button>
-                <button
-                  onClick={handleSaveAddress}
-                  style={{ background: "#c9a96e22", border: "1px solid #c9a96e", borderRadius: "3px", color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "#c9a96e35"}
-                  onMouseLeave={e => e.currentTarget.style.background = "#c9a96e22"}
-                >Save</button>
-              </div>
-            </div>
-          </div>
-        ) : hasAddress ? (
-          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
-            <div style={{ alignItems: "flex-start", display: "flex", gap: "1rem", justifyContent: "space-between" }}>
-              <address style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", fontStyle: "normal", lineHeight: 1.65 }}>
-                <div style={{ color: "var(--fm-ink)" }}>{address.street}</div>
-                {address.street2 && <div>{address.street2}</div>}
-                <div>{[address.city, address.state].filter(Boolean).join(", ")}{address.zip ? ` ${address.zip}` : ""}</div>
-              </address>
-              <button
-                onClick={startEditAddress}
-                style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.67rem", letterSpacing: "0.05em", padding: 0, transition: "color 0.12s" }}
-                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
-                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-              >Edit</button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={startEditAddress}
-            style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px dashed #2a3040", borderRadius: "6px", color: "#4a4458", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", gap: "0.5rem", letterSpacing: "0.05em", padding: "1rem 1.25rem", textAlign: "left", transition: "all 0.15s", width: "100%" }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "#c9a96e50"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "#4a4458"; }}
-          >
-            + Add address
-          </button>
-        )}
-      </div>
 
       {/* ── Members ── */}
       <div>
@@ -1130,13 +1008,213 @@ function HouseholdSettings() {
           )}
         </div>
       </div>
+
+      {/* ── Service Providers ── */}
+      <div style={{ marginTop: "2.5rem" }}>
+        <div style={subheadStyle}>Service Providers</div>
+        <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 0.85rem" }}>
+          Contractors, tradespeople, and vendors who have worked on this home. Double-click a row to edit.
+        </p>
+
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", overflow: "hidden" }}>
+          {providers.length === 0 && !addingProvider && (
+            <div style={{ color: "#4a4458", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "1.25rem 1rem", textAlign: "center" }}>
+              No service providers added yet
+            </div>
+          )}
+
+          {providers.map((provider, idx) => (
+            <div key={provider.id}>
+              {confirmDeleteProviderId === provider.id ? (
+                <div style={{ alignItems: "center", background: "#1a1218", borderBottom: idx < providers.length - 1 || addingProvider ? "1px solid var(--fm-hairline)" : "none", display: "flex", gap: "0.75rem", padding: "0.6rem 1rem" }}>
+                  <span style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", flex: 1 }}>
+                    Remove {provider.name}?
+                  </span>
+                  <button
+                    onClick={() => handleDeleteProvider(provider.id)}
+                    style={{ background: "transparent", border: "none", color: "var(--fm-red)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.15rem 0.3rem", transition: "color 0.12s" }}
+                    onMouseEnter={e => e.currentTarget.style.color = "#fca5a5"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-red)"}
+                  >Remove</button>
+                  <button
+                    onClick={() => setConfirmDeleteProviderId(null)}
+                    style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.15rem 0.3rem", transition: "color 0.12s" }}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                  >Cancel</button>
+                </div>
+              ) : editingProviderId === provider.id ? (
+                <div style={{ alignItems: "center", background: "#161920", borderBottom: idx < providers.length - 1 || addingProvider ? "1px solid var(--fm-hairline)" : "none", display: "flex", gap: "0.5rem", padding: "0.45rem 1rem" }}>
+                  <input
+                    autoFocus
+                    value={editingProviderName}
+                    placeholder="Name"
+                    onChange={e => setEditingProviderName(e.target.value)}
+                    onFocus={() => setEditProviderNameFocused(true)}
+                    onBlur={() => setEditProviderNameFocused(false)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") { e.preventDefault(); handleCommitProviderEdit(); }
+                      if (e.key === "Escape") { e.preventDefault(); setEditingProviderId(null); }
+                    }}
+                    style={{ ...inputStyle(editProviderNameFocused), flex: 1, padding: "0.25rem 0.5rem" }}
+                  />
+                  <input
+                    value={editingProviderTrade}
+                    placeholder="Trade / specialty"
+                    onChange={e => setEditingProviderTrade(e.target.value)}
+                    onFocus={() => setEditProviderTradeFocused(true)}
+                    onBlur={() => { setEditProviderTradeFocused(false); handleCommitProviderEdit(); }}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") { e.preventDefault(); handleCommitProviderEdit(); }
+                      if (e.key === "Escape") { e.preventDefault(); setEditingProviderId(null); }
+                    }}
+                    style={{ ...inputStyle(editProviderTradeFocused), flex: 1, padding: "0.25rem 0.5rem" }}
+                  />
+                </div>
+              ) : (
+                <div
+                  onMouseEnter={() => setHoveredProviderId(provider.id)}
+                  onMouseLeave={() => setHoveredProviderId(null)}
+                  onDoubleClick={() => { setEditingProviderId(provider.id); setEditingProviderName(provider.name); setEditingProviderTrade(provider.trade ?? ""); }}
+                  style={{ alignItems: "center", background: idx % 2 === 0 ? "var(--fm-bg-raised)" : "#161920", borderBottom: idx < providers.length - 1 || addingProvider ? "1px solid var(--fm-hairline)" : "none", cursor: "default", display: "flex", gap: "0.75rem", padding: "0.6rem 1rem", userSelect: "none" }}
+                >
+                  <div style={{ alignItems: "center", background: "var(--fm-hairline)", borderRadius: "50%", color: "var(--fm-ink-dim)", display: "flex", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", height: "24px", justifyContent: "center", width: "24px" }}>
+                    {provider.name.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {provider.name}
+                    </div>
+                    {provider.trade && (
+                      <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", marginTop: "0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {provider.trade}
+                      </div>
+                    )}
+                  </div>
+                  {hoveredProviderId === provider.id && (
+                    <button
+                      onClick={() => setConfirmDeleteProviderId(provider.id)}
+                      style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", lineHeight: 1, padding: "0.1rem 0.2rem", transition: "color 0.12s" }}
+                      onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                      onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                    >×</button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Add provider row */}
+          {addingProvider ? (
+            <div style={{ alignItems: "center", borderTop: providers.length > 0 ? "1px solid var(--fm-hairline)" : "none", display: "flex", gap: "0.5rem", padding: "0.45rem 1rem" }}>
+              <input
+                autoFocus
+                value={newProviderName}
+                placeholder="Name"
+                onChange={e => setNewProviderName(e.target.value)}
+                onFocus={() => setNewProviderNameFocused(true)}
+                onBlur={() => setNewProviderNameFocused(false)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") { e.preventDefault(); handleAddProvider(); }
+                  if (e.key === "Escape") { e.preventDefault(); setAddingProvider(false); setNewProviderName(""); setNewProviderTrade(""); }
+                }}
+                style={{ ...inputStyle(newProviderNameFocused), flex: 1, padding: "0.25rem 0.5rem" }}
+              />
+              <input
+                value={newProviderTrade}
+                placeholder="Trade / specialty"
+                onChange={e => setNewProviderTrade(e.target.value)}
+                onFocus={() => setNewProviderTradeFocused(true)}
+                onBlur={() => setNewProviderTradeFocused(false)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") { e.preventDefault(); handleAddProvider(); }
+                  if (e.key === "Escape") { e.preventDefault(); setAddingProvider(false); setNewProviderName(""); setNewProviderTrade(""); }
+                }}
+                style={{ ...inputStyle(newProviderTradeFocused), flex: 1, padding: "0.25rem 0.5rem" }}
+              />
+              <button
+                onClick={handleAddProvider}
+                disabled={!newProviderName.trim()}
+                style={{ background: newProviderName.trim() ? "#c9a96e22" : "transparent", border: `1px solid ${newProviderName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)"}`, borderRadius: "3px", color: newProviderName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: newProviderName.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.3rem 0.65rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
+              >Add</button>
+              <button
+                onClick={() => { setAddingProvider(false); setNewProviderName(""); setNewProviderTrade(""); }}
+                style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.85rem", lineHeight: 1, padding: "0.1rem 0.2rem", transition: "color 0.12s" }}
+                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+              >×</button>
+            </div>
+          ) : (
+            <div style={{ borderTop: providers.length > 0 ? "1px solid var(--fm-hairline)" : "none", padding: "0.45rem 1rem" }}>
+              <button
+                onClick={() => setAddingProvider(true)}
+                style={{ background: "none", border: "none", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", padding: "0.2rem 0", transition: "color 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}
+              >+ Add Provider</button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-// ─── UploadInspectionSettings ─────────────────────────────────────────────────
+// ─── ImportExportSettings (was UploadInspectionSettings) ──────────────────────
 
-function UploadInspectionSettings() {
+function ImportExportSettings() {
+  // ── Profile backup export / import ──
+  const [activeProfile]   = useState(() => loadActiveProfile());
+  const [allProfiles]     = useState(() => getAllProfiles());
+  const activeMeta        = allProfiles.find(p => p.key === activeProfile);
+  const [exportTarget, setExportTarget] = useState(activeProfile);
+  const exportHasData     = hasProfileSnapshot(exportTarget);
+  const jsonFileInputRef  = useRef(null);
+  const [importFile, setImportFile]     = useState(null);
+  const [importTarget, setImportTarget] = useState(activeProfile);
+  const [importing, setImporting]       = useState(false);
+  const [importSuccess, setImportSuccess] = useState(false);
+  const importTargetMeta  = allProfiles.find(p => p.key === importTarget);
+
+  function handleJsonFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try {
+        const parsed = JSON.parse(evt.target.result);
+        if (!parsed?._foreman || parsed.version !== 1) { setImportFile("error"); return; }
+        setImportFile({ name: file.name, data: parsed });
+        setImportSuccess(false);
+      } catch {
+        setImportFile("error");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function handleProfileImport() {
+    if (!importFile || importFile === "error") return;
+    setImporting(true);
+    const err = importProfileData(importFile.data, importTarget);
+    if (err) {
+      setImportFile("error");
+      setImporting(false);
+    } else if (importTarget !== activeProfile) {
+      setImportFile(null);
+      setImporting(false);
+      setImportSuccess(true);
+    }
+  }
+
+  function handleCancelImport() {
+    setImportFile(null);
+    setImporting(false);
+    setImportTarget(activeProfile);
+  }
+
+  // ── Inspection upload ──
   const fileInputRef = useRef(null);
 
   const [meta, setMeta] = useState(() => storageGet(INSPECTION_META_KEY) ?? null);
@@ -1364,7 +1442,131 @@ function UploadInspectionSettings() {
         document.body
       )}
 
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Upload Inspection</h2>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Import / Export</h2>
+
+      {/* ── Export ── */}
+      <div style={{ marginBottom: "2rem" }}>
+        <div style={subheadStyle}>Export</div>
+        <p style={bodyTextStyle}>
+          Download a profile's data as a JSON backup file. Store it somewhere safe — it can be used to restore your data at any time.
+        </p>
+        <div style={{ alignItems: "flex-end", display: "flex", gap: "0.6rem" }}>
+          <div>
+            <label style={labelStyle}>Profile</label>
+            <select value={exportTarget} onChange={e => setExportTarget(e.target.value)} style={selectStyle}>
+              {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </div>
+          <button
+            onClick={() => exportProfile(exportTarget)}
+            disabled={!exportHasData}
+            style={{
+              background: exportHasData ? "var(--fm-bg-panel)" : "transparent",
+              border: `1px solid ${exportHasData ? "var(--fm-ink-dim)" : "var(--fm-hairline)"}`,
+              borderRadius: "3px",
+              color: exportHasData ? "var(--fm-brass-dim)" : "var(--fm-ink-dim)",
+              cursor: exportHasData ? "pointer" : "default",
+              fontFamily: "var(--fm-mono)", fontSize: "0.75rem",
+              letterSpacing: "0.05em", padding: "0.5rem 1.1rem", transition: "all 0.15s",
+            }}
+            onMouseEnter={e => { if (exportHasData) { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; } }}
+            onMouseLeave={e => { if (exportHasData) { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; } }}
+          >
+            Download
+          </button>
+        </div>
+        {!exportHasData && (
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", margin: "0.5rem 0 0" }}>
+            No data saved for this profile yet. Switch to it first to generate data.
+          </p>
+        )}
+      </div>
+
+      {/* ── Import (JSON backup) ── */}
+      <div style={{ marginBottom: "2.5rem" }}>
+        <div style={subheadStyle}>Import</div>
+        <p style={bodyTextStyle}>
+          Restore from a previously exported backup file. Choose which profile slot to load the data into.
+        </p>
+
+        {importSuccess && (
+          <div style={{ alignItems: "center", background: "#4ade8010", border: "1px solid #4ade8030", borderRadius: "4px", display: "flex", gap: "0.5rem", marginBottom: "0.9rem", padding: "0.6rem 0.85rem" }}>
+            <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>Import complete — data saved to {importTargetMeta?.label}.</span>
+            <button onClick={() => setImportSuccess(false)} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginLeft: "auto", padding: 0 }}>×</button>
+          </div>
+        )}
+
+        {!importFile ? (
+          <button
+            onClick={() => jsonFileInputRef.current?.click()}
+            style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.5rem 1.1rem", transition: "all 0.15s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+          >
+            Choose File…
+          </button>
+        ) : importFile === "error" ? (
+          <div style={{ background: "#f8717110", border: "1px solid #f8717130", borderRadius: "4px", padding: "0.75rem 1rem" }}>
+            <div style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", marginBottom: "0.5rem" }}>
+              Invalid file — make sure you're importing a Foreman backup.
+            </div>
+            <button
+              onClick={() => { setImportFile(null); jsonFileInputRef.current?.click(); }}
+              style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0 }}
+              onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}
+              onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", padding: "0.9rem 1rem" }}>
+            <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", marginBottom: "0.9rem" }}>
+              <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>✓</span>
+              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>{importFile.name}</span>
+              {importFile.data.label && (
+                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>· from {importFile.data.label}</span>
+              )}
+            </div>
+            <div style={{ marginBottom: "0.75rem" }}>
+              <label style={labelStyle}>Load into</label>
+              <select value={importTarget} onChange={e => setImportTarget(e.target.value)} style={selectStyle}>
+                {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+            </div>
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5, margin: "0 0 0.85rem" }}>
+              {importTarget === activeProfile
+                ? `This will replace all current ${activeMeta?.label} data. The page will reload.`
+                : `This will replace the saved ${importTargetMeta?.label} snapshot. No reload needed.`
+              }
+            </p>
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button
+                onClick={handleProfileImport} disabled={importing}
+                style={{ background: importing ? "transparent" : "#c9a96e22", border: `1px solid ${importing ? "var(--fm-ink-dim)" : "var(--fm-brass)"}`, borderRadius: "3px", color: importing ? "var(--fm-ink-dim)" : "var(--fm-brass)", cursor: importing ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.45rem 1.1rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { if (!importing) e.currentTarget.style.background = "#c9a96e35"; }}
+                onMouseLeave={e => { if (!importing) e.currentTarget.style.background = "#c9a96e22"; }}
+              >
+                {importing ? "Importing…" : `Import into ${importTargetMeta?.label}`}
+              </button>
+              <button
+                onClick={handleCancelImport} disabled={importing}
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: importing ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.45rem 1rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { if (!importing) { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; } }}
+                onMouseLeave={e => { if (!importing) { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; } }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <input ref={jsonFileInputRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleJsonFileSelect} />
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--fm-hairline)", margin: "0 0 2rem" }} />
+
+      <div style={subheadStyle}>Upload Inspection</div>
       <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", margin: "0 0 2rem" }}>
         Upload a PDF copy of your home inspection report. Foreman will extract appliances, to dos, and projects for your review before adding anything to your profile.
       </p>
@@ -1540,10 +1742,6 @@ function TypeNode({ type, data, depth, onRename, onDelete, onAddSubtype }) {
       <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.45rem 0" }}>
         {/* Indent line */}
         {depth > 0 && <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}>└</span>}
-        {/* Class badge */}
-        <span style={{ background: `${classColor}18`, border: `1px solid ${classColor}40`, borderRadius: 3, color: classColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
-          {behaviorClass === "spatial" ? "Spatial" : "Functional"}
-        </span>
         {/* Label / edit input */}
         {editing ? (
           <input
@@ -1555,7 +1753,7 @@ function TypeNode({ type, data, depth, onRename, onDelete, onAddSubtype }) {
             style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.15rem 0.4rem" }}
           />
         ) : (
-          <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }}>{type.label}</span>
+          <span style={{ color: classColor, flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }}>{type.label}</span>
         )}
         {/* Built-in badge */}
         {type.builtIn && (
@@ -1662,6 +1860,7 @@ function CategoryTypesSettings() {
 
   return (
     <div style={{ maxWidth: 560 }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Category Types</h2>
       <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", lineHeight: 1.6, marginBottom: "0.5rem", marginTop: 0 }}>
         Define how your categories are organized. <strong style={{ color: "var(--fm-cyan)" }}>Spatial</strong> types (rooms, exterior areas) can be drawn on the floor plan. <strong style={{ color: "var(--fm-amber)" }}>Functional</strong> types (systems, structures) are maintenance groupings.
       </p>
@@ -1703,6 +1902,266 @@ function CategoryTypesSettings() {
           </div>
         )}
       </div>
+
+      {/* ── Items (read-only v1) ── */}
+      <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginTop: "1.5rem", paddingBottom: "0.4rem" }}>
+        <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1rem" }}>Items</span>
+      </div>
+      <div style={{ border: "1px solid var(--fm-hairline)", borderRadius: 4, padding: "0 0.75rem" }}>
+        {/* "Type" parent row */}
+        <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.45rem 0" }}>
+          <span style={{ color: "var(--fm-amber)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }}>Type</span>
+          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.08em" }}>built-in</span>
+        </div>
+        {/* Children nested under Type */}
+        <div style={{ marginLeft: "1.25rem" }}>
+          {BUILT_IN_ITEM_TYPES.map((label, idx) => (
+            <div key={label} style={{ alignItems: "center", borderBottom: idx < BUILT_IN_ITEM_TYPES.length - 1 ? "1px solid var(--fm-hairline)" : "none", display: "flex", gap: "0.5rem", padding: "0.45rem 0" }}>
+              <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}>└</span>
+              <span style={{ color: "var(--fm-amber)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }}>{label}</span>
+              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.08em" }}>built-in</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Theme definitions ────────────────────────────────────────────────────────
+
+const THEMES = [
+  {
+    key: "foreman",
+    name: "Foreman",
+    description: "The original. Dense, dark, and precise — built for serious work.",
+    fonts: [
+      { name: "Newsreader",     family: "Newsreader, Georgia, serif" },
+      { name: "Inter",          family: "Inter, system-ui, sans-serif" },
+      { name: "JetBrains Mono", family: "'JetBrains Mono', 'IBM Plex Mono', monospace" },
+    ],
+    colors: ["#0e1014", "#c9a96e", "#e8e4dd", "#e07b6a", "#7fb087", "#7ab5d9"],
+    radius: "2px",
+    available: true,
+  },
+  {
+    key: "daylight",
+    name: "Daylight",
+    description: "Light mode. Warm, airy, and readable in bright environments.",
+    fonts: [
+      { name: "Newsreader",     family: "Newsreader, Georgia, serif" },
+      { name: "Inter",          family: "Inter, system-ui, sans-serif" },
+      { name: "JetBrains Mono", family: "'JetBrains Mono', 'IBM Plex Mono', monospace" },
+    ],
+    colors: ["#f8f6f1", "#8b6914", "#1a1712", "#c0392b", "#2e7d32", "#1565c0"],
+    radius: "4px",
+    available: false,
+  },
+  {
+    key: "obsidian",
+    name: "Obsidian",
+    description: "True black with cool undertones — optimized for OLED displays.",
+    fonts: [
+      { name: "Newsreader",     family: "Newsreader, Georgia, serif" },
+      { name: "Inter",          family: "Inter, system-ui, sans-serif" },
+      { name: "JetBrains Mono", family: "'JetBrains Mono', 'IBM Plex Mono', monospace" },
+    ],
+    colors: ["#000000", "#818cf8", "#f1f5f9", "#f87171", "#4ade80", "#a78bfa"],
+    radius: "2px",
+    available: false,
+  },
+];
+
+// ─── ThemeModal ───────────────────────────────────────────────────────────────
+
+function ThemeModal({ activeTheme, onSelect, onClose }) {
+  return createPortal(
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ alignItems: "flex-start", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, overflowY: "auto", padding: "3rem 1.5rem", position: "fixed", right: 0, top: 0, zIndex: 1000 }}
+    >
+      <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: "720px", padding: "1.75rem", width: "100%" }}>
+        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "1.5rem" }}>
+          <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>Select Theme</span>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "1rem", lineHeight: 1, padding: "0.1rem 0.3rem", transition: "color 0.12s" }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+          >×</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {THEMES.map(theme => {
+            const isActive = theme.key === activeTheme;
+            return (
+              <div
+                key={theme.key}
+                onClick={() => theme.available && onSelect(theme.key)}
+                style={{
+                  background: isActive ? "#c9a96e0a" : "var(--fm-bg-raised)",
+                  border: `1px solid ${isActive ? "var(--fm-brass)" : "var(--fm-hairline)"}`,
+                  borderRadius: "6px",
+                  cursor: theme.available ? "pointer" : "default",
+                  display: "flex",
+                  gap: "1.5rem",
+                  opacity: theme.available ? 1 : 0.6,
+                  padding: "1rem 1.25rem",
+                  transition: "border-color 0.15s",
+                }}
+                onMouseEnter={e => { if (theme.available && !isActive) e.currentTarget.style.borderColor = "var(--fm-hairline2)"; }}
+                onMouseLeave={e => { if (theme.available && !isActive) e.currentTarget.style.borderColor = "var(--fm-hairline)"; }}
+              >
+                {/* Left: name + indicators */}
+                <div style={{ flexShrink: 0, paddingTop: "0.1rem", width: "130px" }}>
+                  <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.35rem" }}>
+                    <div style={{
+                      background: isActive ? "var(--fm-brass)" : "transparent",
+                      border: `1.5px solid ${isActive ? "var(--fm-brass)" : "var(--fm-hairline2)"}`,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      height: "10px",
+                      transition: "all 0.15s",
+                      width: "10px",
+                    }} />
+                    <span style={{ color: isActive ? "var(--fm-brass)" : "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "0.95rem" }}>
+                      {theme.name}
+                    </span>
+                  </div>
+                  {isActive && (
+                    <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.1em", marginLeft: "1.4rem", textTransform: "uppercase" }}>
+                      Active
+                    </div>
+                  )}
+                  {!theme.available && (
+                    <div style={{ background: "var(--fm-hairline)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-mute)", display: "inline-block", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", marginLeft: "1.4rem", marginTop: "0.2rem", padding: "0.1rem 0.4rem", textTransform: "uppercase" }}>
+                      Coming Soon
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: details */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* Description */}
+                  <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5, margin: "0 0 0.65rem" }}>
+                    {theme.description}
+                  </p>
+
+                  {/* Fonts in their own typeface */}
+                  <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.65rem" }}>
+                    {theme.fonts.map((f, i) => (
+                      <span key={f.name} style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+                        <span style={{ color: "var(--fm-ink)", fontFamily: f.family, fontSize: "0.8rem" }}>{f.name}</span>
+                        {i < theme.fonts.length - 1 && (
+                          <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem" }}>·</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Colors + radius */}
+                  <div style={{ alignItems: "center", display: "flex", gap: "1rem" }}>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                      {theme.colors.map(hex => (
+                        <div key={hex} style={{ alignItems: "center", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                          <div style={{ background: hex, border: "1px solid rgba(255,255,255,0.07)", borderRadius: "2px", height: "16px", width: "16px" }} />
+                          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.46rem", letterSpacing: "0.01em" }}>{hex}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ alignItems: "center", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                      <div style={{ background: "var(--fm-hairline2)", borderRadius: theme.radius, height: "16px", width: "24px" }} />
+                      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.46rem" }}>{theme.radius}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// ─── DisplaySettings ──────────────────────────────────────────────────────────
+
+function DisplaySettings() {
+  const [activeTheme, setActiveTheme] = useState(() => storageGet("foreman-theme") ?? "foreman");
+  const [showThemeModal, setShowThemeModal] = useState(false);
+
+  function handleSelectTheme(key) {
+    setActiveTheme(key);
+    storageSet("foreman-theme", key);
+    setShowThemeModal(false);
+  }
+
+  const activeThemeMeta = THEMES.find(t => t.key === activeTheme) ?? THEMES[0];
+
+  return (
+    <div style={{ maxWidth: "560px" }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Display</h2>
+
+      {/* ── Theme ── */}
+      <div style={{ marginBottom: "2.5rem" }}>
+        <div style={subheadStyle}>Theme</div>
+        <p style={bodyTextStyle}>The visual personality of the application: colors, typefaces, and corner radius.</p>
+
+        <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "1rem", justifyContent: "space-between", padding: "0.85rem 1.1rem" }}>
+          <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "0.95rem", marginBottom: "0.2rem" }}>{activeThemeMeta.name}</div>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>{activeThemeMeta.description}</div>
+          </div>
+          <button
+            onClick={() => setShowThemeModal(true)}
+            style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.05em", padding: "0.4rem 0.85rem", transition: "all 0.15s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+          >
+            Change
+          </button>
+        </div>
+      </div>
+
+      {/* ── Density ── */}
+      <div>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
+          <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>Density</span>
+          <span style={{ background: "var(--fm-hairline)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", padding: "0.1rem 0.4rem", textTransform: "uppercase" }}>Coming Soon</span>
+        </div>
+        <p style={bodyTextStyle}>Control the spacing and size of UI elements across the application.</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", opacity: 0.4, pointerEvents: "none" }}>
+          {[
+            ["compact",     "Compact",     "Tighter spacing and smaller text for maximum information density."],
+            ["default",     "Default",     "Balanced spacing for everyday use."],
+            ["comfortable", "Comfortable", "Larger touch targets and more breathing room."],
+          ].map(([val, label, desc]) => (
+            <label key={val} style={{ alignItems: "flex-start", cursor: "default", display: "flex", gap: "0.6rem" }}>
+              <input
+                type="radio"
+                name="density"
+                value={val}
+                defaultChecked={val === "default"}
+                disabled
+                style={{ accentColor: "var(--fm-brass)", flexShrink: 0, marginTop: "0.15rem" }}
+              />
+              <div>
+                <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>{label}</div>
+                <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, marginTop: "0.1rem" }}>{desc}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {showThemeModal && (
+        <ThemeModal
+          activeTheme={activeTheme}
+          onSelect={handleSelectTheme}
+          onClose={() => setShowThemeModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1712,63 +2171,38 @@ function CategoryTypesSettings() {
 export default function PreferencesPage({ navigate }) {
   const [activeSection, setActiveSection] = useState("profile");
 
+  const activeLabel = NAV_ITEMS.find(i => i.key === activeSection)?.label ?? NAV_ITEMS[0].label;
+
+  function handleTabChange(label) {
+    const item = NAV_ITEMS.find(i => i.label === label);
+    if (item?.available) setActiveSection(item.key);
+  }
+
   return (
     <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
 
-      {/* Header */}
       <FmHeader active="Preferences" tagline="Preferences" />
-      <FmSubnav tabs={["Account", "Notifications", "Display", "Data", "Integrations"]} active="Account" />
+      <FmSubnav
+        tabs={NAV_ITEMS.map(i => i.label)}
+        active={activeLabel}
+        onTabChange={handleTabChange}
+      />
 
-      {/* Body */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-
-        {/* Settings nav sidebar */}
-        <div style={{ borderRight: "1px solid var(--fm-hairline)", flexShrink: 0, overflowY: "auto", padding: "2rem 0", width: "200px" }}>
-          {NAV_ITEMS.map(item => {
-            const isActive = activeSection === item.key;
-            return (
-              <button
-                key={item.key}
-                onClick={() => item.available && setActiveSection(item.key)}
-                style={{
-                  background: isActive ? "#c9a96e12" : "transparent",
-                  border: "none",
-                  borderLeft: `2px solid ${isActive ? "var(--fm-brass)" : "transparent"}`,
-                  color: isActive ? "var(--fm-brass)" : item.available ? "var(--fm-brass-dim)" : "var(--fm-ink-dim)",
-                  cursor: item.available ? "pointer" : "default",
-                  display: "block",
-                  fontFamily: "var(--fm-mono)",
-                  fontSize: "0.78rem",
-                  letterSpacing: "0.05em",
-                  padding: "0.5rem 1.25rem",
-                  textAlign: "left",
-                  transition: "all 0.15s",
-                  width: "100%",
-                }}
-                onMouseEnter={e => { if (item.available && !isActive) e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-                onMouseLeave={e => { if (item.available && !isActive) e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-              >
-                {item.label}
-                {!item.available && (
-                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", marginLeft: "0.5rem" }}>soon</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Settings content */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "2rem 2.5rem" }}>
-          {activeSection === "profile"        && <ProfileSettings />}
-          {activeSection === "household"      && <HouseholdSettings />}
-          {activeSection === "categorytypes"  && <CategoryTypesSettings />}
-          {activeSection === "notifications"  && <NotificationsSettings />}
-          {activeSection === "automation"     && <AutomationSettings />}
-          {activeSection === "integrations"   && <IntegrationsSettings />}
-          {activeSection === "inspection"     && <UploadInspectionSettings />}
-        </div>
-
+      <div style={{ flex: 1, overflowY: "auto", padding: "2rem 2.5rem" }}>
+        {activeSection === "profile" && (
+          <div style={{ alignItems: "start", display: "grid", gap: "0 3rem", gridTemplateColumns: "1fr 1fr 1fr" }}>
+            <ProfileSettings />
+            <HouseholdSettings />
+            <CategoryTypesSettings />
+          </div>
+        )}
+        {activeSection === "notifications"  && <NotificationsSettings />}
+        {activeSection === "automation"     && <AutomationSettings />}
+        {activeSection === "integrations"   && <IntegrationsSettings />}
+        {activeSection === "display"        && <DisplaySettings />}
+        {activeSection === "importexport"   && <ImportExportSettings />}
       </div>
+
     </div>
   );
 }
