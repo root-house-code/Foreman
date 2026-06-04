@@ -6,10 +6,11 @@ import "./reminders-a11y.css";
 import App from "./App.jsx";
 import { storageInit } from "../lib/storage.js";
 import { loadFpData } from "../lib/fpData.js";
-import { loadRooms } from "../lib/rooms.js";
+import { loadRooms, saveRooms } from "../lib/rooms.js";
 import { loadFloors, saveFloors, sortFloors, getDefaultFloors } from "../lib/floors.js";
 import { useForemanStore } from "../lib/store.js";
-import { migrateCfvSplit } from "../lib/customFields.js";
+import { migrateCfvSplit, loadItemFieldValues, saveItemFieldValues } from "../lib/customFields.js";
+import { migrateStructureCategories } from "../lib/entityTypes.js";
 
 storageInit().then(() => {
   // Run fpData first so migrateToV3 (if needed) writes fresh room IDs to storage
@@ -28,12 +29,21 @@ storageInit().then(() => {
     ...Object.values(rooms).map(r => r.floorId).filter(Boolean),
   ]);
 
-  const orphaned = [...usedLevelIds].filter(id => !knownFloorIds.has(id));
-  if (orphaned.length > 0) {
+  // Separate orphans: IDs with actual zone placements need a floor rebuilt;
+  // IDs only referenced by rooms (no placements) are dangling room refs — clean them up
+  // instead of creating a phantom floor that reappears on every app start.
+  const orphanedWithPlacements = [...usedLevelIds].filter(id =>
+    !knownFloorIds.has(id) && Object.keys(fpData.placements[id] || {}).length > 0
+  );
+  const orphanedRoomsOnly = [...usedLevelIds].filter(id =>
+    !knownFloorIds.has(id) && Object.keys(fpData.placements[id] || {}).length === 0
+  );
+
+  if (orphanedWithPlacements.length > 0) {
     const rebuilt = [...currentFloors];
-    // Sort orphaned so levels with more zone placements get higher numbers
+    // Sort so levels with more zone placements get higher numbers
     // (higher number → more negative sortKey → appears first in floor list).
-    const sorted = [...orphaned].sort(
+    const sorted = [...orphanedWithPlacements].sort(
       (a, b) => Object.keys(fpData.placements[a] || {}).length
               - Object.keys(fpData.placements[b] || {}).length
     );
@@ -56,12 +66,31 @@ storageInit().then(() => {
     saveFloors(sortFloors(rebuilt));
   }
 
+  if (orphanedRoomsOnly.length > 0) {
+    const orphanSet = new Set(orphanedRoomsOnly);
+    const cleaned = Object.fromEntries(
+      Object.entries(rooms).filter(([, r]) => !orphanSet.has(r.floorId))
+    );
+    saveRooms(cleaned);
+  }
+
   // Ensure at least one floor exists for brand-new users.
   if (loadFloors().length === 0) saveFloors(getDefaultFloors());
 
   // One-time split of customFieldValues into spatialAssignments + itemFieldValues.
   // Must run after storageInit so the cache has the real data, and before reloadAll.
   migrateCfvSplit();
+  migrateStructureCategories();
+
+  // Correct Gas Fireplace: was miscategorized as Fixture; it is a fuel-supplied heating Appliance.
+  {
+    const KEY = "custom-1778545711267";
+    const vals = loadItemFieldValues();
+    if (vals[KEY]?.item_type === "Fixture") {
+      vals[KEY] = { ...vals[KEY], item_type: "Appliance", item_subtype: "Climate Control" };
+      saveItemFieldValues(vals);
+    }
+  }
 
   // Populate the store from the now-correct cache.
   useForemanStore.getState().reloadAll();

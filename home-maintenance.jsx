@@ -5,10 +5,9 @@ import FmSubnav from "./src/components/FmSubnav.jsx";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides, defaultData } from "./lib/data.js";
 import MaintenanceTable from "./components/MaintenanceTable.jsx";
 import Legend from "./components/Legend.jsx";
-import ReminderSettings from "./components/ReminderSettings.jsx";
 import {
   loadReminderModes, saveReminderModes,
-  REMINDER_MODES, syncReminders,
+  REMINDER_MODES,
 } from "./lib/reminders.js";
 import { computeNextDate, parseMonths } from "./lib/scheduleInterval.js";
 import { getScheduleColor } from "./lib/scheduleColor.js";
@@ -16,8 +15,9 @@ import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
-import { resolveTypeId, isSpatial, isFunctional, isStructureType, isExteriorType } from "./lib/entityTypes.js";
+import { resolveTypeId, isSpatial, isFunctional, isExteriorType } from "./lib/entityTypes.js";
 import { useForemanStore } from "./lib/store.js";
+import { getItemStableKey } from "./lib/itemKeys.js";
 import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
@@ -48,10 +48,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [activeTab, setActiveTab] = useState("All tasks");
   const [completionRecords] = useState(() => loadMaintenanceCompletionRecords());
   const [activeStatus, setActiveStatus] = useState("ALL");
-  const [systemFilter, setSystemFilter] = useState("ALL");
-  const [structureFilter, setStructureFilter] = useState("ALL");
-  const [exteriorFilter, setExteriorFilter] = useState("ALL");
-  const [roomFilter, setRoomFilter] = useState("ALL");
+  const [locationFilter, setLocationFilter] = useState("ALL");
   const [levelFilter, setLevelFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [search, setSearch] = useState("");
@@ -71,7 +68,8 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const fpPlacements      = useForemanStore(s => s.fpData.placements ?? {});
   const invFloors         = useForemanStore(s => s.floors);
   const invRooms          = useForemanStore(s => s.rooms);
-  const customFieldValues = useForemanStore(s => s.itemFieldValues);
+  const customFieldValues  = useForemanStore(s => s.itemFieldValues);
+  const spatialAssignments = useForemanStore(s => s.spatialAssignments);
   const pageHeaderRef = useRef(null);
   const [pageHeaderHeight, setPageHeaderHeight] = useState(0);
 
@@ -141,33 +139,16 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     return labels;
   }, [categoryGroups, roomSubtypes]);
 
-  const systemCats = useMemo(() =>
-    allActiveCats.filter(cat => {
+  const locationCats = useMemo(() => {
+    const fromCats = allActiveCats.filter(cat => {
       const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
-      return isFunctional(typeId, entityTypeData) && !isStructureType(typeId, entityTypeData);
-    }).sort()
-  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
+      return isSpatial(typeId, entityTypeData);
+    });
+    const fromLabels = Object.values(spatialAssignments || {})
+      .flatMap(v => [v?.roomLabel, v?.exteriorLabel]).filter(Boolean);
+    return [...new Set([...fromCats, ...fromLabels])].sort();
+  }, [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData, spatialAssignments]);
 
-  const structureCats = useMemo(() =>
-    allActiveCats.filter(cat => {
-      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
-      return isStructureType(typeId, entityTypeData);
-    }).sort()
-  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
-
-  const exteriorCats = useMemo(() =>
-    allActiveCats.filter(cat => {
-      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
-      return isExteriorType(typeId, entityTypeData);
-    }).sort()
-  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
-
-  const roomCats = useMemo(() =>
-    allActiveCats.filter(cat => {
-      const typeId = resolveTypeId(cat, categoryTypeOverrides[cat] ?? catTypeMap[cat] ?? "system");
-      return isSpatial(typeId, entityTypeData) && !isExteriorType(typeId, entityTypeData);
-    }).sort()
-  , [allActiveCats, catTypeMap, categoryTypeOverrides, entityTypeData]);
 
   const typeOptions = useMemo(() => {
     const seen = new Set();
@@ -240,7 +221,6 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [notes, setNotes] = useState(() => storageGet("maintenance-notes") ?? {});
   const [followSchedule, setFollowSchedule] = useState(() => storageGet("maintenance-follow") ?? {});
   const [reminderModes, setReminderModes] = useState(() => loadReminderModes());
-  const [remindersOpen, setRemindersOpen] = useState(false);
 
   function handleCycleReminderMode(key) {
     setReminderModes(prev => {
@@ -250,10 +230,6 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       saveReminderModes(next);
       return next;
     });
-  }
-
-  async function handleSyncReminders() {
-    return syncReminders({ rows, nextDates, modes: reminderModes });
   }
 
   function handleSaveNewTask(form) {
@@ -457,10 +433,12 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       if (deletedItems.has(`${row.category}|${row.item}`)) return false;
       if (deletedRows.has(key)) return false;
 
-      if (systemFilter !== "ALL" && row.category !== systemFilter) return false;
-      if (structureFilter !== "ALL" && row.category !== structureFilter) return false;
-      if (exteriorFilter !== "ALL" && row.category !== exteriorFilter) return false;
-      if (roomFilter !== "ALL" && row.category !== roomFilter) return false;
+      if (locationFilter !== "ALL") {
+        const sa = spatialAssignments?.[getItemStableKey(row)] || {};
+        const loc = row.category === locationFilter ? locationFilter
+          : (sa.roomLabel || sa.exteriorLabel || "");
+        if (loc !== locationFilter) return false;
+      }
       if (levelFilter !== "ALL") {
         const placedRoomIds = Object.keys(fpPlacements[levelFilter] || {});
         const placedLabels = new Set(placedRoomIds.map(rid => invRooms[rid]?.label).filter(Boolean));
@@ -508,7 +486,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
       if (a._isCustom !== b._isCustom) return a._isCustom ? -1 : 1;
       return 0;
     });
-  }, [rows, activeStatus, systemFilter, structureFilter, exteriorFilter, roomFilter, levelFilter, typeFilter, fpPlacements, invRooms, customFieldValues, activeFrequencies, activeSeasons, search, deletedRows, deletedCategories, deletedItems, sortCols, nextDates]);
+  }, [rows, activeStatus, locationFilter, levelFilter, typeFilter, fpPlacements, invRooms, customFieldValues, spatialAssignments, activeFrequencies, activeSeasons, search, deletedRows, deletedCategories, deletedItems, sortCols, nextDates]);
 
   const maintenanceStats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -691,27 +669,6 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
           >
             + ADD TASK
           </button>
-          <button
-            onClick={() => setRemindersOpen(true)}
-            className="foreman-reminders-header-btn"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--fm-ink-dim)",
-              borderRadius: "3px",
-              color: "var(--fm-brass-dim)",
-              cursor: "pointer",
-              fontFamily: "var(--fm-mono)",
-              fontSize: "0.72rem",
-              letterSpacing: "0.08em",
-              padding: "0.4rem 0.9rem",
-              transition: "all 0.15s",
-              whiteSpace: "nowrap",
-            }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >
-            REMINDERS
-          </button>
         </div>
         {/* Filter pills — Status / System / Room */}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.6rem" }}>
@@ -726,28 +683,10 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
               <FilterPill key={key} active={activeStatus === key} color={color} onClick={() => setActiveStatus(key)}>{label}</FilterPill>
             ))}
           </FilterRow>
-          <FilterRow label="Systems" labelWidth="54px" hidden={systemCats.length === 0}>
-            <FilterPill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</FilterPill>
-            {systemCats.map(cat => (
-              <FilterPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</FilterPill>
-            ))}
-          </FilterRow>
-          <FilterRow label="Structure" labelWidth="54px" hidden={structureCats.length === 0}>
-            <FilterPill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</FilterPill>
-            {structureCats.map(cat => (
-              <FilterPill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</FilterPill>
-            ))}
-          </FilterRow>
-          <FilterRow label="Exterior" labelWidth="54px" hidden={exteriorCats.length === 0}>
-            <FilterPill active={exteriorFilter === "ALL"} onClick={() => setExteriorFilter("ALL")}>All</FilterPill>
-            {exteriorCats.map(cat => (
-              <FilterPill key={cat} active={exteriorFilter === cat} onClick={() => setExteriorFilter(cat)}>{cat}</FilterPill>
-            ))}
-          </FilterRow>
-          <FilterRow label="Rooms" labelWidth="54px" hidden={roomCats.length === 0}>
-            <FilterPill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</FilterPill>
-            {roomCats.map(cat => (
-              <FilterPill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</FilterPill>
+          <FilterRow label="Location" labelWidth="54px" hidden={locationCats.length === 0}>
+            <FilterPill active={locationFilter === "ALL"} onClick={() => setLocationFilter("ALL")}>All</FilterPill>
+            {locationCats.map(cat => (
+              <FilterPill key={cat} active={locationFilter === cat} onClick={() => setLocationFilter(cat)}>{cat}</FilterPill>
             ))}
           </FilterRow>
           <FilterRow label="Level" labelWidth="54px" hidden={invFloors.length === 0}>
@@ -790,13 +729,6 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
           stickyTop={0}
         />
       </div>}
-
-      <ReminderSettings
-        open={remindersOpen}
-        onClose={() => setRemindersOpen(false)}
-        onSync={handleSyncReminders}
-        enabledCount={Object.values(reminderModes).filter(m => m && m !== "off").length}
-      />
 
       {addTaskModalOpen && (
         <AddTaskModal

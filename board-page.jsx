@@ -8,7 +8,7 @@ import DatePicker from "react-datepicker";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { createProject } from "./lib/projects.js";
 import { loadData } from "./lib/data.js";
-import { loadEntityTypes, isSpatial, isFunctional, isExteriorType, isStructureType, resolveTypeId } from "./lib/entityTypes.js";
+import { loadEntityTypes, isSpatial, isFunctional, isExteriorType, resolveTypeId } from "./lib/entityTypes.js";
 import { useForemanStore } from "./lib/store.js";
 import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
 import AssigneeInput from "./components/AssigneeInput.jsx";
@@ -95,9 +95,9 @@ function TodoCard({ todo, onEdit, isDragging, onDragStart, onDragEnd, onStatusCh
         <div style={{ minWidth: 0 }}>
           {(todo.linkedCategory || todo.linkedItem || todo.linkedRoom || todo.linkedSystem) && (
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.2rem", marginBottom: "0.15rem" }}>
-              {(todo.linkedRoom || (todo.linkedCategory && !todo.linkedSystem)) && (
+              {(todo.linkedRoom || todo.linkedExterior || (todo.linkedCategory && !todo.linkedSystem)) && (
                 <span style={{ border: "var(--fm-border)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.04em", overflow: "hidden", padding: "0.1rem 0.3rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {todo.linkedRoom || todo.linkedCategory}{todo.linkedItem ? ` › ${todo.linkedItem}` : ""}
+                  {todo.linkedRoom || todo.linkedExterior || todo.linkedCategory}{todo.linkedItem ? ` › ${todo.linkedItem}` : ""}
                 </span>
               )}
               {todo.linkedSystem && (
@@ -306,10 +306,6 @@ export default function BoardPage({ navigate }) {
 
   const exteriorCategories = useMemo(() =>
     allCategories.filter(c => isExteriorType(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
-    [allCategories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
-
-  const structureCategories = useMemo(() =>
-    allCategories.filter(c => isStructureType(resolveTypeId(c, categoryTypeOverrides[c] ?? defaultCatTypes[c] ?? "system"), entityTypeData)).sort(),
     [allCategories, categoryTypeOverrides, defaultCatTypes, entityTypeData]);
 
   const rowDataByKey = useMemo(() => {
@@ -602,7 +598,7 @@ export default function BoardPage({ navigate }) {
         <TodoModal
           todo={modalTodo} categories={categories} categoryItems={categoryItems}
           spatialCategories={spatialCategories} functionalCategories={functionalCategories}
-          exteriorCategories={exteriorCategories} structureCategories={structureCategories}
+          exteriorCategories={exteriorCategories}
           projects={projects}
           onSave={handleSaveTodo} onClose={() => setModalState(null)}
           onDelete={modalTodo ? () => handleDelete(modalTodo.id) : null}

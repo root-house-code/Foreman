@@ -526,245 +526,245 @@
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Asphalt Shingles",
     "task": "Visual inspection for missing/damaged shingles",
     "schedule": "Twice a year"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Roof Flashing",
     "task": "Inspect for lifting, rust or gaps",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Roof Vents & Ridge Vents",
     "task": "Inspect for blockages",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Chimney",
     "task": "Inspect cap, crown, flashing & mortar",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Chimney",
     "task": "Professional sweep / cleaning",
     "schedule": "Annually (if used)"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Skylights",
     "task": "Inspect seals and clean glass",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Flat Roof / EPDM",
     "task": "Inspect membrane and seams",
     "schedule": "Twice a year"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Metal Roof",
     "task": "Inspect for loose fasteners, sealant and rust",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Tile Roof (Clay / Concrete)",
     "task": "Inspect for cracked or slipped tiles",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Slate Roof",
     "task": "Inspect for cracked, missing or slipped slates",
     "schedule": "Annually"
   },
   {
     "category": "Roof",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Wood Shake / Shingle Roof",
     "task": "Inspect for splits, moss or curling; treat if needed",
     "schedule": "Annually"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Gutters",
     "task": "Clear leaves and debris",
     "schedule": "2–4 times/year"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Gutters",
     "task": "Inspect for sagging, cracks or leaks",
     "schedule": "Annually"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Downspouts",
     "task": "Flush and confirm clear flow",
     "schedule": "Annually"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Downspout Extensions",
     "task": "Direct water 4–6 ft from foundation",
     "schedule": "Annually"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Window Wells",
     "task": "Clear debris and check drainage",
     "schedule": "Annually"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Yard Grading",
     "task": "Inspect slope away from foundation",
     "schedule": "Annually"
   },
   {
     "category": "Gutters & Drainage",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "French Drain / Drain Tile",
     "task": "Inspect outlets and flow",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Exterior Paint / Siding",
     "task": "Inspect for peeling, cracking or rot",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Wood Siding / Trim",
     "task": "Re-paint or re-stain as needed",
     "schedule": "Every 5–10 years"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Fiber Cement / Vinyl Siding",
     "task": "Pressure wash and inspect",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Brick / Mortar",
     "task": "Inspect for cracks and tuckpoint",
     "schedule": "Every 5–10 years"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Foundation",
     "task": "Walk perimeter; inspect for cracks",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Driveway (asphalt)",
     "task": "Seal coat",
     "schedule": "Every 2–5 years"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Driveway (concrete)",
     "task": "Seal cracks and apply concrete sealer",
     "schedule": "Every 3–5 years"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Walkways & Patio",
     "task": "Inspect for cracks and heaving",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Deck / Wood Porch",
     "task": "Clean and re-stain or seal",
     "schedule": "Every 2–3 years"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Deck / Wood Porch",
     "task": "Inspect boards and fasteners for rot",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Composite Deck",
     "task": "Clean with deck cleaner",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Fence (wood)",
     "task": "Inspect posts; re-stain or seal",
     "schedule": "Every 2–3 years"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Retaining Walls",
     "task": "Inspect for bowing or drainage issues",
     "schedule": "Annually"
   },
   {
     "category": "Exterior",
-    "categoryType": "structure",
+    "categoryType": "exterior",
     "item": "Caulking (exterior seams/windows)",
     "task": "Inspect and re-caulk gaps",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Windows",
     "task": "Clean tracks, lubricate hardware",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Windows",
     "task": "Inspect weatherstripping and seals",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Window Screens",
     "task": "Inspect and repair tears",
     "schedule": "Annually",
@@ -772,56 +772,56 @@
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Exterior Doors",
     "task": "Inspect weatherstripping and threshold",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Exterior Doors",
     "task": "Lubricate hinges and deadbolts",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Storm Doors",
     "task": "Clean and adjust door closer",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Sliding Glass Doors",
     "task": "Clean and lubricate track",
     "schedule": "Every 6 months"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Garage Door",
     "task": "Lubricate springs, rollers and tracks",
     "schedule": "Every 6 months"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Garage Door",
     "task": "Test auto-reverse safety feature",
     "schedule": "Monthly"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Garage Door Opener",
     "task": "Replace backup battery",
     "schedule": "Annually"
   },
   {
     "category": "Windows & Doors",
-    "categoryType": "structure",
+    "categoryType": "system",
     "item": "Garage Door Weatherstripping",
     "task": "Inspect and replace bottom seal",
     "schedule": "Every 2–3 years"

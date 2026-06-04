@@ -10,7 +10,7 @@ import {
   exportProfile, importProfileData, hasProfileSnapshot,
   createProfile, deleteUserProfile, renameUserProfile,
 } from "./lib/profiles.js";
-import { defaultData, loadCustomData, saveCustomData } from "./lib/data.js";
+import { defaultData, loadData, loadCustomData, saveCustomData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { loadItemFieldValues, saveItemFieldValues } from "./lib/customFields.js";
@@ -32,15 +32,18 @@ import InspectionReview from "./components/InspectionReview.jsx";
 import {
   getWebhookUrl, setWebhookUrl,
   getSendHourLocal, setSendHourLocal,
+  getTimezone, setTimezone,
   getLeadDays, setLeadDays,
-  formatHour12,
+  getHouseholdId, getLastSyncIso,
+  formatHour12, TIMEZONE_PRESETS,
+  loadReminderModes, syncReminders,
+  dispatchReminders,
 } from "./lib/reminders.js";
 
 // ─── Settings nav items ───────────────────────────────────────────────────────
 
 const NAV_ITEMS = [
   { key: "profile",        label: "Profile",           available: true  },
-  { key: "notifications",  label: "Notifications",      available: true  },
   { key: "automation",     label: "Automation",         available: true  },
   { key: "integrations",   label: "Integrations",       available: true  },
   { key: "display",        label: "Display",            available: true  },
@@ -545,15 +548,6 @@ function ProfileSettings() {
   );
 }
 
-// ─── NotificationsSettings ────────────────────────────────────────────────────
-
-function NotificationsSettings() {
-  return (
-    <div style={{ maxWidth: "560px" }}>
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Notifications</h2>
-    </div>
-  );
-}
 
 // ─── AutomationSettings ───────────────────────────────────────────────────────
 
@@ -597,37 +591,87 @@ function AutomationSettings() {
 
 // ─── IntegrationsSettings ─────────────────────────────────────────────────────
 
+const REMINDER_HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: formatHour12(h) }));
+
+function isWebhookValid(url) {
+  return /^https:\/\/discord\.com\/api\/webhooks\/[^/]+\/[^/]+/.test(url.trim());
+}
+
 function IntegrationsSettings() {
-  const [webhookUrl, setWebhookUrlState] = useState(() => getWebhookUrl());
-  const [showModal, setShowModal]         = useState(false);
-  const [draftWebhook, setDraftWebhook]   = useState("");
-  const [draftHour, setDraftHour]         = useState(9);
-  const [draftLeadDays, setDraftLeadDays] = useState(7);
+  const [webhook, setWebhook]             = useState(() => getWebhookUrl());
+  const [showWebhook, setShowWebhook]     = useState(false);
+  const [hour, setHour]                   = useState(() => getSendHourLocal());
+  const [tz, setTz]                       = useState(() => getTimezone());
+  const [leadDays, setLead]               = useState(() => getLeadDays());
+  const [busy, setBusy]                   = useState(false);
+  const [status, setStatus]               = useState(null);
+  const [lastSync, setLastSync]           = useState(() => getLastSyncIso());
   const [webhookFocused, setWebhookFocused] = useState(false);
 
-  function openModal() {
-    setDraftWebhook(getWebhookUrl());
-    setDraftHour(getSendHourLocal());
-    setDraftLeadDays(getLeadDays());
-    setShowModal(true);
-  }
+  const trimmedWebhook = webhook.trim();
+  const webhookValid   = trimmedWebhook === "" || isWebhookValid(trimmedWebhook);
+  const isConnected    = !!trimmedWebhook;
 
-  function handleSave() {
-    const trimmed = draftWebhook.trim();
-    setWebhookUrl(trimmed);
-    setSendHourLocal(draftHour);
-    setLeadDays(draftLeadDays);
-    setWebhookUrlState(trimmed);
-    setShowModal(false);
+  const tzOptions = (() => {
+    const presetValues = new Set(TIMEZONE_PRESETS.map(p => p.value));
+    const extras = !presetValues.has(tz) ? [{ value: tz, label: `${tz} (detected)` }] : [];
+    return [...extras, ...TIMEZONE_PRESETS];
+  })();
+
+  function persist() {
+    setWebhookUrl(trimmedWebhook);
+    setSendHourLocal(hour);
+    setTimezone(tz);
+    setLeadDays(leadDays);
   }
 
   function handleDisconnect() {
+    setWebhook("");
     setWebhookUrl("");
-    setWebhookUrlState("");
-    setShowModal(false);
+    setStatus(null);
   }
 
-  const isConnected = !!webhookUrl;
+  async function handleSync() {
+    if (!isWebhookValid(trimmedWebhook)) {
+      setStatus({ ok: false, message: "That doesn't look like a Discord webhook URL — it should start with https://discord.com/api/webhooks/" });
+      return;
+    }
+    persist();
+    setBusy(true);
+    setStatus(null);
+    try {
+      const rows      = loadData();
+      const nextDates = storageGet("maintenance-next-dates") ?? {};
+      const modes     = loadReminderModes();
+      const result    = await syncReminders({ rows, nextDates, modes });
+      setStatus({ ok: true, message: `Synced ${result.count} task${result.count === 1 ? "" : "s"}.` });
+      setLastSync(new Date().toISOString());
+    } catch (err) {
+      setStatus({ ok: false, message: err.message || String(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTestNow() {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const result = await dispatchReminders();
+      const d = result.dispatched || {};
+      if (d.posted) {
+        setStatus({ ok: true, message: `Sent — ${d.dayOf} due today, ${d.digest} coming up.` });
+      } else {
+        setStatus({ ok: true, message: 'Nothing matched right now. Make sure tasks have a next-due date, or widen "Heads-up days".' });
+      }
+    } catch (err) {
+      setStatus({ ok: false, message: err.message || String(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const lastSyncText = lastSync ? new Date(lastSync).toLocaleString() : "never";
 
   return (
     <div style={{ maxWidth: "560px" }}>
@@ -637,7 +681,7 @@ function IntegrationsSettings() {
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-        {/* Discord card */}
+        {/* Discord / Reminder Agent card */}
         <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
           <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
             <svg width="18" height="18" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, opacity: 0.7 }}>
@@ -651,31 +695,130 @@ function IntegrationsSettings() {
               </div>
             )}
           </div>
-          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 0.85rem" }}>
-            {isConnected
-              ? "Discord webhook is configured. Reminders will be posted to your channel on the schedule below."
-              : "Connect a Discord webhook to receive daily maintenance reminders in your server."}
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 1.1rem" }}>
+            Get a daily summary of upcoming maintenance, plus a ping the day a task is due. Use the bell icon on each row in Maintenance to choose how (or if) it reminds you, then sync.
           </p>
-          {isConnected && (
-            <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", marginBottom: "0.85rem", padding: "0.6rem 0.75rem" }}>
-              <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.25rem" }}>
-                <span style={{ color: "var(--fm-brass-dim)", minWidth: "70px" }}>Send time</span>
-                <span style={{ color: "var(--fm-ink-dim)" }}>{formatHour12(getSendHourLocal())}</span>
-              </div>
-              <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
-                <span style={{ color: "var(--fm-brass-dim)", minWidth: "70px" }}>Lead days</span>
-                <span style={{ color: "var(--fm-ink-dim)" }}>{getLeadDays()} {getLeadDays() === 1 ? "day" : "days"} before due</span>
-              </div>
+
+          <div style={{ marginBottom: "1.1rem" }}>
+            <label style={labelStyle} htmlFor="integ-webhook-input">Webhook URL</label>
+            <div style={{ alignItems: "stretch", display: "flex", gap: "0.4rem" }}>
+              <input
+                id="integ-webhook-input"
+                type={showWebhook ? "text" : "password"}
+                value={webhook}
+                onChange={e => setWebhook(e.target.value)}
+                onFocus={() => setWebhookFocused(true)}
+                onBlur={() => setWebhookFocused(false)}
+                placeholder="https://discord.com/api/webhooks/..."
+                style={{ ...inputStyle(webhookFocused), borderColor: webhookValid ? undefined : "var(--fm-red)" }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowWebhook(s => !s)}
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.66rem", letterSpacing: "0.06em", padding: "0 0.7rem", textTransform: "uppercase", whiteSpace: "nowrap" }}
+              >
+                {showWebhook ? "Hide" : "Show"}
+              </button>
+            </div>
+            {!webhookValid && (
+              <p style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, margin: "0.35rem 0 0" }}>
+                Should start with https://discord.com/api/webhooks/
+              </p>
+            )}
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, margin: "0.35rem 0 0" }}>
+              Server Settings → Integrations → Webhooks → New Webhook → Copy URL
+            </p>
+          </div>
+
+          <div style={{ display: "flex", gap: "1rem", marginBottom: "1.1rem" }}>
+            <div>
+              <label style={labelStyle} htmlFor="integ-hour-select">Send time</label>
+              <select
+                id="integ-hour-select"
+                value={hour}
+                onChange={e => setHour(parseInt(e.target.value, 10))}
+                style={{ ...selectStyle, width: "150px" }}
+              >
+                {REMINDER_HOURS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle} htmlFor="integ-tz-select">Timezone</label>
+              <select
+                id="integ-tz-select"
+                value={tz}
+                onChange={e => setTz(e.target.value)}
+                style={{ ...selectStyle, width: "100%" }}
+              >
+                {tzOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: "1.25rem" }}>
+            <label style={labelStyle} htmlFor="integ-lead-input">Heads-up days</label>
+            <div style={{ alignItems: "center", display: "flex", gap: "0.6rem" }}>
+              <input
+                id="integ-lead-input"
+                type="number"
+                min={0}
+                max={365}
+                value={leadDays}
+                onChange={e => setLead(Math.max(0, Math.min(365, parseInt(e.target.value, 10) || 0)))}
+                style={{ ...inputStyle(false), width: "90px" }}
+              />
+              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>days before a task is due</span>
+            </div>
+          </div>
+
+          {status && (
+            <div style={{ background: status.ok ? "#10b98118" : "#f8717118", border: `1px solid ${status.ok ? "#10b981" : "var(--fm-red)"}`, borderRadius: "3px", color: status.ok ? "#10b981" : "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", margin: "0 0 1rem", padding: "0.55rem 0.8rem" }}>
+              {status.message}
             </div>
           )}
-          <button
-            onClick={openModal}
-            style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-          >
-            {isConnected ? "Edit" : "Set up Discord"}
-          </button>
+
+          <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+            <div>
+              {isConnected && (
+                <button
+                  onClick={handleDisconnect}
+                  style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0, transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >Disconnect</button>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              <button
+                onClick={handleTestNow}
+                disabled={busy}
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: busy ? "var(--fm-ink-dim)" : "var(--fm-brass-dim)", cursor: busy ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", opacity: busy ? 0.5 : 1, padding: "0.4rem 0.9rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; } }}
+                onMouseLeave={e => { if (!busy) { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; } }}
+              >
+                {busy ? "Sending…" : "Send Test"}
+              </button>
+              <button
+                onClick={handleSync}
+                disabled={busy || !webhookValid || !trimmedWebhook}
+                style={{ background: (busy || !webhookValid || !trimmedWebhook) ? "transparent" : "#c9a96e22", border: `1px solid ${(busy || !webhookValid || !trimmedWebhook) ? "var(--fm-ink-dim)" : "var(--fm-brass)"}`, borderRadius: "3px", color: (busy || !webhookValid || !trimmedWebhook) ? "var(--fm-ink-dim)" : "var(--fm-brass)", cursor: (busy || !webhookValid || !trimmedWebhook) ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", opacity: busy ? 0.5 : 1, padding: "0.4rem 1rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { if (!busy && webhookValid && trimmedWebhook) e.currentTarget.style.background = "#c9a96e35"; }}
+                onMouseLeave={e => { if (!busy && webhookValid && trimmedWebhook) e.currentTarget.style.background = "#c9a96e22"; }}
+              >
+                {busy ? "Syncing…" : "Save & Sync"}
+              </button>
+            </div>
+          </div>
+
+          <details style={{ borderTop: "1px solid var(--fm-hairline)", marginTop: "1.25rem", paddingTop: "0.85rem" }}>
+            <summary style={{ color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Connection details
+            </summary>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.7, marginTop: "0.5rem" }}>
+              <div>Household ID: <span style={{ color: "var(--fm-brass-dim)" }}>{getHouseholdId()}</span></div>
+              <div>Last sync: <span style={{ color: "var(--fm-brass-dim)" }}>{lastSyncText}</span></div>
+            </div>
+          </details>
         </div>
 
         {/* ICS Export card */}
@@ -711,104 +854,6 @@ function IntegrationsSettings() {
           </p>
         </div>
       </div>
-
-      {/* Discord setup modal */}
-      {showModal && createPortal(
-        <div
-          onClick={e => { if (e.target === e.currentTarget) setShowModal(false); }}
-          style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}
-        >
-          <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: "480px", padding: "1.75rem", width: "90vw" }}>
-            <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "1.25rem" }}>
-              <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>Discord Notifications</span>
-              <button
-                onClick={() => setShowModal(false)}
-                style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "1rem", lineHeight: 1, padding: "0.1rem 0.3rem", transition: "color 0.12s" }}
-                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-              >×</button>
-            </div>
-
-            <div style={{ marginBottom: "1.1rem" }}>
-              <label style={labelStyle}>Webhook URL</label>
-              <input
-                value={draftWebhook}
-                onChange={e => setDraftWebhook(e.target.value)}
-                onFocus={() => setWebhookFocused(true)}
-                onBlur={() => setWebhookFocused(false)}
-                placeholder="https://discord.com/api/webhooks/…"
-                style={inputStyle(webhookFocused)}
-              />
-              <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, margin: "0.4rem 0 0" }}>
-                Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL
-              </p>
-            </div>
-
-            <div style={{ marginBottom: "1.1rem" }}>
-              <label style={labelStyle}>Daily Send Time</label>
-              <select
-                value={draftHour}
-                onChange={e => setDraftHour(Number(e.target.value))}
-                style={{ ...selectStyle, width: "160px" }}
-              >
-                {Array.from({ length: 24 }, (_, h) => (
-                  <option key={h} value={h}>{formatHour12(h)}</option>
-                ))}
-              </select>
-              <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", margin: "0.4rem 0 0" }}>
-                Time in your local timezone. Reminders are sent once daily.
-              </p>
-            </div>
-
-            <div style={{ marginBottom: "1.5rem" }}>
-              <label style={labelStyle}>Remind me</label>
-              <div style={{ alignItems: "center", display: "flex", gap: "0.6rem" }}>
-                <input
-                  type="number"
-                  min={0}
-                  max={30}
-                  value={draftLeadDays}
-                  onChange={e => setDraftLeadDays(Math.max(0, Math.min(30, Number(e.target.value))))}
-                  style={{ ...inputStyle(false), width: "72px" }}
-                />
-                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>days before a task is due</span>
-              </div>
-              <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", margin: "0.4rem 0 0" }}>
-                Set to 0 to only be notified on the due date itself.
-              </p>
-            </div>
-
-            <div style={{ display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
-              <div>
-                {isConnected && (
-                  <button
-                    onClick={handleDisconnect}
-                    style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0, transition: "color 0.12s" }}
-                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                    onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-                  >Disconnect</button>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: "0.6rem" }}>
-                <button
-                  onClick={() => setShowModal(false)}
-                  style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.45rem 1rem", transition: "all 0.15s" }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-                >Cancel</button>
-                <button
-                  onClick={handleSave}
-                  disabled={!draftWebhook.trim()}
-                  style={{ background: draftWebhook.trim() ? "#c9a96e22" : "transparent", border: `1px solid ${draftWebhook.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)"}`, borderRadius: "3px", color: draftWebhook.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: draftWebhook.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.45rem 1.1rem", transition: "all 0.15s" }}
-                  onMouseEnter={e => { if (draftWebhook.trim()) e.currentTarget.style.background = "#c9a96e35"; }}
-                  onMouseLeave={e => { if (draftWebhook.trim()) e.currentTarget.style.background = "#c9a96e22"; }}
-                >Save</button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
     </div>
   );
 }
@@ -2196,7 +2241,6 @@ export default function PreferencesPage({ navigate }) {
             <CategoryTypesSettings />
           </div>
         )}
-        {activeSection === "notifications"  && <NotificationsSettings />}
         {activeSection === "automation"     && <AutomationSettings />}
         {activeSection === "integrations"   && <IntegrationsSettings />}
         {activeSection === "display"        && <DisplaySettings />}

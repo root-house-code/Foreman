@@ -377,7 +377,7 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
 
         <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1rem" }}>
           <div>
-            <label style={labelStyle}>Room</label>
+            <label style={labelStyle}>Location</label>
             <select value={form.room} onChange={e => handleRoomChange(e.target.value)} style={selectStyle}>
               {roomOptions.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
             </select>
@@ -924,7 +924,7 @@ export default function ChoresPage({ navigate, navState }) {
 
   const SORT_COLS = [
     { key: "title",    label: "Chore"   },
-    { key: "room",     label: "Room"    },
+    { key: "room",     label: "Location" },
     { key: "schedule", label: "Cadence" },
     { key: "next",     label: "Next"    },
   ];
@@ -1155,7 +1155,7 @@ export default function ChoresPage({ navigate, navState }) {
                       <SelectCell
                         value={chore.room}
                         options={roomOptions}
-                        placeholder="Room"
+                        placeholder="Location"
                         onChange={v => handleChoreEdit(chore.id, "room", v)}
                       />
                     </td>
@@ -1254,7 +1254,7 @@ export default function ChoresPage({ navigate, navState }) {
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
                 <thead>
                   <tr>
-                    {["Date", "Chore", "Room", "Who", "Notes"].map(h => (
+                    {["Date", "Chore", "Location", "Who", "Notes"].map(h => (
                       <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>

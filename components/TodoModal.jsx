@@ -19,7 +19,7 @@ function TaskCheckbox({ completed, onToggle }) {
   );
 }
 
-export default function TodoModal({ todo, initialOverrides, categories, categoryItems, spatialCategories, functionalCategories, exteriorCategories, structureCategories, projects, onSave, onClose, onDelete }) {
+export default function TodoModal({ todo, initialOverrides, categories, categoryItems, spatialCategories, functionalCategories, exteriorCategories, projects, onSave, onClose, onDelete }) {
   const [form, setForm] = useState(todo ? {
     ...todo,
     labels: todo.labels || [],
@@ -43,11 +43,8 @@ export default function TodoModal({ todo, initialOverrides, categories, category
     projectId: null, images: [], tasks: [],
   });
 
-  // Derive spatial/functional lists from props or fall back to full categories list
-  const roomOptions = spatialCategories || categories || [];
+  const locationOptions = [...new Set([...(spatialCategories || categories || []), ...(exteriorCategories || [])])].sort();
   const systemOptions = functionalCategories || [];
-  const exteriorOptions = exteriorCategories || [];
-  const structureOptions = structureCategories || [];
 
   const [addingTask, setAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -58,17 +55,18 @@ export default function TodoModal({ todo, initialOverrides, categories, category
   const allRooms = useMemo(() => loadRooms(), []);
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
+  const linkedLoc = form.linkedRoom || form.linkedExterior;
   const linkedItems = form.linkedSystem
     ? (categoryItems[form.linkedSystem] || [])
-    : form.linkedRoom
-      ? (categoryItems[form.linkedRoom] || [])
+    : linkedLoc
+      ? (categoryItems[linkedLoc] || [])
       : [];
-  const hasItemContext = !!(form.linkedSystem || form.linkedRoom);
+  const hasItemContext = !!(form.linkedSystem || linkedLoc);
 
   function handleLocationConfirm({ levelId, zone, x, y }) {
     setShowPicker(false);
     const roomRecord = zone ? allRooms[zone] : null;
-    const isExt = exteriorOptions.includes(roomRecord?.categoryName);
+    const isExt = (exteriorCategories || []).includes(roomRecord?.categoryName);
     setForm(f => ({
       ...f,
       floorPlanLocation: { levelId, zone, x, y },
@@ -188,22 +186,25 @@ export default function TodoModal({ todo, initialOverrides, categories, category
         </div>
 
         <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
-          <div style={{ flex: 1 }}>
-            <label style={fieldLabel}>Room</label>
-            <select
-              value={form.linkedRoom || ""}
-              style={fieldSelect}
-              onChange={e => {
-                const val = e.target.value || null;
-                set("linkedRoom", val);
-                // system takes priority for linkedCategory; only fall back to room when no system
-                if (!form.linkedSystem) set("linkedCategory", val);
-                set("linkedItem", null);
-              }}>
-              <option value="">None</option>
-              {roomOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-            </select>
-          </div>
+          {locationOptions.length > 0 && (
+            <div style={{ flex: 1 }}>
+              <label style={fieldLabel}>Location</label>
+              <select
+                value={form.linkedRoom || form.linkedExterior || ""}
+                style={fieldSelect}
+                onChange={e => {
+                  const val = e.target.value || null;
+                  const isExt = (exteriorCategories || []).includes(val);
+                  set("linkedRoom", isExt ? null : val);
+                  set("linkedExterior", isExt ? val : null);
+                  if (!form.linkedSystem) set("linkedCategory", val);
+                  set("linkedItem", null);
+                }}>
+                <option value="">None</option>
+                {locationOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+            </div>
+          )}
           <div style={{ flex: 1 }}>
             <label style={fieldLabel}>System</label>
             <select
@@ -212,8 +213,7 @@ export default function TodoModal({ todo, initialOverrides, categories, category
               onChange={e => {
                 const val = e.target.value || null;
                 set("linkedSystem", val);
-                // system always wins for linkedCategory (determines item dropdown source)
-                set("linkedCategory", val || form.linkedRoom || null);
+                set("linkedCategory", val || form.linkedRoom || form.linkedExterior || null);
               }}>
               <option value="">None</option>
               {systemOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
@@ -228,36 +228,6 @@ export default function TodoModal({ todo, initialOverrides, categories, category
             </select>
           </div>
         </div>
-
-        {(exteriorOptions.length > 0 || structureOptions.length > 0) && (
-          <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
-            {exteriorOptions.length > 0 && (
-              <div style={{ flex: 1 }}>
-                <label style={fieldLabel}>Exterior</label>
-                <select
-                  value={form.linkedExterior || ""}
-                  style={fieldSelect}
-                  onChange={e => set("linkedExterior", e.target.value || null)}>
-                  <option value="">None</option>
-                  {exteriorOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                </select>
-              </div>
-            )}
-            {structureOptions.length > 0 && (
-              <div style={{ flex: 1 }}>
-                <label style={fieldLabel}>Structure</label>
-                <select
-                  value={form.linkedStructure || ""}
-                  style={fieldSelect}
-                  onChange={e => set("linkedStructure", e.target.value || null)}>
-                  <option value="">None</option>
-                  {structureOptions.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                </select>
-              </div>
-            )}
-            <div style={{ flex: 1 }} />
-          </div>
-        )}
 
         <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem" }}>
           <div style={{ flex: 1 }}>

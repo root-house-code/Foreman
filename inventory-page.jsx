@@ -26,8 +26,9 @@ import {
   loadSpatialAssignments, saveSpatialAssignments,
   loadItemFieldValues, saveItemFieldValues,
 } from "./lib/customFields.js";
-import { UNIVERSAL_FIELDS, ITEM_FIELDS } from "./lib/fieldLibrary.js";
+import { UNIVERSAL_FIELDS, ITEM_FIELDS, TYPE_FIELDS } from "./lib/fieldLibrary.js";
 import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
+import { ITEM_SUBTYPES } from "./lib/itemSubtypes.js";
 import {
   loadCategoryTypeOverrides,
   saveCategoryTypeOverrides,
@@ -47,7 +48,6 @@ import {
   isSpatial,
   isFunctional,
   isExteriorType as isExteriorTypeUtil,
-  isStructureType as isStructureTypeUtil,
   getTypesForClass,
   resolveTypeId,
   getLabelForType,
@@ -58,7 +58,7 @@ import {
   deleteType,
 } from "./lib/entityTypes.js";
 import { getFloorsInOrder, loadFloors, saveFloors } from "./lib/floors.js";
-import { loadRooms, createRoom, updateRoom } from "./lib/rooms.js";
+import { loadRooms, saveRooms, createRoom, updateRoom } from "./lib/rooms.js";
 import { getManufacturers } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
 import { polygonCentroid } from "./lib/geometry.js";
@@ -289,14 +289,12 @@ const FP_H = 2400;
 const FP_FILL = {
   room:      "rgba(122,181,217,0.12)",
   system:    "rgba(197,164,102,0.12)",
-  structure: "rgba(127,176,135,0.12)",
   exterior:  "rgba(150,190,130,0.12)",
   safety:    "rgba(224,115,106,0.12)",
 };
 const FP_STROKE = {
   room:      "rgba(122,181,217,0.7)",
   system:    "rgba(197,164,102,0.7)",
-  structure: "rgba(127,176,135,0.7)",
   exterior:  "rgba(150,190,130,0.7)",
   safety:    "rgba(224,115,106,0.7)",
 };
@@ -379,6 +377,46 @@ function XButton({ x, y, onDelete, onHoverEnter, onHoverLeave }) {
   );
 }
 
+function LockButton({ x, y, locked, onToggle }) {
+  return (
+    <g
+      transform={`translate(${x},${y})`}
+      onMouseDown={e => e.stopPropagation()}
+      onClick={e => { e.stopPropagation(); onToggle(); }}
+      style={{ cursor: "pointer" }}
+    >
+      <circle r={9} fill={locked ? "var(--fm-brass)" : "#374151"} opacity={0.85} />
+      {/* Shackle: closed when locked, open (swung up-right) when unlocked */}
+      <path
+        d={locked
+          ? "M -2.8,-0.5 L -2.8,-3.5 A2.8,2.8 0 0 1 2.8,-3.5 L 2.8,-0.5"
+          : "M -2.8,-0.5 L -2.8,-3.5 A2.8,2.8 0 0 1 2.8,-3.5 L 2.8,-6"}
+        stroke="white" strokeWidth={1.5} fill="none" strokeLinecap="round"
+        style={{ pointerEvents: "none" }}
+      />
+      {/* Lock body */}
+      <rect x={-4} y={-0.5} width={8} height={6} rx={1} fill="white"
+        style={{ pointerEvents: "none" }} />
+    </g>
+  );
+}
+
+const FP_LAYER_KEY = "foreman-fp-layers";
+const DEFAULT_LAYERS = { zones: true, pins: true, drawings: true, todos: true };
+const LAYER_PRESETS = {
+  all:         { zones: true,  pins: true,  drawings: true,  todos: true  },
+  rooms:       { zones: true,  pins: false, drawings: false, todos: false },
+  inventory:   { zones: true,  pins: true,  drawings: false, todos: false },
+  maintenance: { zones: true,  pins: false, drawings: false, todos: true  },
+};
+const PRESET_LABELS  = { all: "All", rooms: "Rooms", inventory: "Inventory", maintenance: "Maintenance" };
+const LAYER_TOGGLES  = [
+  { key: "zones",    label: "Zones"    },
+  { key: "pins",     label: "Pins"     },
+  { key: "drawings", label: "Drawings" },
+  { key: "todos",    label: "To-dos"   },
+];
+
 export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onChangeCategoryType, onAddItem, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem, reverseItemKeyMap, onSelectItem }) {
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
@@ -405,14 +443,17 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const viewBoxRef = useRef({ x: 0, y: 0, w: FP_W, h: FP_H });
   const panDragRef = useRef(null);
   const touchRef = useRef(null);
-  const [drawMode, setDrawMode] = useState("select");
+  const [drawMode, setDrawMode] = useState("move");
   const [inProgress, setInProgress] = useState(null);
   const [cursorPt, setCursorPt] = useState(null);
   const [pendingMarker, setPendingMarker] = useState(null);
   const [markerLabel, setMarkerLabel] = useState("");
   const [drawColor, setDrawColor] = useState("#c9a96e");
   const [drawName, setDrawName] = useState("");
-  const drawModeRef = useRef("select");
+  const drawModeRef = useRef("move");
+  const [selectedZones, setSelectedZones] = useState(() => new Set());
+  const [selectBox, setSelectBox] = useState(null);
+  const selectBoxRef = useRef(null);
   const inProgressRef = useRef(null);
   const drawColorRef = useRef("#c9a96e");
   const drawNameRef = useRef("");
@@ -433,6 +474,10 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   useEffect(() => () => clearTimeout(hoverLeaveTimerRef.current), []);
   const [ghostZone, setGhostZone] = useState(null);
   const ghostZoneRef = useRef(null);
+  const [layers, setLayers] = useState(() => {
+    try { return { ...DEFAULT_LAYERS, ...(storageGet(FP_LAYER_KEY) || {}) }; }
+    catch { return DEFAULT_LAYERS; }
+  });
 
   useEffect(() => { fpDataRef.current = fpData; }, [fpData]);
   useEffect(() => { activeLevelRef.current = activeLevel; }, [activeLevel]);
@@ -457,7 +502,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   }
 
   function onEntityHoverEnter(type, id) {
-    if (drawModeRef.current !== "select") return;
+    if (drawModeRef.current !== "move") return;
     clearTimeout(hoverLeaveTimerRef.current);
     setHoveredEntity({ type, id });
   }
@@ -581,7 +626,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const isExt = catTypeId ? isExteriorTypeUtil(catTypeId, entityTypeData) : false;
         setPendingTodoLocation({ levelId: activeLevel, zone: zoneId || null, x, y, preLinkedRoom: catName && !isExt ? catName : null, preLinkedExterior: catName && isExt ? catName : null });
         setShowTodoCreate(true);
-        setDrawMode("select");
+        setDrawMode("move");
         setMarkerIsTodo(false);
         markerIsTodoRef.current = false;
       } else {
@@ -594,7 +639,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     if (mode === "line") {
       const ip = inProgressRef.current;
       if (!ip) { setInProgress({ type: "line", points: [{ x, y }] }); }
-      else { commitDrawing({ ...ip, points: [...ip.points, { x, y }] }); setInProgress(null); setDrawMode("select"); }
+      else { commitDrawing({ ...ip, points: [...ip.points, { x, y }] }); setInProgress(null); setDrawMode("move"); }
     }
   }
 
@@ -606,7 +651,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const pts = ip.points.slice(0, -1);
     if (pts.length >= 2) commitDrawing({ ...ip, points: pts });
     setInProgress(null);
-    setDrawMode("select");
+    setDrawMode("move");
     setDrawName("");
   }
 
@@ -615,7 +660,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     commitDrawing({ type: "marker", x: pendingMarker.x, y: pendingMarker.y, label: markerLabel.trim() || "PT" });
     setPendingMarker(null);
     setMarkerLabel("");
-    setDrawMode("select");
+    setDrawMode("move");
   }
 
   function detectZoneAtPoint(x, y) {
@@ -635,7 +680,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   }
 
   function cancelDraw() {
-    setDrawMode("select");
+    setDrawMode("move");
     setInProgress(null);
     setCursorPt(null);
     setPendingMarker(null);
@@ -645,6 +690,20 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     drawCategoryRef.current = null;
     markerIsTodoRef.current = false;
     setSelectedDrawingId(null);
+  }
+
+  function setLayer(key, val) {
+    const next = { ...layers, [key]: val };
+    setLayers(next);
+    storageSet(FP_LAYER_KEY, next);
+    if (key === "drawings" && !val) cancelDraw();
+  }
+
+  function applyPreset(presetKey) {
+    const next = LAYER_PRESETS[presetKey];
+    setLayers(next);
+    storageSet(FP_LAYER_KEY, next);
+    if (!next.drawings) cancelDraw();
   }
 
   function addPin(cat, item, zone, x, y) {
@@ -785,13 +844,52 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     if (selected === roomId) setSelected(null);
   }
 
+  function toggleZoneLock(roomId) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const zone = (d.placements[lvl] || {})[roomId];
+    if (!zone) return;
+    save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { ...zone, locked: !zone.locked } } } });
+  }
+
+  function lockSelectedZones(lock) {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const lvlPlacements = { ...(d.placements[lvl] || {}) };
+    for (const rid of selectedZones) {
+      if (lvlPlacements[rid]) lvlPlacements[rid] = { ...lvlPlacements[rid], locked: lock };
+    }
+    save({ ...d, placements: { ...d.placements, [lvl]: lvlPlacements } });
+  }
+
+  function removeSelectedFromCanvas() {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const lvlPlacements = Object.fromEntries(
+      Object.entries(d.placements[lvl] || {}).filter(([rid]) => !selectedZones.has(rid))
+    );
+    save({ ...d, placements: { ...d.placements, [lvl]: lvlPlacements } });
+    if (selected && selectedZones.has(selected)) setSelected(null);
+    setSelectedZones(new Set());
+  }
+
   function handleRoomMouseDown(e, roomId) {
     e.preventDefault();
     e.stopPropagation();
+    if (drawModeRef.current === "select") {
+      setSelectedZones(prev => {
+        const next = new Set(prev);
+        if (next.has(roomId)) next.delete(roomId);
+        else next.add(roomId);
+        return next;
+      });
+      return;
+    }
     setSelected(roomId); setEditingPanelName(false);
+    const zonePoly = (fpDataRef.current.placements[activeLevelRef.current] || {})[roomId];
+    if (zonePoly?.locked) return;
     const svgRect = svgRef.current.getBoundingClientRect();
     const vb = viewBoxRef.current;
-    const zonePoly = (fpDataRef.current.placements[activeLevelRef.current] || {})[roomId];
     draggingRef.current = {
       roomId,
       startSVGX: vb.x + (e.clientX - svgRect.left) / svgRect.width * vb.w,
@@ -804,6 +902,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   function handleVertexMouseDown(e, roomId, vi) {
     e.preventDefault();
     e.stopPropagation();
+    const zonePoly = (fpDataRef.current.placements[activeLevelRef.current] || {})[roomId];
+    if (zonePoly?.locked) return;
     vertexDragRef.current = { roomId, vi, startX: e.clientX, startY: e.clientY };
   }
 
@@ -813,6 +913,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
     const zonePoly = (d.placements[lvl] || {})[roomId];
+    if (zonePoly?.locked) return;
     const svgRect = svgRef.current.getBoundingClientRect();
     const vb = viewBoxRef.current;
     const newPt = {
@@ -833,7 +934,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
       const scaleY = vb.h / svgRect.height;
 
       // Update draw cursor ghost (also used for ghost zone placement)
-      if (drawModeRef.current !== "select" || ghostZoneRef.current) {
+      if ((drawModeRef.current !== "move" && drawModeRef.current !== "select") || ghostZoneRef.current) {
         const rawX = vb.x + (e.clientX - svgRect.left) * scaleX;
         const rawY = vb.y + (e.clientY - svgRect.top) * scaleY;
         setCursorPt({ x: fpSnap(Math.max(0, Math.min(FP_W, rawX))), y: fpSnap(Math.max(0, Math.min(FP_H, rawY))) });
@@ -871,6 +972,15 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } };
         fpDataRef.current = next;
         setFpData({ ...next });
+        return;
+      }
+
+      // Rubber-band select box
+      if (selectBoxRef.current) {
+        const sx = vb.x + (e.clientX - svgRect.left) * scaleX;
+        const sy = vb.y + (e.clientY - svgRect.top) * scaleY;
+        selectBoxRef.current = { ...selectBoxRef.current, x1: sx, y1: sy };
+        setSelectBox({ ...selectBoxRef.current });
         return;
       }
 
@@ -1041,6 +1151,30 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
       if (draggingRef.current) { saveFpData(fpDataRef.current); draggingRef.current = null; setDragging(null); return; }
 
+      // End rubber-band select
+      if (selectBoxRef.current) {
+        const box = selectBoxRef.current;
+        selectBoxRef.current = null;
+        setSelectBox(null);
+        const minX = Math.min(box.x0, box.x1), maxX = Math.max(box.x0, box.x1);
+        const minY = Math.min(box.y0, box.y1), maxY = Math.max(box.y0, box.y1);
+        const isDrag = Math.abs(box.x1 - box.x0) > 4 || Math.abs(box.y1 - box.y0) > 4;
+        if (isDrag) {
+          const lvl = activeLevelRef.current;
+          const placed = fpDataRef.current.placements[lvl] || {};
+          const hit = new Set();
+          for (const [rid, zone] of Object.entries(placed)) {
+            const { cx, cy } = polygonCentroid(zone.points);
+            if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) hit.add(rid);
+          }
+          setSelectedZones(hit);
+        } else {
+          // Click without drag — clear selection
+          setSelectedZones(new Set());
+        }
+        return;
+      }
+
       // End pan drag
       if (panDragRef.current) {
         const { startX, startY } = panDragRef.current;
@@ -1150,7 +1284,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
   // Keydown: Escape cancels draw, Enter commits path
   useEffect(() => {
-    if (drawMode === "select") return;
+    if (drawMode === "move" || drawMode === "select") return;
     function onKeyDown(e) {
       if (e.key === "Escape") { cancelDraw(); return; }
       if (e.key === "Enter" && drawMode === "path" && inProgress && inProgress.points.length >= 2) {
@@ -1161,7 +1295,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         save({ ...d, drawings: { ...(d.drawings || {}), [lvl]: [...(d.drawings?.[lvl] || []), { id, name, type: "path", color: drawColorRef.current, visible: true, points: inProgress.points }] } });
         setDrawName("");
         setInProgress(null);
-        setDrawMode("select");
+        setDrawMode("move");
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1202,6 +1336,12 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     delete next.zoneItems[id];
     saveFloors(allFloors.filter(f => f.id !== id));
     save(next);
+    // Remove rooms referencing this level so the floor-recovery code in main.jsx
+    // doesn't recreate it on the next app start.
+    const allRooms = loadRooms();
+    const cleaned = Object.fromEntries(Object.entries(allRooms).filter(([, r]) => r.floorId !== id));
+    saveRooms(cleaned);
+    useForemanStore.getState().reloadAll();
     const remaining = getFloorsInOrder();
     setFloors(remaining);
     if (activeLevel === id) { setActiveLevel(remaining[0]?.id || ""); setSelected(null); }
@@ -1252,16 +1392,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     [categoryItems]
   );
 
-  const structureCats = useMemo(() =>
-    categories.filter(c => isStructureTypeUtil(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData)),
-    [categories, categoryTypes, entityTypeData]
-  );
-
   const systemCats = useMemo(() =>
-    categories.filter(c => {
-      const typeId = resolveTypeId(c, categoryTypes[c] || "system");
-      return isFunctional(typeId, entityTypeData) && !isStructureTypeUtil(typeId, entityTypeData);
-    }),
+    categories.filter(c => isFunctional(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData)),
     [categories, categoryTypes, entityTypeData]
   );
 
@@ -1348,7 +1480,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
       .filter(cat => {
         if (placedOnAnyLevel.has(cat)) return false;
         const typeId = resolveTypeId(cat, categoryTypes[cat] || "system");
-        return isSpatial(typeId, entityTypeData) || isStructureTypeUtil(typeId, entityTypeData);
+        return isSpatial(typeId, entityTypeData);
       })
       .sort((a, b) => {
         const ga = GROUP_ORDER.indexOf(categoryTypes[a] || "system");
@@ -1449,12 +1581,10 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   </div>
                 );
               };
-              const roomCats = sortedCategories.filter(cat => { const tid = resolveTypeId(cat, categoryTypes[cat] || "system"); return !isExteriorTypeUtil(tid, entityTypeData) && !isStructureTypeUtil(tid, entityTypeData); });
-              const structureCats = sortedCategories.filter(cat => isStructureTypeUtil(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData));
+              const roomCats = sortedCategories.filter(cat => { const tid = resolveTypeId(cat, categoryTypes[cat] || "system"); return !isExteriorTypeUtil(tid, entityTypeData); });
               const exteriorCats = sortedCategories.filter(cat => isExteriorTypeUtil(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData));
               const groups = [
                 { label: "Rooms", cats: roomCats, color: FP_STROKE.room },
-                { label: "Structures", cats: structureCats, color: FP_STROKE.structure },
                 { label: "Exteriors", cats: exteriorCats, color: FP_STROKE.exterior },
               ].filter(g => g.cats.length > 0);
               return (
@@ -1627,29 +1757,30 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               drawCategoryRef.current = null;
               markerIsTodoRef.current = false;
               setSelectedDrawingId(null);
+              if (mode !== "select") { setSelectedZones(new Set()); setSelectBox(null); selectBoxRef.current = null; }
             }}
             style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em", outline: "none", padding: "0.18rem 0.5rem" }}>
-            <option value="select">↖ Select</option>
+            <option value="select">⬚ Select</option>
+            <option value="move">✛ Move</option>
             <option value="path">✏ Path</option>
             <option value="line">╱ Line</option>
             <option value="marker">● Marker</option>
           </select>
 
           {/* Edit mode: drawing selected from right panel */}
-          {drawMode === "select" && selectedDrawing && (() => {
+          {drawMode === "move" && selectedDrawing && (() => {
             const isPathOrLine = selectedDrawing.type === "path" || selectedDrawing.type === "line";
             return (
               <>
                 <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
-                {isPathOrLine && (structureCats.length > 0 || systemCats.length > 0) && (
+                {isPathOrLine && systemCats.length > 0 && (
                   <>
                     <select
                       value={selectedDrawing.category || ""}
                       onChange={e => updateDrawingCategory(selectedDrawing.id, e.target.value || null)}
                       style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: selectedDrawing.category ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.35rem" }}>
                       <option value="">Category…</option>
-                      {structureCats.length > 0 && <optgroup label="Structure">{structureCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
-                      {systemCats.length > 0 && <optgroup label="System">{systemCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
+                      {systemCats.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
                   </>
@@ -1666,10 +1797,10 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           })()}
 
           {/* Draw mode controls */}
-          {drawMode !== "select" && (
+          {drawMode !== "move" && drawMode !== "select" && (
             <>
               <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
-              {(drawMode === "path" || drawMode === "line") && (structureCats.length > 0 || systemCats.length > 0) && (
+              {(drawMode === "path" || drawMode === "line") && systemCats.length > 0 && (
                 <>
                   <select
                     value={drawCategory || ""}
@@ -1677,15 +1808,11 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                       const val = e.target.value || null;
                       setDrawCategory(val);
                       drawCategoryRef.current = val;
-                      if (val) {
-                        const typeId = resolveTypeId(val, categoryTypes[val] || "system");
-                        setDrawColor(isStructureTypeUtil(typeId, entityTypeData) ? "#7fb087" : "#c9a96e");
-                      }
+                      if (val) setDrawColor("#c9a96e");
                     }}
                     style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: drawCategory ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.35rem" }}>
                     <option value="">Category…</option>
-                    {structureCats.length > 0 && <optgroup label="Structure">{structureCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
-                    {systemCats.length > 0 && <optgroup label="System">{systemCats.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>}
+                    {systemCats.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                   <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
                 </>
@@ -1714,6 +1841,30 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               <button onClick={cancelDraw} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", padding: "0.1rem 0.3rem" }}>esc ×</button>
             </>
           )}
+          {/* Layers control */}
+          {(drawMode === "move" || drawMode === "select") && !selectedDrawingId && (
+            <>
+              <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+              <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.2rem" }}>
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", marginRight: "0.15rem", textTransform: "uppercase" }}>Layers</span>
+                {Object.entries(LAYER_PRESETS).map(([key, preset]) => {
+                  const isActive = Object.keys(preset).every(k => layers[k] === preset[k]);
+                  return (
+                    <button key={key} onClick={() => applyPreset(key)} style={{ background: isActive ? "rgba(201,169,110,0.15)" : "transparent", border: `1px solid ${isActive ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: isActive ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.03em", padding: "0.14rem 0.38rem", transition: "all 0.1s" }}>
+                      {PRESET_LABELS[key]}
+                    </button>
+                  );
+                })}
+                <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 12, margin: "0 0.1rem", width: 1 }} />
+                {LAYER_TOGGLES.map(({ key, label }) => (
+                  <button key={key} onClick={() => setLayer(key, !layers[key])} style={{ background: layers[key] ? "transparent" : "transparent", border: `1px solid ${layers[key] ? "var(--fm-hairline2)" : "var(--fm-hairline)"}`, borderRadius: 3, color: layers[key] ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", opacity: layers[key] ? 1 : 0.5, padding: "0.14rem 0.38rem", textDecoration: layers[key] ? "none" : "line-through", transition: "all 0.1s" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
           {(() => {
             const isRoomZone = (roomId) => {
               const lbl = rooms[roomId]?.label;
@@ -1753,11 +1904,20 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         <svg
           ref={svgRef}
           viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-          style={{ cursor: dragging ? "grabbing" : isPanning ? "grabbing" : ghostZone ? "crosshair" : drawMode !== "select" ? "crosshair" : "grab", display: "block", flex: 1, userSelect: "none", width: "100%", touchAction: "none" }}
+          style={{ cursor: dragging ? "grabbing" : isPanning ? "grabbing" : selectBox ? "crosshair" : ghostZone ? "crosshair" : drawMode === "move" ? "grab" : drawMode === "select" ? "crosshair" : "crosshair", display: "block", flex: 1, userSelect: "none", width: "100%", touchAction: "none" }}
           onMouseDown={e => {
             if (e.button !== 0) return;
-            if (drawMode !== "select") return; // draw clicks handled via onClick
+            if (drawMode !== "move" && drawMode !== "select") return; // draw clicks handled via onClick
             if (ghostZoneRef.current) return; // ghost zone placement handled in onClick
+            if (drawMode === "select") {
+              const r = svgRef.current.getBoundingClientRect();
+              const vb0 = viewBoxRef.current;
+              const sx = vb0.x + (e.clientX - r.left) / r.width * vb0.w;
+              const sy = vb0.y + (e.clientY - r.top) / r.height * vb0.h;
+              selectBoxRef.current = { x0: sx, y0: sy, x1: sx, y1: sy };
+              setSelectBox({ x0: sx, y0: sy, x1: sx, y1: sy });
+              return;
+            }
             panDragRef.current = { startX: e.clientX, startY: e.clientY, startVbX: viewBoxRef.current.x, startVbY: viewBoxRef.current.y };
             setIsPanning(true);
           }}
@@ -1776,7 +1936,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               placeZoneOnCanvas(gz.cat, fpSnap(Math.max(0, Math.min(FP_W - W, rawX - W / 2))), fpSnap(Math.max(0, Math.min(FP_H - H, rawY - H / 2))));
               return;
             }
-            if (drawMode !== "select") handleDrawClick(e);
+            if (drawMode !== "move" && drawMode !== "select") handleDrawClick(e);
           }}
           onDoubleClick={e => { if (drawMode === "path") handleDrawDoubleClick(e); }}
           onTouchStart={e => {
@@ -1821,25 +1981,31 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           <rect width={FP_W} height={FP_H} fill="url(#fp-lg)" />
 
           {Object.entries(currentPlaced).map(([roomId, zonePoly]) => {
+            if (!layers.zones) return null;
             const zoneRoom = rooms[roomId];
             if (!zoneRoom) return null;
             const type = categoryTypes[zoneRoom.label] || "system";
             const isSel = selected === roomId;
+            const isMultiSel = selectedZones.has(roomId);
             const isDrag = dragging === roomId;
             const itemCount = (categoryItems[zoneRoom.label]?.length || 0) + (spatialCrossRefItems[zoneRoom.label]?.length || 0);
             const pts = zonePoly.points;
             const ptStr = pts.map(p => `${p.x},${p.y}`).join(" ");
             const { cx, cy } = polygonCentroid(pts);
+            const isLocked = !!zonePoly.locked;
+            const btnX = Math.max(...pts.map(p => p.x)) + 12;
+            const btnY = Math.min(...pts.map(p => p.y)) - 12;
             return (
               <Fragment key={roomId}>
               <g>
                 <polygon
                   points={ptStr}
                   fill={FP_FILL[type]}
-                  stroke={isSel ? "var(--fm-brass)" : FP_STROKE[type]}
-                  strokeWidth={isSel ? 1.5 : 1}
+                  stroke={isMultiSel ? "var(--fm-brass)" : isSel ? "var(--fm-brass)" : FP_STROKE[type]}
+                  strokeWidth={isMultiSel ? 2 : isSel ? 1.5 : 1}
+                  strokeDasharray={isMultiSel && !isSel ? "6 3" : undefined}
                   opacity={isDrag ? 0.7 : 1}
-                  style={{ cursor: "grab" }}
+                  style={{ cursor: drawMode === "select" ? "pointer" : isLocked ? "default" : "grab" }}
                   onMouseDown={e => handleRoomMouseDown(e, roomId)}
                 />
                 <text x={cx} y={cy + 5} textAnchor="middle" fill={isSel ? "var(--fm-brass)" : "var(--fm-ink)"} fontSize={11} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
@@ -1848,10 +2014,21 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 <text x={cx} y={cy + 18} textAnchor="middle" fill="var(--fm-ink-dim)" fontSize={9} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
                   {itemCount} {itemCount === 1 ? "item" : "items"}
                 </text>
+                {/* Lock badge — visible whenever the zone is locked, selected or not */}
+                {isLocked && (
+                  <g style={{ pointerEvents: "none" }}>
+                    <circle cx={Math.min(...pts.map(p => p.x)) + 10} cy={Math.min(...pts.map(p => p.y)) + 10} r={7} fill="var(--fm-brass)" opacity={0.75} />
+                    <path
+                      d={`M ${Math.min(...pts.map(p => p.x)) + 7.2},${Math.min(...pts.map(p => p.y)) + 10.5} L ${Math.min(...pts.map(p => p.x)) + 7.2},${Math.min(...pts.map(p => p.y)) + 7.5} A2.8,2.8 0 0 1 ${Math.min(...pts.map(p => p.x)) + 12.8},${Math.min(...pts.map(p => p.y)) + 7.5} L ${Math.min(...pts.map(p => p.x)) + 12.8},${Math.min(...pts.map(p => p.y)) + 10.5}`}
+                      stroke="white" strokeWidth={1.5} fill="none" strokeLinecap="round"
+                    />
+                    <rect x={Math.min(...pts.map(p => p.x)) + 6} y={Math.min(...pts.map(p => p.y)) + 10.5} width={8} height={5.5} rx={1} fill="white" />
+                  </g>
+                )}
                 {isSel && (
                   <>
-                    {/* Edge hit strips — click anywhere on an edge to insert a vertex */}
-                    {pts.map((p0, vi) => {
+                    {/* Edge hit strips — click anywhere on an edge to insert a vertex (disabled when locked) */}
+                    {!isLocked && pts.map((p0, vi) => {
                       const p1 = pts[(vi + 1) % pts.length];
                       return (
                         <line
@@ -1864,8 +2041,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                         />
                       );
                     })}
-                    {/* Vertex handles — drag to move, click to remove (if 4+ vertices) */}
-                    {pts.map((p0, vi) => (
+                    {/* Vertex handles — drag to move, click to remove (disabled when locked) */}
+                    {!isLocked && pts.map((p0, vi) => (
                       <circle
                         key={`vh-${vi}`}
                         cx={p0.x} cy={p0.y} r={5}
@@ -1917,19 +2094,26 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 )}
               </g>
               {isSel && (
-                <XButton
-                  x={Math.max(...pts.map(p => p.x)) + 12} y={Math.min(...pts.map(p => p.y)) - 12}
-                  onDelete={() => removeFromCanvas(roomId)}
-                  onHoverEnter={null}
-                  onHoverLeave={null}
-                />
+                <>
+                  <LockButton
+                    x={btnX - 24} y={btnY}
+                    locked={isLocked}
+                    onToggle={() => toggleZoneLock(roomId)}
+                  />
+                  <XButton
+                    x={btnX} y={btnY}
+                    onDelete={() => removeFromCanvas(roomId)}
+                    onHoverEnter={null}
+                    onHoverLeave={null}
+                  />
+                </>
               )}
               </Fragment>
             );
           })}
 
           {/* Item pins */}
-          {(fpData.pins?.[activeLevel] || []).map(pin => {
+          {layers.pins && (fpData.pins?.[activeLevel] || []).map(pin => {
             const isSelected = selectedPin === pin.id;
             const stroke = FP_STROKE[categoryTypes[pin.cat] || "system"];
             return (
@@ -1990,6 +2174,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
           {/* Committed drawings */}
           {(fpData.drawings?.[activeLevel] || []).filter(dr => dr.visible !== false).map(dr => {
+            if (dr.todoId && !layers.todos) return null;
+            if (!dr.todoId && !layers.drawings) return null;
             const isSel = selectedDrawingId === dr.id;
 
             if (dr.type === "path" && dr.points?.length >= 2) {
@@ -2152,13 +2338,26 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           )}
 
           {/* Crosshair cursor in draw mode */}
-          {cursorPt && drawMode !== "select" && !pendingMarker && (
+          {cursorPt && drawMode !== "move" && drawMode !== "select" && !pendingMarker && (
             <g style={{ pointerEvents: "none" }}>
               <circle cx={cursorPt.x} cy={cursorPt.y} r={4} fill="none" stroke={drawColor} strokeWidth={1.5} opacity={0.8} />
               <line x1={cursorPt.x - 10} y1={cursorPt.y} x2={cursorPt.x + 10} y2={cursorPt.y} stroke={drawColor} strokeWidth={1} opacity={0.5} />
               <line x1={cursorPt.x} y1={cursorPt.y - 10} x2={cursorPt.x} y2={cursorPt.y + 10} stroke={drawColor} strokeWidth={1} opacity={0.5} />
             </g>
           )}
+
+          {/* Rubber-band select box */}
+          {selectBox && (() => {
+            const x = Math.min(selectBox.x0, selectBox.x1);
+            const y = Math.min(selectBox.y0, selectBox.y1);
+            const w = Math.abs(selectBox.x1 - selectBox.x0);
+            const h = Math.abs(selectBox.y1 - selectBox.y0);
+            return (
+              <g style={{ pointerEvents: "none" }}>
+                <rect x={x} y={y} width={w} height={h} fill="rgba(201,169,110,0.08)" stroke="var(--fm-brass)" strokeWidth={1} strokeDasharray="6 3" />
+              </g>
+            );
+          })()}
 
           {/* Scale bar */}
           {(() => {
@@ -2182,6 +2381,56 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             );
           })()}
         </svg>
+
+        {/* Multi-zone action float */}
+        {drawMode === "select" && selectedZones.size > 0 && (
+          <div
+            onMouseDown={e => e.stopPropagation()}
+            style={{
+              alignItems: "center",
+              background: "var(--fm-bg-panel)",
+              border: "1px solid var(--fm-brass)",
+              borderRadius: 6,
+              bottom: 20,
+              boxShadow: "0 4px 20px rgba(0,0,0,0.55)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.55rem",
+              left: "50%",
+              padding: "0.65rem 0.9rem",
+              position: "absolute",
+              transform: "translateX(-50%)",
+              zIndex: 30,
+            }}
+          >
+            <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.06em", textAlign: "center" }}>
+              {selectedZones.size} zone{selectedZones.size !== 1 ? "s" : ""} selected
+            </span>
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              {[
+                { label: "Lock", action: () => lockSelectedZones(true), danger: false },
+                { label: "Unlock", action: () => lockSelectedZones(false), danger: false },
+                { label: "Remove", action: removeSelectedFromCanvas, danger: true },
+              ].map(({ label, action, danger }) => (
+                <button
+                  key={label}
+                  onClick={action}
+                  style={{ background: "none", border: `1px solid var(--fm-hairline2)`, borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", padding: "0.22rem 0.65rem", transition: "border-color 0.1s, color 0.1s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = danger ? "#ef4444" : "var(--fm-brass)"; e.currentTarget.style.color = danger ? "#ef4444" : "var(--fm-brass)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setSelectedZones(new Set())}
+              style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", padding: 0 }}
+            >
+              Clear selection
+            </button>
+          </div>
+        )}
 
         {/* Pending marker label input */}
         {pendingMarker && svgRef.current && (() => {
@@ -2240,7 +2489,6 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const spatialCats = categories.filter(c => isSpatial(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
         const functionalCats = categories.filter(c => isFunctional(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
         const exteriorCats = categories.filter(c => isExteriorTypeUtil(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
-        const structureCats = categories.filter(c => isStructureTypeUtil(resolveTypeId(c, categoryTypes[c] || "system"), entityTypeData));
         const PCOLOR = { urgent: "#e07b6a", high: "#e0b266", medium: "#c9a96e", low: "#7fb087" };
         return (
           <TodoModal
@@ -2255,7 +2503,6 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             spatialCategories={spatialCats}
             functionalCategories={functionalCats}
             exteriorCategories={exteriorCats}
-            structureCategories={structureCats}
             projects={storeProjects}
             onSave={form => {
               const drawingId = `drw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
@@ -2535,8 +2782,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 const todoMarkers = allDrawings.filter(dr => dr.todoId);
                 const regular = allDrawings.filter(dr => !dr.todoId);
 
-                const structureDrawings = regular.filter(dr => dr.category && isStructureTypeUtil(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData));
-                const systemDrawings = regular.filter(dr => dr.category && isFunctional(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData) && !isStructureTypeUtil(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData));
+                const systemDrawings = regular.filter(dr => dr.category && isFunctional(resolveTypeId(dr.category, categoryTypes[dr.category] || "system"), entityTypeData));
                 const uncategorized = regular.filter(dr => !dr.category);
 
                 const sectionLabel = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
@@ -2591,14 +2837,11 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                         </div>
                       </>
                     )}
-                    {structureDrawings.length > 0 && (
-                      <>{sectionHeader("Structures", structureDrawings.length, true)}{structureDrawings.map(drawingRow)}</>
-                    )}
                     {systemDrawings.length > 0 && (
-                      <>{sectionHeader("Systems", systemDrawings.length, structureDrawings.length === 0)}{systemDrawings.map(drawingRow)}</>
+                      <>{sectionHeader("Systems", systemDrawings.length, true)}{systemDrawings.map(drawingRow)}</>
                     )}
                     {uncategorized.length > 0 && (
-                      <>{sectionHeader("Drawings", uncategorized.length, structureDrawings.length === 0 && systemDrawings.length === 0)}{uncategorized.map(drawingRow)}</>
+                      <>{sectionHeader("Drawings", uncategorized.length, systemDrawings.length === 0)}{uncategorized.map(drawingRow)}</>
                     )}
                     {todoMarkers.length > 0 && (
                       <>
@@ -3187,111 +3430,218 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
 // ─── Overview Tab ────────────────────────────────────────────────────────────
 
 const OVERVIEW_GRID_KEY = "foreman-overview-grid";
-const OVERVIEW_DEFAULT_COL_LABELS = ["Appliances", "Fixtures", "Construction", "Column 4", "Column 5", "Column 6", "Column 7", "Column 8"];
-const OVERVIEW_DEFAULT_COLS = OVERVIEW_DEFAULT_COL_LABELS.map((label, i) => ({
-  id: `ov-col-${i + 1}`,
-  label,
-}));
 
-function loadOverviewGrid() {
+function loadOverviewOrder() {
   try {
-    const stored = storageGet(OVERVIEW_GRID_KEY);
-    if (stored && Array.isArray(stored.columns)) return stored;
-  } catch {}
-  return { columns: OVERVIEW_DEFAULT_COLS, cells: {} };
+    const s = storageGet(OVERVIEW_GRID_KEY);
+    return {
+      item:      Array.isArray(s?.itemColumnOrder)    ? s.itemColumnOrder    : [],
+      collapsed: Array.isArray(s?.collapsedItemTypes) ? s.collapsedItemTypes : [],
+    };
+  } catch { return { item: [], collapsed: [] }; }
 }
 
-function saveOverviewGrid(data) {
-  storageSet(OVERVIEW_GRID_KEY, data);
+function saveOverviewOrder(order) {
+  storageSet(OVERVIEW_GRID_KEY, { itemColumnOrder: order.item, collapsedItemTypes: order.collapsed });
 }
 
-function OverviewTab({ rooms, exteriors }) {
-  const [grid, setGrid]               = useState(() => loadOverviewGrid());
-  const [editingCell, setEditingCell] = useState(null); // { row, colId }
-  const [editValue, setEditValue]     = useState("");
-  const [editingColId, setEditingColId] = useState(null);
-  const [editColLabel, setEditColLabel] = useState("");
-  const colCommittedRef = useRef(false);
-  const [dragCol, setDragCol] = useState(null);
+function columnTypeBinding(label) {
+  const singular = label.toLowerCase().replace(/s$/, "");
+  return BUILT_IN_ITEM_TYPES.find(t => t.toLowerCase() === singular) || null;
+}
+
+function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseItemKeyMap, effectiveCategoryTypes, entityTypeData, onAddItem, onFieldChange, onCreated, onSelectItem }) {
+  const [order, setOrder] = useState(() => loadOverviewOrder());
+  const [dragCol, setDragCol] = useState(null);     // { id: string } — parent item type only
   const [dragOverCol, setDragOverCol] = useState(null);
+  const [cellDraft, setCellDraft] = useState(null); // { row, isRoom, col }
+  const [draftCat,  setDraftCat]  = useState("");
+  const [draftName, setDraftName] = useState("");
+  const draftNameRef = useRef(null);
 
-  const { columns, cells } = grid;
+  // ── Derive parent item type columns ───────────────────────────────────────
 
-  function cellKey(row, colId) { return `${row}\x00${colId}`; }
-  function getCell(row, colId) { return cells[cellKey(row, colId)] ?? null; }
+  const itemCols = useMemo(() => {
+    const normalizeType = t => BUILT_IN_ITEM_TYPES.find(b => b.toLowerCase() === t.toLowerCase()) ?? t;
+    const userTypes = Object.values(customFieldValues || {})
+      .map(v => v?.item_type).filter(Boolean).map(normalizeType);
+    const all = [...new Set([...BUILT_IN_ITEM_TYPES, ...userTypes])].sort();
+    const saved = order.item || [];
+    const saved_ = saved.filter(id => all.includes(id));
+    const rest   = all.filter(id => !saved_.includes(id));
+    return [...saved_, ...rest].map(label => ({ id: label, label }));
+  }, [customFieldValues, order.item]);
 
-  function openCellEdit(row, colId) {
-    const val = getCell(row, colId);
-    const text = val == null ? "" : Array.isArray(val) ? val.join("\n") : val;
-    setEditingCell({ row, colId });
-    setEditValue(text);
+  // ── Collapsed set ─────────────────────────────────────────────────────────
+
+  const collapsedSet = useMemo(() => new Set(order.collapsed || []), [order.collapsed]);
+
+  function toggleCollapsed(typeId) {
+    const next = new Set(collapsedSet);
+    if (next.has(typeId)) next.delete(typeId);
+    else next.add(typeId);
+    const newOrder = { ...order, collapsed: [...next] };
+    setOrder(newOrder);
+    saveOverviewOrder(newOrder);
   }
 
-  function commitCell() {
-    if (!editingCell) return;
-    const { row, colId } = editingCell;
-    const lines = editValue.split("\n").map(l => l.trim()).filter(Boolean);
-    const newVal = lines.length === 0 ? null : lines.length === 1 ? lines[0] : lines;
-    const key = cellKey(row, colId);
-    const next = { ...grid, cells: { ...cells, [key]: newVal } };
-    setGrid(next);
-    saveOverviewGrid(next);
-    setEditingCell(null);
-    setEditValue("");
-  }
+  // ── Flat column list (parent + subtype sub-cols) ──────────────────────────
 
-  function reorderColumns(fromId, toId) {
-    if (fromId === toId) return;
-    const cols = [...columns];
-    const fromIdx = cols.findIndex(c => c.id === fromId);
-    const toIdx   = cols.findIndex(c => c.id === toId);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const [moved] = cols.splice(fromIdx, 1);
-    cols.splice(toIdx, 0, moved);
-    const next = { ...grid, columns: cols };
-    setGrid(next);
-    saveOverviewGrid(next);
-  }
-
-  function commitColRename() {
-    if (!editingColId) return;
-    const label = editColLabel.trim() || columns.find(c => c.id === editingColId)?.label || editingColId;
-    const next = { ...grid, columns: columns.map(c => c.id === editingColId ? { ...c, label } : c) };
-    setGrid(next);
-    saveOverviewGrid(next);
-    setEditingColId(null);
-    setEditColLabel("");
-    colCommittedRef.current = false;
-  }
-
-  function renderCellValue(val) {
-    if (val == null) return null;
-    if (Array.isArray(val)) {
-      return (
-        <ul style={{ listStyle: "disc", margin: 0, padding: "0 0 0 1.1rem" }}>
-          {val.map((v, i) => (
-            <li key={i} style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", lineHeight: 1.5 }}>{v}</li>
-          ))}
-        </ul>
-      );
+  const allCols = useMemo(() => {
+    const cols = [];
+    for (const parent of itemCols) {
+      const collapsed = collapsedSet.has(parent.id);
+      cols.push({ ...parent, group: "item", isParent: true, isCollapsed: collapsed });
+      if (!collapsed) {
+        const subtypes = ITEM_SUBTYPES[parent.id] ?? [];
+        for (const sub of subtypes) {
+          cols.push({ id: `${parent.id}::${sub}`, label: sub, group: "item", parentId: parent.id, isSubtype: true, isUntyped: false });
+        }
+        cols.push({ id: `${parent.id}::—`, label: "—", group: "item", parentId: parent.id, isSubtype: true, isUntyped: true });
+      }
     }
-    return <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5 }}>{val}</span>;
+    return cols;
+  }, [itemCols, collapsedSet]);
+
+  // ── Cell creation ─────────────────────────────────────────────────────────
+
+  const availableCats = useMemo(() => {
+    if (!cellDraft || !categories) return [];
+    return categories.filter(c => {
+      const tid = resolveTypeId(c, effectiveCategoryTypes[c] || "system");
+      return !isSpatial(tid, entityTypeData);
+    });
+  }, [cellDraft, categories, effectiveCategoryTypes, entityTypeData]);
+
+  useEffect(() => {
+    if (!cellDraft) return;
+    setDraftCat(prev => availableCats.includes(prev) ? prev : (availableCats[0] || ""));
+    setDraftName("");
+    setTimeout(() => draftNameRef.current?.focus(), 0);
+  }, [cellDraft]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const roomSet = useMemo(() => new Set(rooms), [rooms]);
+
+  function commitCreate() {
+    if (!draftName.trim()) return;
+    const name = draftName.trim();
+    const cat = draftCat || availableCats[0];
+    if (!cat) return;
+    const col = cellDraft.col;
+    const itemType = col.isSubtype ? col.parentId : col.id;
+    const stableKey = onAddItem?.(cat, name);
+    if (stableKey && onFieldChange) {
+      onFieldChange(cat, name, "item_type", itemType, stableKey);
+      if (col.isSubtype && !col.isUntyped) {
+        onFieldChange(cat, name, "item_subtype", col.label, stableKey);
+      }
+      if (cellDraft.isRoom) {
+        onFieldChange(cat, name, "roomLabel", cellDraft.row, stableKey);
+      } else {
+        onFieldChange(cat, name, "exteriorLabel", cellDraft.row, stableKey);
+      }
+    }
+    setCellDraft(null);
+    onCreated?.(cat, name);
   }
 
-  const COL_W = 180;
+  // ── Derived cells ─────────────────────────────────────────────────────────
+
+  const derivedCells = useMemo(() => {
+    const result = {};
+    if (!customFieldValues || !reverseItemKeyMap) return result;
+
+    const lc = s => (s || "").toLowerCase();
+
+    // Build per-item-entry list once to avoid O(n²) inner loops.
+    // Each entry: { key, ref, vals, itemTypeLc, itemSubtype }
+    const entries = Object.entries(reverseItemKeyMap).map(([key, ref]) => {
+      const vals = customFieldValues[key] || {};
+      return { key, ref, vals, itemTypeLc: lc(vals.item_type), itemSubtype: vals.item_subtype || "" };
+    });
+
+    // For each row × column combination, collect matching item names.
+    // Parent (collapsed) cols: match item_type only.
+    // Subtype cols: match item_type AND item_subtype (or lack thereof for "—").
+    itemCols.forEach(parent => {
+      const parentLc = parent.id.toLowerCase();
+      const subtypes = ITEM_SUBTYPES[parent.id] ?? [];
+      const collapsed = collapsedSet.has(parent.id);
+
+      [...rooms, ...exteriors].forEach(row => {
+        const isRoom = roomSet.has(row);
+        const rowL   = lc(row);
+
+        const matching = entries.filter(({ ref, vals }) => {
+          const spatial = isRoom ? vals.roomLabel : vals.exteriorLabel;
+          const explicitMatch = !!spatial && lc(spatial) === rowL;
+          const implicitMatch = !spatial && lc(ref.category) === rowL;
+          return explicitMatch || implicitMatch;
+        });
+
+        const typeMatches = matching.filter(e => e.itemTypeLc === parentLc);
+
+        // Always compute parent key (used when collapsed, and for toggle consistency)
+        result[`item\x00${row}\x00${parent.id}`] = typeMatches.map(e => ({ item: e.ref.item, category: e.ref.category }));
+
+        if (!collapsed) {
+          // Subtype sub-columns
+          subtypes.forEach(sub => {
+            const subLc = sub.toLowerCase();
+            result[`item\x00${row}\x00${parent.id}::${sub}`] =
+              typeMatches.filter(e => lc(e.itemSubtype) === subLc).map(e => ({ item: e.ref.item, category: e.ref.category }));
+          });
+          // Untyped "—" col: items with this type but no subtype set
+          const knownSubtypesLc = new Set(subtypes.map(s => s.toLowerCase()));
+          result[`item\x00${row}\x00${parent.id}::—`] =
+            typeMatches.filter(e => !e.itemSubtype || !knownSubtypesLc.has(lc(e.itemSubtype))).map(e => ({ item: e.ref.item, category: e.ref.category }));
+        }
+      });
+    });
+
+    return result;
+  }, [customFieldValues, reverseItemKeyMap, itemCols, collapsedSet, rooms, exteriors, roomSet]);
+
+  // ── Drag reorder (within-group only) ────────────────────────────────────
+
+  function handleDrop(toId) {
+    if (!dragCol || dragCol.id === toId) return;
+    const fromId = dragCol.id;
+    const currentIds = itemCols.map(c => c.id);
+    const fromIdx = currentIds.indexOf(fromId);
+    const toIdx   = currentIds.indexOf(toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const reordered = [...currentIds];
+    const [moved] = reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, moved);
+    const newOrder = { ...order, item: reordered };
+    setOrder(newOrder);
+    saveOverviewOrder(newOrder);
+  }
+
+  // ── Styles ────────────────────────────────────────────────────────────────
+
+  const COL_W = 160;
 
   const thBase = {
     background: "var(--fm-bg-panel)",
     borderBottom: "2px solid var(--fm-hairline2)",
     borderRight: "1px solid var(--fm-hairline)",
     color: "var(--fm-brass-dim)",
+    cursor: "grab",
     fontFamily: "var(--fm-mono)",
-    fontSize: "0.58rem",
-    letterSpacing: "0.12em",
-    padding: "0.55rem 0.75rem",
+    fontSize: "0.6rem",
+    letterSpacing: "0.08em",
+    padding: "0.4rem 0.6rem 0.35rem",
+    position: "sticky",
     textAlign: "left",
     textTransform: "uppercase",
+    top: 0,
+    transition: "opacity 0.1s",
     whiteSpace: "nowrap",
+    width: COL_W,
+    minWidth: COL_W,
+    zIndex: 2,
   };
 
   const tdLabel = {
@@ -3314,7 +3664,6 @@ function OverviewTab({ rooms, exteriors }) {
   const tdCell = {
     borderBottom: "1px solid var(--fm-hairline)",
     borderRight: "1px solid var(--fm-hairline)",
-    cursor: "pointer",
     minWidth: COL_W,
     padding: "0.45rem 0.6rem",
     verticalAlign: "top",
@@ -3333,42 +3682,119 @@ function OverviewTab({ rooms, exteriors }) {
     textTransform: "uppercase",
   };
 
+  // ── Render helpers ────────────────────────────────────────────────────────
+
+  // Build two header rows from allCols:
+  // Row 1: parent item type <th> with colspan + expand/collapse toggle
+  // Row 2: subtype label <th>s (empty for collapsed parents via rowSpan on row-1)
+  function renderHeaderRows() {
+    const row1 = [];
+    const row2 = [];
+
+    for (const parent of itemCols) {
+      const collapsed = collapsedSet.has(parent.id);
+      const subtypes  = collapsed ? [] : (ITEM_SUBTYPES[parent.id] ?? []);
+      const span      = collapsed ? 1 : subtypes.length + 2; // subtypes + untyped "—" + parent header col
+      const isDragging = dragCol?.id === parent.id;
+      const isDragOver = dragOverCol?.id === parent.id && dragCol?.id !== parent.id;
+
+      row1.push(
+        <th
+          key={parent.id}
+          colSpan={span}
+          rowSpan={collapsed ? 2 : 1}
+          draggable
+          onDragStart={e => { setDragCol({ id: parent.id }); e.dataTransfer.effectAllowed = "move"; }}
+          onDragOver={e => { e.preventDefault(); setDragOverCol({ id: parent.id }); }}
+          onDrop={e => { e.preventDefault(); handleDrop(parent.id); setDragCol(null); setDragOverCol(null); }}
+          onDragEnd={() => { setDragCol(null); setDragOverCol(null); }}
+          style={{
+            ...thBase,
+            borderLeft: "2px solid var(--fm-hairline2)",
+            borderLeft: isDragOver ? "2px solid var(--fm-brass)" : "2px solid var(--fm-hairline2)",
+            cursor: "grab",
+            opacity: isDragging ? 0.3 : 1,
+            textAlign: "center",
+            width: collapsed ? COL_W : span * COL_W,
+            minWidth: collapsed ? COL_W : undefined,
+          }}
+        >
+          <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", justifyContent: "center" }}>
+            <button
+              onClick={e => { e.stopPropagation(); toggleCollapsed(parent.id); }}
+              style={{ background: "none", border: "none", color: "var(--fm-cyan)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", lineHeight: 1, padding: "0 0.15rem" }}
+              title={collapsed ? "Expand subtypes" : "Collapse subtypes"}
+            >{collapsed ? "▶" : "▼"}</button>
+            <span style={{ color: "var(--fm-cyan)", fontSize: "0.62rem", letterSpacing: "0.06em" }}>{parent.label}</span>
+          </div>
+        </th>
+      );
+
+      if (!collapsed) {
+        // Row 2: subtype sub-column headers
+        for (const sub of subtypes) {
+          row2.push(
+            <th key={`${parent.id}::${sub}`} style={{ ...thBase, borderLeft: "1px solid var(--fm-hairline)", color: "var(--fm-cyan)", fontSize: "0.55rem", opacity: 0.8, top: thBase.top }}>
+              {sub}
+            </th>
+          );
+        }
+        row2.push(
+          <th key={`${parent.id}::—`} style={{ ...thBase, borderLeft: "1px solid var(--fm-hairline)", color: "var(--fm-ink-dim)", fontSize: "0.55rem", opacity: 0.6 }}>
+            —
+          </th>
+        );
+      }
+    }
+
+    return { row1, row2 };
+  }
+
+  const hasExpanded = itemCols.some(p => !collapsedSet.has(p.id));
+  const { row1, row2 } = renderHeaderRows();
+
+  function renderItems(items) {
+    if (!items?.length) return null;
+    return (
+      <ul style={{ listStyle: "disc", margin: 0, padding: "0 0 0 1.1rem" }}>
+        {items.map(({ item, category }, i) => (
+          <li
+            key={i}
+            onClick={onSelectItem ? e => { e.stopPropagation(); onSelectItem({ category, item }); } : undefined}
+            style={{ color: "var(--fm-ink-dim)", cursor: onSelectItem ? "pointer" : undefined, fontFamily: "var(--fm-mono)", fontSize: "0.65rem", lineHeight: 1.6 }}
+            onMouseEnter={onSelectItem ? e => { e.currentTarget.style.color = "var(--fm-ink)"; } : undefined}
+            onMouseLeave={onSelectItem ? e => { e.currentTarget.style.color = "var(--fm-ink-dim)"; } : undefined}
+          >{item}</li>
+        ))}
+      </ul>
+    );
+  }
+
   function renderSection(label, rows) {
     if (rows.length === 0) return null;
     return (
       <>
         <tr>
           <td style={{ ...sectionHeaderTd, left: 0, position: "sticky", zIndex: 1 }}>{label}</td>
-          {columns.map(col => <td key={col.id} style={{ ...sectionHeaderTd, borderLeft: "none" }} />)}
+          {allCols.filter(c => !c.isParent || c.isCollapsed).map(col => (
+            <td key={col.id} style={{ ...sectionHeaderTd, borderLeft: col.isParent ? "2px solid var(--fm-hairline2)" : "none" }} />
+          ))}
         </tr>
         {rows.map(row => (
           <tr key={row}>
             <td style={tdLabel}>{row}</td>
-            {columns.map(col => {
-              const val = getCell(row, col.id);
-              const isEditing = editingCell?.row === row && editingCell?.colId === col.id;
+            {allCols.filter(c => !c.isParent || c.isCollapsed).map(col => {
+              const ck = `item\x00${row}\x00${col.id}`;
+              const items = derivedCells[ck] || [];
+              const isParentCol = col.isParent && col.isCollapsed;
               return (
                 <td
                   key={col.id}
-                  style={{ ...tdCell, background: isEditing ? "var(--fm-bg-sunk)" : "transparent" }}
-                  onClick={() => !isEditing && openCellEdit(row, col.id)}
+                  style={{ ...tdCell, borderLeft: isParentCol ? "2px solid var(--fm-hairline2)" : undefined, cursor: onAddItem ? "default" : undefined }}
+                  onDoubleClick={onAddItem ? () => setCellDraft({ row, isRoom: roomSet.has(row), col }) : undefined}
+                  title={onAddItem ? "Double-click to add an item" : undefined}
                 >
-                  {isEditing ? (
-                    <textarea
-                      autoFocus
-                      value={editValue}
-                      onChange={e => setEditValue(e.target.value)}
-                      onBlur={commitCell}
-                      onKeyDown={e => {
-                        if (e.key === "Escape") { setEditingCell(null); setEditValue(""); }
-                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitCell(); }
-                      }}
-                      placeholder={"Enter value…\n(Shift+Enter for list items)"}
-                      style={{ background: "transparent", border: "none", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5, minHeight: 64, outline: "none", padding: 0, resize: "vertical", width: "100%" }}
-                    />
-                  ) : (
-                    <div style={{ minHeight: 20 }}>{renderCellValue(val)}</div>
-                  )}
+                  <div style={{ minHeight: 20 }}>{renderItems(items)}</div>
                 </td>
               );
             })}
@@ -3381,72 +3807,18 @@ function OverviewTab({ rooms, exteriors }) {
   return (
     <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
       <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.06em", marginBottom: "0.4rem", paddingLeft: "0.1rem" }}>
-        Drag a column header to reorder · Double-click to rename · Click a cell to edit · Enter to save · Shift+Enter for multiple values · Escape to cancel
+        Drag item type headers to reorder · Click ▶/▼ to expand or collapse subtypes · Double-click a cell to add an item
       </div>
       <div style={{ flex: 1, overflow: "auto" }}>
         <table style={{ borderCollapse: "collapse", tableLayout: "fixed", width: "max-content" }}>
           <thead>
             <tr>
-              <th style={{ ...thBase, left: 0, minWidth: COL_W, position: "sticky", top: 0, zIndex: 3 }}>
+              <th rowSpan={hasExpanded ? 2 : 1} style={{ ...thBase, cursor: "default", left: 0, minWidth: COL_W, verticalAlign: "middle", zIndex: 3 }}>
                 Spatial Location
               </th>
-              {columns.map(col => {
-                const isDragging  = dragCol === col.id;
-                const isDragOver  = dragOverCol === col.id && dragCol !== col.id;
-                return (
-                  <th
-                    key={col.id}
-                    draggable={editingColId !== col.id}
-                    onDragStart={e => {
-                      setDragCol(col.id);
-                      e.dataTransfer.effectAllowed = "move";
-                    }}
-                    onDragOver={e => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                      if (dragOverCol !== col.id) setDragOverCol(col.id);
-                    }}
-                    onDrop={e => {
-                      e.preventDefault();
-                      if (dragCol) reorderColumns(dragCol, col.id);
-                      setDragCol(null);
-                      setDragOverCol(null);
-                    }}
-                    onDragEnd={() => { setDragCol(null); setDragOverCol(null); }}
-                    style={{
-                      ...thBase,
-                      borderLeft: isDragOver ? "2px solid var(--fm-brass)" : undefined,
-                      cursor: editingColId === col.id ? "text" : "grab",
-                      minWidth: COL_W,
-                      opacity: isDragging ? 0.35 : 1,
-                      position: "sticky",
-                      top: 0,
-                      transition: "opacity 0.1s",
-                      width: COL_W,
-                      zIndex: 2,
-                    }}
-                  >
-                    {editingColId === col.id ? (
-                      <input
-                        autoFocus
-                        value={editColLabel}
-                        onChange={e => setEditColLabel(e.target.value)}
-                        onBlur={() => { if (!colCommittedRef.current) commitColRename(); }}
-                        onKeyDown={e => {
-                          if (e.key === "Enter") { colCommittedRef.current = true; commitColRename(); }
-                          if (e.key === "Escape") { setEditingColId(null); setEditColLabel(""); }
-                        }}
-                        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-brass)", borderRadius: 2, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", outline: "none", padding: "0.15rem 0.4rem", textTransform: "none", width: "100%" }}
-                      />
-                    ) : (
-                      <span onDoubleClick={() => { setEditingColId(col.id); setEditColLabel(col.label); }} style={{ cursor: "text", userSelect: "none" }} title="Drag to reorder · Double-click to rename">
-                        {col.label}
-                      </span>
-                    )}
-                  </th>
-                );
-              })}
+              {row1}
             </tr>
+            {hasExpanded && <tr>{row2}</tr>}
           </thead>
           <tbody>
             {renderSection("Rooms", rooms)}
@@ -3454,6 +3826,114 @@ function OverviewTab({ rooms, exteriors }) {
           </tbody>
         </table>
       </div>
+
+      {cellDraft && createPortal(
+        <div
+          onClick={e => { if (e.target === e.currentTarget) setCellDraft(null); }}
+          style={{ alignItems: "center", background: "rgba(0,0,0,0.65)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}
+        >
+          <div
+            style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: "480px", padding: "1.75rem", width: "90vw" }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between", marginBottom: "0.35rem" }}>
+              <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>
+                Add Item
+              </span>
+              <button
+                onClick={() => setCellDraft(null)}
+                style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "1rem", lineHeight: 1, padding: "0.1rem 0.3rem", transition: "color 0.12s" }}
+                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+              >×</button>
+            </div>
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: "0 0 1.5rem" }}>
+              Adding to <strong style={{ color: "var(--fm-ink)" }}>{cellDraft.row}</strong>.
+              Item type{cellDraft.col.isSubtype && !cellDraft.col.isUntyped ? " and subtype" : ""} will be set automatically.
+            </p>
+
+            {/* Category */}
+            <div style={{ marginBottom: "1.1rem" }}>
+              <label style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", marginBottom: "0.4rem", textTransform: "uppercase" }}>
+                System / Category
+              </label>
+              {availableCats.length === 0 ? (
+                <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", margin: 0 }}>
+                  No categories exist yet.
+                </p>
+              ) : (
+                <select
+                  value={draftCat}
+                  onChange={e => setDraftCat(e.target.value)}
+                  style={{ appearance: "none", background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "4px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", outline: "none", padding: "0.5rem 0.75rem", width: "100%" }}
+                >
+                  {availableCats.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
+            </div>
+
+            {/* Item name */}
+            <div style={{ marginBottom: "1.25rem" }}>
+              <label style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", marginBottom: "0.4rem", textTransform: "uppercase" }}>
+                Item Name
+              </label>
+              <input
+                ref={draftNameRef}
+                value={draftName}
+                onChange={e => setDraftName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") commitCreate();
+                  if (e.key === "Escape") setCellDraft(null);
+                }}
+                placeholder="e.g. Dishwasher, North Window…"
+                style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "4px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", outline: "none", padding: "0.5rem 0.75rem", transition: "border-color 0.12s", width: "100%" }}
+                onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+                onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
+              />
+            </div>
+
+            {/* Pre-filled context chips */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "1.5rem" }}>
+              {(() => {
+                const col = cellDraft.col;
+                const itemType = col.isSubtype ? col.parentId : col.id;
+                const chips = [
+                  { label: "Location", value: cellDraft.row, color: "var(--fm-cyan)" },
+                  { label: "Item Type", value: itemType, color: "var(--fm-cyan)" },
+                ];
+                if (col.isSubtype && !col.isUntyped) {
+                  chips.push({ label: "Subtype", value: col.label, color: "var(--fm-cyan)" });
+                }
+                return chips.map(({ label, value, color }) => (
+                  <div key={label} style={{ alignItems: "center", background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: "3px", display: "flex", gap: "0.35rem", padding: "0.2rem 0.55rem" }}>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</span>
+                    <span style={{ color, fontFamily: "var(--fm-mono)", fontSize: "0.68rem" }}>{value}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {/* Buttons */}
+            <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setCellDraft(null)}
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0.45rem 1rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+              >Cancel</button>
+              <button
+                onClick={commitCreate}
+                disabled={!draftName.trim()}
+                style={{ background: draftName.trim() ? "#c9a96e22" : "transparent", border: `1px solid ${draftName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)"}`, borderRadius: "3px", color: draftName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: draftName.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.45rem 1.1rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { if (draftName.trim()) e.currentTarget.style.background = "#c9a96e35"; }}
+                onMouseLeave={e => { if (draftName.trim()) e.currentTarget.style.background = "#c9a96e22"; }}
+              >Add Item</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
@@ -3467,23 +3947,22 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
   const [editingRow, setEditingRow] = useState(null);
   const [editingTypeRow, setEditingTypeRow] = useState(null);
   const [editingTypeDraft, setEditingTypeDraft] = useState("");
-  const [editingRoomRow, setEditingRoomRow] = useState(null);
-  const [editingRoomDraft, setEditingRoomDraft] = useState("");
-  const [editingExteriorRow, setEditingExteriorRow] = useState(null);
-  const [editingExteriorDraft, setEditingExteriorDraft] = useState("");
+  const [editingLocationRow, setEditingLocationRow] = useState(null);
+  const [editingLocationDraft, setEditingLocationDraft] = useState("");
+  const [pendingLocation, setPendingLocation] = useState(null);
+  const [editingSubtypeRow, setEditingSubtypeRow] = useState(null);
+  const [editingSubtypeDraft, setEditingSubtypeDraft] = useState(""); // { key, cat, item, value }
   const [editingSystemRow, setEditingSystemRow] = useState(null);
   const [editingSystemDraft, setEditingSystemDraft] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [systemFilter, setSystemFilter] = useState("ALL");
-  const [structureFilter, setStructureFilter] = useState("ALL");
-  const [exteriorFilter, setExteriorFilter] = useState("ALL");
-  const [roomFilter, setRoomFilter] = useState("ALL");
+  const [locationFilter, setLocationFilter] = useState("ALL");
   const [levelFilter, setLevelFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [fpData] = useState(() => loadFpData());
   const [invFloors] = useState(() => getFloorsInOrder());
   const [invRooms] = useState(() => loadRooms());
-  const [sortCol, setSortCol] = useState({ col: "system", dir: 1 });
+  const [sortCol, setSortCol] = useState({ col: "location", dir: 1 });
 
   const allRows = useMemo(() =>
     categories.flatMap(cat =>
@@ -3491,20 +3970,6 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
     ), [categories, categoryItems, itemStableKeyMap]);
 
   // Walk up parent chain to check if a typeId is rooted at "structure"
-  const isStructureType = useMemo(() => (typeId) => {
-    let id = typeId;
-    const visited = new Set();
-    while (id) {
-      if (visited.has(id)) break;
-      visited.add(id);
-      if (id === "structure") return true;
-      const type = entityTypeData.types.find(t => t.id === id);
-      if (!type) break;
-      id = type.parentId;
-    }
-    return false;
-  }, [entityTypeData]);
-
   // Walk up parent chain to check if a typeId is rooted at "exterior"
   const isExteriorType = useMemo(() => (typeId) => {
     let id = typeId;
@@ -3520,40 +3985,26 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
     return false;
   }, [entityTypeData]);
 
-  // System categories: functional but NOT structure-rooted
   const systemCats = useMemo(() => {
     return categories.filter(c => {
       const oldType = categoryTypes?.[c] || "system";
-      const typeId = resolveTypeId(c, oldType);
-      return isFunctional(typeId, entityTypeData) && !isStructureType(typeId);
+      return isFunctional(resolveTypeId(c, oldType), entityTypeData);
     }).sort();
-  }, [categories, categoryTypes, entityTypeData, isStructureType]);
+  }, [categories, categoryTypes, entityTypeData]);
 
-  // Structure categories: functional AND structure-rooted
-  const structureCats = useMemo(() => {
-    return categories.filter(c => {
-      const oldType = categoryTypes?.[c] || "system";
-      return isStructureType(resolveTypeId(c, oldType));
-    }).sort();
-  }, [categories, categoryTypes, isStructureType]);
+  const locationCats = useMemo(() => {
+    const fromCats = categories.filter(c => isSpatial(resolveTypeId(c, categoryTypes?.[c] || "system"), entityTypeData));
+    const fromLabels = Object.values(customFieldValues || {})
+      .flatMap(v => [v?.roomLabel, v?.exteriorLabel]).filter(Boolean);
+    return [...new Set([...fromCats, ...fromLabels])].sort();
+  }, [categories, categoryTypes, entityTypeData, customFieldValues]);
 
-  // Exterior categories: spatial AND exterior-rooted
-  const exteriorCats = useMemo(() => {
-    return [...new Set(allRows.map(r => r.cat))].filter(c => {
-      const oldType = categoryTypes?.[c] || "system";
-      const typeId = resolveTypeId(c, oldType);
-      return isSpatial(typeId, entityTypeData) && isExteriorType(typeId);
-    }).sort();
-  }, [allRows, categoryTypes, entityTypeData, isExteriorType]);
-
-  // Room categories: spatial but NOT exterior-rooted
-  const roomCats = useMemo(() => {
-    return [...new Set(allRows.map(r => r.cat))].filter(c => {
-      const oldType = categoryTypes?.[c] || "system";
-      const typeId = resolveTypeId(c, oldType);
-      return isSpatial(typeId, entityTypeData) && !isExteriorType(typeId);
-    }).sort();
-  }, [allRows, categoryTypes, entityTypeData, isExteriorType]);
+  // Set of values known to be exterior — used to auto-classify location commits
+  const exteriorLabelSet = useMemo(() => {
+    const fromCats = categories.filter(c => isExteriorType(resolveTypeId(c, categoryTypes?.[c] || "system")));
+    const fromLabels = Object.values(customFieldValues || {}).map(v => v?.exteriorLabel).filter(Boolean);
+    return new Set([...fromCats, ...fromLabels]);
+  }, [categories, categoryTypes, customFieldValues, isExteriorType]);
 
   const filtered = useMemo(() => {
     let rows = allRows;
@@ -3563,17 +4014,11 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       const cf = customFieldValues?.[r.key];
       return (cf?.systemCategory || cf?.system || "") === systemFilter;
     });
-    if (structureFilter !== "ALL") rows = rows.filter(r => r.cat === structureFilter);
-    if (exteriorFilter !== "ALL") rows = rows.filter(r => {
+    if (locationFilter !== "ALL") rows = rows.filter(r => {
+      if (r.cat === locationFilter) return true;
       const cf = customFieldValues?.[r.key] || {};
-      const ext = ('exteriorLabel' in cf) ? (cf.exteriorLabel || "") : "";
-      return r.cat === exteriorFilter || ext === exteriorFilter;
-    });
-    if (roomFilter !== "ALL") rows = rows.filter(r => {
-      if (r.cat === roomFilter) return true;
-      const cf = customFieldValues?.[r.key] || {};
-      const rm = ('roomLabel' in cf) ? (cf.roomLabel || "") : (cf.room || "");
-      return rm === roomFilter;
+      const loc = cf.roomLabel || cf.exteriorLabel || cf.room || "";
+      return loc === locationFilter;
     });
     if (levelFilter !== "ALL") {
       const placedRoomIds = Object.keys(fpData.placements[levelFilter] || {});
@@ -3602,17 +4047,15 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
         cmp = ma.localeCompare(mb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "type") {
         cmp = (customFieldValues?.[a.key]?.item_type || "").localeCompare(customFieldValues?.[b.key]?.item_type || "") || a.item.localeCompare(b.item);
-      } else if (sortCol.col === "exterior") {
+      } else if (sortCol.col === "subtype") {
+        cmp = (customFieldValues?.[a.key]?.item_subtype || "").localeCompare(customFieldValues?.[b.key]?.item_subtype || "") || a.item.localeCompare(b.item);
+      } else if (sortCol.col === "location") {
         const cfA = customFieldValues?.[a.key] || {}, cfB = customFieldValues?.[b.key] || {};
-        const ea = ('exteriorLabel' in cfA) ? (cfA.exteriorLabel || "") : (isExteriorType(resolveTypeId(a.cat, categoryTypes?.[a.cat] || "system")) ? a.cat : "");
-        const eb = ('exteriorLabel' in cfB) ? (cfB.exteriorLabel || "") : (isExteriorType(resolveTypeId(b.cat, categoryTypes?.[b.cat] || "system")) ? b.cat : "");
-        cmp = ea.localeCompare(eb) || a.item.localeCompare(b.item);
-      } else if (sortCol.col === "room") {
-        const aOldType = categoryTypes?.[a.cat] || "system", bOldType = categoryTypes?.[b.cat] || "system";
-        const cfA = customFieldValues?.[a.key] || {}, cfB = customFieldValues?.[b.key] || {};
-        const ra = ('roomLabel' in cfA) ? (cfA.roomLabel || "") : (cfA.room || (isSpatial(resolveTypeId(a.cat, aOldType), entityTypeData) ? a.cat : ""));
-        const rb = ('roomLabel' in cfB) ? (cfB.roomLabel || "") : (cfB.room || (isSpatial(resolveTypeId(b.cat, bOldType), entityTypeData) ? b.cat : ""));
-        cmp = ra.localeCompare(rb) || a.item.localeCompare(b.item);
+        const la = cfA.roomLabel || cfA.exteriorLabel || cfA.room
+          || (isSpatial(resolveTypeId(a.cat, categoryTypes?.[a.cat] || "system"), entityTypeData) ? a.cat : "");
+        const lb = cfB.roomLabel || cfB.exteriorLabel || cfB.room
+          || (isSpatial(resolveTypeId(b.cat, categoryTypes?.[b.cat] || "system"), entityTypeData) ? b.cat : "");
+        cmp = la.localeCompare(lb) || a.item.localeCompare(b.item);
       } else if (sortCol.col === "system") {
         const sa = customFieldValues?.[a.key]?.system || a.cat;
         const sb = customFieldValues?.[b.key]?.system || b.cat;
@@ -3620,7 +4063,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       }
       return cmp * sortCol.dir;
     });
-  }, [allRows, statusFilter, systemFilter, structureFilter, exteriorFilter, roomFilter, levelFilter, typeFilter, fpData, invRooms, search, sortCol, itemDetails, customFieldValues]);
+  }, [allRows, statusFilter, systemFilter, locationFilter, levelFilter, typeFilter, fpData, invRooms, search, sortCol, itemDetails, customFieldValues]);
 
   function handleHeaderClick(col) {
     setSortCol(prev => prev.col === col ? { col, dir: prev.dir * -1 } : { col, dir: 1 });
@@ -3656,7 +4099,16 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
         />
         <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>{filtered.length} results</span>
         <button
-          onClick={() => { setShowAddForm(true); setNewItemCat(categories[0] || ""); setNewItemName(""); }}
+          onClick={() => {
+            // Pre-select category matching the active filter, in priority order
+            const defaultCat =
+              (systemFilter   !== "ALL" && categories.includes(systemFilter))   ? systemFilter   :
+              (locationFilter !== "ALL" && categories.includes(locationFilter)) ? locationFilter :
+              categories[0] || "";
+            setShowAddForm(true);
+            setNewItemCat(defaultCat);
+            setNewItemName("");
+          }}
           style={{ background: "transparent", border: "1px solid var(--fm-ink-dim)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", padding: "0.4rem 0.9rem", transition: "all 0.15s", whiteSpace: "nowrap" }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
@@ -3664,7 +4116,22 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       </div>
 
       {/* Inline add form */}
-      {showAddForm && (
+      {showAddForm && (() => {
+        function commitAdd() {
+          if (!newItemName.trim()) return;
+          const stableKey = onAddItem?.(newItemCat, newItemName);
+          if (stableKey && onFieldChange) {
+            const catTypeId = resolveTypeId(newItemCat, categoryTypes?.[newItemCat] || "system");
+            if (typeFilter !== "ALL")
+              onFieldChange(newItemCat, newItemName, "item_type", typeFilter, stableKey);
+            if (locationFilter !== "ALL" && !isSpatial(catTypeId, entityTypeData)) {
+              const field = isExteriorType(resolveTypeId(locationFilter, "system")) ? "exteriorLabel" : "roomLabel";
+              onFieldChange(newItemCat, newItemName, field, locationFilter, stableKey);
+            }
+          }
+          setShowAddForm(false);
+        }
+        return (
         <div style={{ alignItems: "center", background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "4px", display: "flex", gap: "0.6rem", marginBottom: "0.75rem", padding: "0.6rem 0.75rem" }}>
           <select
             value={newItemCat}
@@ -3678,7 +4145,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             value={newItemName}
             onChange={e => setNewItemName(e.target.value)}
             onKeyDown={e => {
-              if (e.key === "Enter") { onAddItem?.(newItemCat, newItemName); setShowAddForm(false); }
+              if (e.key === "Enter") commitAdd();
               if (e.key === "Escape") setShowAddForm(false);
             }}
             placeholder="Item name…"
@@ -3687,7 +4154,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
           />
           <button
-            onClick={() => { onAddItem?.(newItemCat, newItemName); setShowAddForm(false); }}
+            onClick={commitAdd}
             disabled={!newItemName.trim()}
             style={{ background: newItemName.trim() ? "var(--fm-brass)18" : "transparent", border: `1px solid ${newItemName.trim() ? "var(--fm-brass)40" : "var(--fm-hairline2)"}`, borderRadius: "3px", color: newItemName.trim() ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: newItemName.trim() ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.35rem 0.75rem", transition: "all 0.12s" }}
           >Add</button>
@@ -3698,7 +4165,8 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
           >Cancel</button>
         </div>
-      )}
+        );
+      })()}
 
       {/* Filter pills */}
       <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.6rem" }}>
@@ -3718,22 +4186,10 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             <FilterPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</FilterPill>
           ))}
         </FilterRow>
-        <FilterRow label="Structure" hidden={structureCats.length === 0}>
-          <FilterPill active={structureFilter === "ALL"} onClick={() => setStructureFilter("ALL")}>All</FilterPill>
-          {structureCats.map(cat => (
-            <FilterPill key={cat} active={structureFilter === cat} onClick={() => setStructureFilter(cat)}>{cat}</FilterPill>
-          ))}
-        </FilterRow>
-        <FilterRow label="Exterior" hidden={exteriorCats.length === 0}>
-          <FilterPill active={exteriorFilter === "ALL"} onClick={() => setExteriorFilter("ALL")}>All</FilterPill>
-          {exteriorCats.map(cat => (
-            <FilterPill key={cat} active={exteriorFilter === cat} onClick={() => setExteriorFilter(cat)}>{cat}</FilterPill>
-          ))}
-        </FilterRow>
-        <FilterRow label="Room">
-          <FilterPill active={roomFilter === "ALL"} onClick={() => setRoomFilter("ALL")}>All</FilterPill>
-          {roomCats.map(cat => (
-            <FilterPill key={cat} active={roomFilter === cat} onClick={() => setRoomFilter(cat)}>{cat}</FilterPill>
+        <FilterRow label="Location" hidden={locationCats.length === 0}>
+          <FilterPill active={locationFilter === "ALL"} onClick={() => setLocationFilter("ALL")}>All</FilterPill>
+          {locationCats.map(cat => (
+            <FilterPill key={cat} active={locationFilter === cat} onClick={() => setLocationFilter(cat)}>{cat}</FilterPill>
           ))}
         </FilterRow>
         <FilterRow label="Level">
@@ -3758,8 +4214,8 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
               { label: "Status",       col: "status",       width: "110px" },
               { label: "System",       col: "system",       width: "65px"  },
               { label: "Type",         col: "type",         width: "100px" },
-              { label: "Room",         col: "room",         width: "130px" },
-              { label: "Exterior",     col: "exterior",     width: "120px" },
+              { label: "Subtype",      col: "subtype",      width: "120px" },
+              { label: "Location",     col: "location",     width: "160px" },
               { label: "Item",         col: "item",         width: "200px" },
               { label: "Manufacturer", col: "manufacturer", width: "160px" },
               { label: "Model",        col: "model",        width: "160px" },
@@ -3786,29 +4242,21 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             const hasDetail = !!(itemDetails?.[key]);
             const existingTypes = [...new Set(Object.values(customFieldValues || {}).map(v => v?.item_type).filter(Boolean))].sort();
             const typeListId = `itypes-${key}`;
-            const roomListId = `irooms-${key}`;
             // Determine behavioral class for this item's own category
             const catOldType = categoryTypes?.[cat] || "system";
             const catTypeId = resolveTypeId(cat, catOldType);
             const catIsSpatial = isSpatial(catTypeId, entityTypeData);
             const catIsFunctional = isFunctional(catTypeId, entityTypeData);
-            const catIsExterior = catIsSpatial && isExteriorType(catTypeId);
 
             const cfVals = customFieldValues?.[key] || {};
-            const resolvedRoom = 'roomLabel' in cfVals
-              ? (cfVals.roomLabel ?? "")
-              : (cfVals.room || (catIsSpatial ? cat : ""));
-            const resolvedExterior = 'exteriorLabel' in cfVals
-              ? (cfVals.exteriorLabel ?? "")
-              : (catIsExterior ? cat : "");
+            const resolvedLocation = cfVals.roomLabel || cfVals.exteriorLabel || cfVals.room
+              || (catIsSpatial ? cat : "");
 
             // System: if item's category is already Functional, the category IS the system (read-only)
             // Otherwise, user picks which Functional category this item belongs to
             const resolvedSystem = catIsFunctional
               ? cat
               : (customFieldValues?.[key]?.systemCategory || customFieldValues?.[key]?.system || "");
-
-            const roomOptions = roomCats; // Spatial categories
             const systemOptions = systemCats; // Functional categories
             const systemListId = `isys-${key}`;
             const noteColor = hasDetail ? "var(--fm-brass)" : "var(--fm-ink-mute)";
@@ -3884,50 +4332,84 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                   )}
                 </td>
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
-                  {editingRoomRow === key ? (
+                  {editingSubtypeRow === key ? (
                     <ComboInput
                       autoFocus
-                      value={editingRoomDraft}
-                      onChange={v => setEditingRoomDraft(v)}
-                      onBlur={() => { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim() || null); setEditingRoomRow(null); }}
+                      value={editingSubtypeDraft}
+                      onChange={v => setEditingSubtypeDraft(v)}
+                      onBlur={() => { onFieldChange?.(cat, item, "item_subtype", editingSubtypeDraft.trim() || null); setEditingSubtypeRow(null); }}
                       onKeyDown={e => {
-                        if (e.key === "Enter") { onFieldChange?.(cat, item, "roomLabel", editingRoomDraft.trim() || null); setEditingRoomRow(null); }
-                        if (e.key === "Escape") setEditingRoomRow(null);
+                        if (e.key === "Enter") { onFieldChange?.(cat, item, "item_subtype", editingSubtypeDraft.trim() || null); setEditingSubtypeRow(null); }
+                        if (e.key === "Escape") setEditingSubtypeRow(null);
                       }}
-                      options={roomOptions}
-                      style={{ border: "1px solid var(--fm-brass)", fontSize: "0.78rem", padding: "0.15rem 0.4rem" }}
+                      options={ITEM_SUBTYPES[customFieldValues?.[key]?.item_type] ?? []}
+                      style={{ border: "1px solid var(--fm-brass)", fontSize: "0.67rem", padding: "0.15rem 0.3rem" }}
                     />
                   ) : (
                     <span
-                      style={{ color: resolvedRoom ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minHeight: "1.2em", minWidth: "2rem" }}
-                      onDoubleClick={() => { setEditingRoomDraft(resolvedRoom || ""); setEditingRoomRow(key); }}
-                      title="Double-click to set room location"
+                      style={{ color: customFieldValues?.[key]?.item_subtype ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", letterSpacing: "0.06em", minHeight: "1.2em", minWidth: "2rem", textTransform: "uppercase" }}
+                      onDoubleClick={() => { setEditingSubtypeDraft(customFieldValues?.[key]?.item_subtype || ""); setEditingSubtypeRow(key); }}
+                      title="Double-click to set subtype"
                     >
-                      {resolvedRoom || "—"}
+                      {customFieldValues?.[key]?.item_subtype || "—"}
                     </span>
                   )}
                 </td>
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
-                  {editingExteriorRow === key ? (
+                  {editingLocationRow === key ? (
                     <ComboInput
                       autoFocus
-                      value={editingExteriorDraft}
-                      onChange={v => setEditingExteriorDraft(v)}
-                      onBlur={() => { onFieldChange?.(cat, item, "exteriorLabel", editingExteriorDraft.trim() || null); setEditingExteriorRow(null); }}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") { onFieldChange?.(cat, item, "exteriorLabel", editingExteriorDraft.trim() || null); setEditingExteriorRow(null); }
-                        if (e.key === "Escape") setEditingExteriorRow(null);
+                      value={editingLocationDraft}
+                      onChange={v => setEditingLocationDraft(v)}
+                      onBlur={() => {
+                        const v = editingLocationDraft.trim() || null;
+                        if (!v) { onFieldChange?.(cat, item, "roomLabel", null); onFieldChange?.(cat, item, "exteriorLabel", null); setEditingLocationRow(null); return; }
+                        if (exteriorLabelSet.has(v)) { onFieldChange?.(cat, item, "exteriorLabel", v); setEditingLocationRow(null); }
+                        else if (locationCats.includes(v)) { onFieldChange?.(cat, item, "roomLabel", v); setEditingLocationRow(null); }
+                        else { setPendingLocation({ key, cat, item, value: v }); setEditingLocationRow(null); }
                       }}
-                      options={exteriorCats}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          const v = editingLocationDraft.trim() || null;
+                          if (!v) { onFieldChange?.(cat, item, "roomLabel", null); onFieldChange?.(cat, item, "exteriorLabel", null); setEditingLocationRow(null); return; }
+                          if (exteriorLabelSet.has(v)) { onFieldChange?.(cat, item, "exteriorLabel", v); setEditingLocationRow(null); }
+                          else if (locationCats.includes(v)) { onFieldChange?.(cat, item, "roomLabel", v); setEditingLocationRow(null); }
+                          else { setPendingLocation({ key, cat, item, value: v }); setEditingLocationRow(null); }
+                        }
+                        if (e.key === "Escape") setEditingLocationRow(null);
+                      }}
+                      options={locationCats}
                       style={{ border: "1px solid var(--fm-brass)", fontSize: "0.78rem", padding: "0.15rem 0.4rem" }}
                     />
+                  ) : pendingLocation?.key === key ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                      <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem" }}>{pendingLocation.value}</span>
+                      <div style={{ display: "flex", gap: "0.35rem" }}>
+                        <button
+                          onClick={() => { onFieldChange?.(cat, item, "roomLabel", pendingLocation.value); setPendingLocation(null); }}
+                          style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", padding: "0.15rem 0.45rem", textTransform: "uppercase" }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+                        >Room</button>
+                        <button
+                          onClick={() => { onFieldChange?.(cat, item, "exteriorLabel", pendingLocation.value); setPendingLocation(null); }}
+                          style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", padding: "0.15rem 0.45rem", textTransform: "uppercase" }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+                        >Exterior</button>
+                        <button
+                          onClick={() => setPendingLocation(null)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem" }}
+                        >×</button>
+                      </div>
+                    </div>
                   ) : (
                     <span
-                      style={{ color: resolvedExterior ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minHeight: "1.2em", minWidth: "2rem" }}
-                      onDoubleClick={() => { setEditingExteriorDraft(resolvedExterior || ""); setEditingExteriorRow(key); }}
-                      title="Double-click to set exterior location"
+                      style={{ color: resolvedLocation ? "var(--fm-ink-dim)" : "var(--fm-hairline2)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minHeight: "1.2em", minWidth: "2rem" }}
+                      onDoubleClick={() => { setEditingLocationDraft(resolvedLocation || ""); setEditingLocationRow(key); }}
+                      title="Double-click to set location"
                     >
-                      {resolvedExterior || "—"}
+                      {resolvedLocation || "—"}
                     </span>
                   )}
                 </td>
@@ -5066,13 +5548,15 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
   function handleAddItemNamed(category, itemName) {
     const trimmed = itemName.trim();
-    if (!trimmed || !category) return;
+    if (!trimmed || !category) return null;
+    const newId = `custom-${Date.now()}`;
     const customs = loadCustomData();
     saveCustomData([...customs, {
-      _id: `custom-${Date.now()}`, _isCustom: true, _defaultKey: null,
+      _id: newId, _isCustom: true, _defaultKey: null,
       category, item: trimmed, task: "", schedule: "", season: null,
     }]);
     reload();
+    return newId; // stable key for custom items is their _id
   }
 
   function handleCommitItemName(rowId, name) {
@@ -5840,7 +6324,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
-        <div style={activeTab === "Overview" ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : activeTab === "Outline" ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={(activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (
           <ItemInventoryView
@@ -5874,12 +6358,23 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
               const tid = resolveTypeId(c, effectiveCategoryTypes[c] || "system");
               return isExteriorTypeUtil(tid, entityTypeData);
             }).sort()}
+            categories={CATEGORIES}
+            customFieldValues={customFieldValues}
+            reverseItemKeyMap={reverseItemKeyMap}
+            effectiveCategoryTypes={effectiveCategoryTypes}
+            entityTypeData={entityTypeData}
+            onAddItem={handleAddItemNamed}
+            onFieldChange={handleCustomFieldValueChange}
+            onSelectItem={handleSelectItem}
+            onCreated={(cat, name) => {
+              handleSelectItem({ category: cat, item: name });
+            }}
           />
         )}
 
         </div>
 
-        {activeTab !== "Overview" && <div style={{
+        {(activeTab !== "Overview" || selectedItem) && <div style={{
           display: "flex",
           flex: 1,
           flexDirection: "column",
@@ -5889,7 +6384,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
 
           {/* Panel header — item name */}
-          <div style={{ borderBottom: "1px solid var(--fm-hairline)", flexShrink: 0, padding: "0.75rem 1rem 0.6rem" }}>
+          <div style={{ alignItems: "flex-start", borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0, padding: "0.75rem 1rem 0.6rem" }}>
+            <div style={{ flex: 1 }}>
             {selectedItem ? (
               <>
                 <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>Item</div>
@@ -5900,6 +6396,14 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
               </>
             ) : (
               <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>Item Details</div>
+            )}
+            </div>
+            {activeTab === "Overview" && (
+              <button
+                onClick={() => setSelectedItem(null)}
+                style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0 0 0 0.5rem" }}
+                title="Close panel"
+              >×</button>
             )}
           </div>
 
@@ -5946,7 +6450,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                 const itmFields = itemFieldSchemas[cfKey] || [];
                 const vals = customFieldValues[cfKey] || {};
                 const itemTypeField = UNIVERSAL_FIELDS.find(f => f.id === "item_type");
-                const addedIds = new Set([...itmFields.map(f => f.id), "item_type", "system", "room", "exterior"]);
+                const manualIds = new Set(itmFields.map(f => f.id));
+                const inheritedFields = (TYPE_FIELDS[vals.item_type || ""] || []).filter(f => !manualIds.has(f.id));
+                const addedIds = new Set([...manualIds, ...inheritedFields.map(f => f.id), "item_type", "system", "room", "exterior"]);
                 const svgArrow = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5460'/%3E%3C/svg%3E")`;
                 const fieldStyle = { background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", outline: "none", padding: "0.3rem 0.5rem", width: "100%" };
                 const labelStyle = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
@@ -5960,6 +6466,17 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                     const userTypes = Object.values(customFieldValues).map(v => v?.item_type).filter(Boolean);
                     const existingTypes = [...new Set([...BUILT_IN_ITEM_TYPES, ...userTypes])].sort();
                     return <ModelComboField value={val} models={existingTypes} fieldStyle={fieldStyle} onChange={onChange} />;
+                  }
+                  if (field.type === "subtype") {
+                    const currentType = vals.item_type || "";
+                    const subtypeOptions = ITEM_SUBTYPES[currentType];
+                    if (subtypeOptions) return (
+                      <select value={val} onChange={e => onChange(e.target.value)} style={{ ...fieldStyle, appearance: "none", backgroundImage: svgArrow, backgroundRepeat: "no-repeat", backgroundPosition: "right 0.5rem center", cursor: "pointer", paddingRight: "1.5rem" }} onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"} onBlur={e => e.currentTarget.style.borderColor = "var(--fm-ink-dim)"}>
+                        <option value="">—</option>
+                        {subtypeOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    );
+                    return <input type="text" value={val} onChange={e => onChange(e.target.value)} placeholder="—" style={fieldStyle} onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"} onBlur={e => e.currentTarget.style.borderColor = "var(--fm-ink-dim)"} />;
                   }
                   if (field.id === "system") {
                     const systemVal = vals.systemCategory || vals.system || "";
@@ -6044,6 +6561,19 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                       </div>
                       {renderFieldInput({ id: "exterior", name: "Exterior", type: "text" })}
                     </div>
+                    {inheritedFields.length > 0 && (
+                      <>
+                        <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", margin: "0.6rem 0 0.5rem", textTransform: "uppercase" }}>Common</div>
+                        {inheritedFields.map(field => (
+                          <div key={field.id} style={{ marginBottom: "0.45rem" }}>
+                            <div style={{ marginBottom: "0.2rem" }}>
+                              <span style={labelStyle}>{field.name}</span>
+                            </div>
+                            {renderFieldInput(field)}
+                          </div>
+                        ))}
+                      </>
+                    )}
                     {itmFields.map(field => (
                       <div key={field.id} style={{ marginBottom: "0.45rem" }}>
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.2rem" }}>

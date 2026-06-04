@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -18,6 +18,10 @@ export default function ComboInput({ value = "", onChange, onBlur, onKeyDown, op
   const [open, setOpen] = useState(false);
   const [pos, setPos]   = useState({ top: 0, left: 0, width: 0 });
   const inputRef        = useRef(null);
+
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = options.filter(o =>
     !value || o.toLowerCase().includes(value.toLowerCase())
@@ -54,7 +58,6 @@ export default function ComboInput({ value = "", onChange, onBlur, onKeyDown, op
     <>
       <input
         ref={inputRef}
-        autoFocus={autoFocus}
         value={value}
         placeholder={placeholder}
         onChange={e => { onChange(e.target.value); openDrop(); }}
@@ -77,6 +80,7 @@ export default function ComboInput({ value = "", onChange, onBlur, onKeyDown, op
             boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
             left: pos.left,
             maxHeight: 220,
+            minWidth: 200,
             overflowY: "auto",
             position: "absolute",
             top: pos.top,
