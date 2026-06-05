@@ -63,6 +63,71 @@
   --fm-tag-padding: 2px 5px;
 }
 
+/* ─── Density ────────────────────────────────────────────────────────────── */
+/* Scaling the root font-size propagates through every rem value in the app.  */
+:root[data-density="compact"]     { font-size: 14px; }
+:root[data-density="comfortable"] { font-size: 18px; }
+
+/* ─── Daylight theme ─────────────────────────────────────────────────────── */
+:root[data-theme="daylight"] {
+  --fm-bg:        #faf8f4;
+  --fm-bg-raised: #f3f0e8;
+  --fm-bg-panel:  #ece9e0;
+  --fm-bg-sunk:   #fffdf8;
+
+  --fm-hairline:  #ddd9d0;
+  --fm-hairline2: #cbc7bd;
+
+  --fm-ink:      #1a1712;
+  --fm-ink-dim:  #4a443c;
+  --fm-ink-mute: #8a847c;
+
+  --fm-brass:     #8b6914;
+  --fm-brass-dim: #6b5010;
+  --fm-brass-bg:  rgba(139, 105, 20, 0.08);
+
+  --fm-red:    #c0392b;
+  --fm-amber:  #c47c0a;
+  --fm-green:  #2e7d32;
+  --fm-cyan:   #1565c0;
+  --fm-purple: #6b46c1;
+
+  --fm-radius:    4px;
+  --fm-radius-lg: 5px;
+  --fm-border:    1px solid var(--fm-hairline);
+  --fm-border-2:  1px solid var(--fm-hairline2);
+}
+
+/* ─── Obsidian theme ──────────────────────────────────────────────────────── */
+:root[data-theme="obsidian"] {
+  --fm-bg:        #000000;
+  --fm-bg-raised: #080810;
+  --fm-bg-panel:  #0c0c1a;
+  --fm-bg-sunk:   #000000;
+
+  --fm-hairline:  #14142a;
+  --fm-hairline2: #1c1c35;
+
+  --fm-ink:      #f1f5f9;
+  --fm-ink-dim:  #94a3b8;
+  --fm-ink-mute: #475569;
+
+  --fm-brass:     #818cf8;
+  --fm-brass-dim: #6366f1;
+  --fm-brass-bg:  rgba(129, 140, 248, 0.10);
+
+  --fm-red:    #f87171;
+  --fm-amber:  #fbbf24;
+  --fm-green:  #4ade80;
+  --fm-cyan:   #38bdf8;
+  --fm-purple: #a78bfa;
+
+  --fm-radius:    2px;
+  --fm-radius-lg: 3px;
+  --fm-border:    1px solid var(--fm-hairline);
+  --fm-border-2:  1px solid var(--fm-hairline2);
+}
+
 /* ──── BASE STYLES ──── */
 html,
 body {

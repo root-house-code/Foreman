@@ -693,14 +693,16 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   }
 
   function setLayer(key, val) {
-    const next = { ...layers, [key]: val };
-    setLayers(next);
-    storageSet(FP_LAYER_KEY, next);
+    setLayers(prev => {
+      const next = { ...prev, [key]: val };
+      storageSet(FP_LAYER_KEY, next);
+      return next;
+    });
     if (key === "drawings" && !val) cancelDraw();
   }
 
   function applyPreset(presetKey) {
-    const next = LAYER_PRESETS[presetKey];
+    const next = { ...LAYER_PRESETS[presetKey] };
     setLayers(next);
     storageSet(FP_LAYER_KEY, next);
     if (!next.drawings) cancelDraw();
@@ -2025,92 +2027,92 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     <rect x={Math.min(...pts.map(p => p.x)) + 6} y={Math.min(...pts.map(p => p.y)) + 10.5} width={8} height={5.5} rx={1} fill="white" />
                   </g>
                 )}
-                {isSel && (
-                  <>
-                    {/* Edge hit strips — click anywhere on an edge to insert a vertex (disabled when locked) */}
-                    {!isLocked && pts.map((p0, vi) => {
-                      const p1 = pts[(vi + 1) % pts.length];
-                      return (
-                        <line
-                          key={`eh-${vi}`}
-                          x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y}
-                          stroke="transparent"
-                          strokeWidth={12}
-                          style={{ cursor: "cell" }}
-                          onMouseDown={e => { e.stopPropagation(); handleEdgeClick(e, roomId, vi); }}
-                        />
-                      );
-                    })}
-                    {/* Vertex handles — drag to move, click to remove (disabled when locked) */}
-                    {!isLocked && pts.map((p0, vi) => (
-                      <circle
-                        key={`vh-${vi}`}
-                        cx={p0.x} cy={p0.y} r={5}
-                        fill="var(--fm-bg)"
-                        stroke="var(--fm-brass)"
-                        strokeWidth={1.5}
-                        style={{ cursor: pts.length > 3 ? "crosshair" : "grab" }}
-                        onMouseDown={e => handleVertexMouseDown(e, roomId, vi)}
-                        title={pts.length > 3 ? "Drag to move · Click to remove" : "Drag to move"}
-                      />
-                    ))}
-                    {/* Edge dimension labels */}
-                    {pts.map((p0, vi) => {
-                      const p1 = pts[(vi + 1) % pts.length];
-                      const dx = p1.x - p0.x;
-                      const dy = p1.y - p0.y;
-                      const edgeLen = Math.hypot(dx, dy);
-                      const feet = edgeLen / FP_GRID;
-                      if (feet < 1) return null;
-                      const mx = (p0.x + p1.x) / 2;
-                      const my = (p0.y + p1.y) / 2;
-                      const n1x = -dy / edgeLen;
-                      const n1y = dx / edgeLen;
-                      const dot = (cx - mx) * n1x + (cy - my) * n1y;
-                      const outNx = dot > 0 ? -n1x : n1x;
-                      const outNy = dot > 0 ? -n1y : n1y;
-                      const lx = mx + outNx * 14;
-                      const ly = my + outNy * 14;
-                      const rawAngle = Math.atan2(dy, dx) * 180 / Math.PI;
-                      const textAngle = (rawAngle > 90 || rawAngle < -90) ? rawAngle + 180 : rawAngle;
-                      const label = Number.isInteger(feet) ? `${feet} ft` : `${feet.toFixed(1)} ft`;
-                      return (
-                        <text
-                          key={`dim-${vi}`}
-                          x={lx} y={ly}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                          fill="var(--fm-brass)"
-                          fontSize={9}
-                          fontFamily="var(--fm-mono)"
-                          transform={`rotate(${textAngle}, ${lx}, ${ly})`}
-                          style={{ pointerEvents: "none" }}
-                        >
-                          {label}
-                        </text>
-                      );
-                    })}
-                  </>
-                )}
               </g>
-              {isSel && (
-                <>
-                  <LockButton
-                    x={btnX - 24} y={btnY}
-                    locked={isLocked}
-                    onToggle={() => toggleZoneLock(roomId)}
-                  />
-                  <XButton
-                    x={btnX} y={btnY}
-                    onDelete={() => removeFromCanvas(roomId)}
-                    onHoverEnter={null}
-                    onHoverLeave={null}
-                  />
-                </>
-              )}
               </Fragment>
             );
           })}
+
+          {/* Selected-zone overlay — rendered after all zone polygons so interactive
+              elements (LockButton, XButton, vertex handles) are never occluded by
+              a neighbouring zone's polygon. */}
+          {(() => {
+            if (!selected || !layers.zones) return null;
+            const zonePoly = currentPlaced[selected];
+            if (!zonePoly) return null;
+            const zoneRoom = rooms[selected];
+            if (!zoneRoom) return null;
+            const pts = zonePoly.points;
+            const { cx, cy } = polygonCentroid(pts);
+            const isLocked = !!zonePoly.locked;
+            const btnX = Math.max(...pts.map(p => p.x)) + 12;
+            const btnY = Math.min(...pts.map(p => p.y)) - 12;
+            return (
+              <g key="sel-overlay">
+                {/* Edge hit strips */}
+                {!isLocked && pts.map((p0, vi) => {
+                  const p1 = pts[(vi + 1) % pts.length];
+                  return (
+                    <line
+                      key={`eh-${vi}`}
+                      x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y}
+                      stroke="transparent"
+                      strokeWidth={12}
+                      style={{ cursor: "cell" }}
+                      onMouseDown={e => { e.stopPropagation(); handleEdgeClick(e, selected, vi); }}
+                    />
+                  );
+                })}
+                {/* Vertex handles */}
+                {!isLocked && pts.map((p0, vi) => (
+                  <circle
+                    key={`vh-${vi}`}
+                    cx={p0.x} cy={p0.y} r={5}
+                    fill="var(--fm-bg)"
+                    stroke="var(--fm-brass)"
+                    strokeWidth={1.5}
+                    style={{ cursor: pts.length > 3 ? "crosshair" : "grab" }}
+                    onMouseDown={e => handleVertexMouseDown(e, selected, vi)}
+                    title={pts.length > 3 ? "Drag to move · Click to remove" : "Drag to move"}
+                  />
+                ))}
+                {/* Edge dimension labels */}
+                {pts.map((p0, vi) => {
+                  const p1 = pts[(vi + 1) % pts.length];
+                  const dx = p1.x - p0.x, dy = p1.y - p0.y;
+                  const edgeLen = Math.hypot(dx, dy);
+                  const feet = edgeLen / FP_GRID;
+                  if (feet < 1) return null;
+                  const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+                  const n1x = -dy / edgeLen, n1y = dx / edgeLen;
+                  const dot = (cx - mx) * n1x + (cy - my) * n1y;
+                  const outNx = dot > 0 ? -n1x : n1x, outNy = dot > 0 ? -n1y : n1y;
+                  const lx = mx + outNx * 14, ly = my + outNy * 14;
+                  const rawAngle = Math.atan2(dy, dx) * 180 / Math.PI;
+                  const textAngle = (rawAngle > 90 || rawAngle < -90) ? rawAngle + 180 : rawAngle;
+                  const label = Number.isInteger(feet) ? `${feet} ft` : `${feet.toFixed(1)} ft`;
+                  return (
+                    <text key={`dim-${vi}`} x={lx} y={ly} textAnchor="middle" dominantBaseline="middle"
+                      fill="var(--fm-brass)" fontSize={9} fontFamily="var(--fm-mono)"
+                      transform={`rotate(${textAngle}, ${lx}, ${ly})`} style={{ pointerEvents: "none" }}>
+                      {label}
+                    </text>
+                  );
+                })}
+                {/* Lock + delete buttons — always on top of all zone polygons */}
+                <LockButton
+                  x={btnX - 24} y={btnY}
+                  locked={isLocked}
+                  onToggle={() => toggleZoneLock(selected)}
+                />
+                <XButton
+                  x={btnX} y={btnY}
+                  onDelete={() => removeFromCanvas(selected)}
+                  onHoverEnter={null}
+                  onHoverLeave={null}
+                />
+              </g>
+            );
+          })()}
 
           {/* Item pins */}
           {layers.pins && (fpData.pins?.[activeLevel] || []).map(pin => {

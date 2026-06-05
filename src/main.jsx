@@ -4,7 +4,7 @@ import "react-datepicker/dist/react-datepicker.css";
 import "./datepicker-theme.css";
 import "./reminders-a11y.css";
 import App from "./App.jsx";
-import { storageInit } from "../lib/storage.js";
+import { storageInit, storageGet } from "../lib/storage.js";
 import { loadFpData } from "../lib/fpData.js";
 import { loadRooms, saveRooms } from "../lib/rooms.js";
 import { loadFloors, saveFloors, sortFloors, getDefaultFloors } from "../lib/floors.js";
@@ -90,6 +90,16 @@ storageInit().then(() => {
       vals[KEY] = { ...vals[KEY], item_type: "Appliance", item_subtype: "Climate Control" };
       saveItemFieldValues(vals);
     }
+  }
+
+  // Apply saved theme + density before React renders to avoid a flash.
+  const savedTheme = storageGet("foreman-theme");
+  if (savedTheme && savedTheme !== "foreman") {
+    document.documentElement.dataset.theme = savedTheme;
+  }
+  const savedDensity = storageGet("foreman-density");
+  if (savedDensity && savedDensity !== "default") {
+    document.documentElement.dataset.density = savedDensity;
   }
 
   // Populate the store from the now-correct cache.

@@ -2000,7 +2000,7 @@ const THEMES = [
     ],
     colors: ["#f8f6f1", "#8b6914", "#1a1712", "#c0392b", "#2e7d32", "#1565c0"],
     radius: "4px",
-    available: false,
+    available: true,
   },
   {
     key: "obsidian",
@@ -2013,7 +2013,7 @@ const THEMES = [
     ],
     colors: ["#000000", "#818cf8", "#f1f5f9", "#f87171", "#4ade80", "#a78bfa"],
     radius: "2px",
-    available: false,
+    available: true,
   },
 ];
 
@@ -2135,10 +2135,26 @@ function ThemeModal({ activeTheme, onSelect, onClose }) {
 function DisplaySettings() {
   const [activeTheme, setActiveTheme] = useState(() => storageGet("foreman-theme") ?? "foreman");
   const [showThemeModal, setShowThemeModal] = useState(false);
+  const [activeDensity, setActiveDensity] = useState(() => storageGet("foreman-density") ?? "default");
+
+  function handleSelectDensity(val) {
+    setActiveDensity(val);
+    storageSet("foreman-density", val);
+    if (val === "default") {
+      delete document.documentElement.dataset.density;
+    } else {
+      document.documentElement.dataset.density = val;
+    }
+  }
 
   function handleSelectTheme(key) {
     setActiveTheme(key);
     storageSet("foreman-theme", key);
+    if (key === "foreman") {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = key;
+    }
     setShowThemeModal(false);
   }
 
@@ -2171,24 +2187,23 @@ function DisplaySettings() {
 
       {/* ── Density ── */}
       <div>
-        <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
+        <div style={{ marginBottom: "0.5rem" }}>
           <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>Density</span>
-          <span style={{ background: "var(--fm-hairline)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", padding: "0.1rem 0.4rem", textTransform: "uppercase" }}>Coming Soon</span>
         </div>
         <p style={bodyTextStyle}>Control the spacing and size of UI elements across the application.</p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", opacity: 0.4, pointerEvents: "none" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
           {[
             ["compact",     "Compact",     "Tighter spacing and smaller text for maximum information density."],
             ["default",     "Default",     "Balanced spacing for everyday use."],
             ["comfortable", "Comfortable", "Larger touch targets and more breathing room."],
           ].map(([val, label, desc]) => (
-            <label key={val} style={{ alignItems: "flex-start", cursor: "default", display: "flex", gap: "0.6rem" }}>
+            <label key={val} style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.6rem" }}>
               <input
                 type="radio"
                 name="density"
                 value={val}
-                defaultChecked={val === "default"}
-                disabled
+                checked={activeDensity === val}
+                onChange={() => handleSelectDensity(val)}
                 style={{ accentColor: "var(--fm-brass)", flexShrink: 0, marginTop: "0.15rem" }}
               />
               <div>
