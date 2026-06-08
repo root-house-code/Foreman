@@ -6486,17 +6486,28 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                     const defaultSystem = isFunctional(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData) ? selectedItem.category : "";
                     return <ModelComboField value={systemVal || defaultSystem} models={systemOptions} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "systemCategory", v, selectedItem.stableKey)} />;
                   }
-                  if (field.id === "room") {
-                    const catIsSpatialItem = isSpatial(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData);
+                  if (field.id === "location") {
+                    const catTypeId = resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system");
+                    const catIsSpatial  = isSpatial(catTypeId, entityTypeData);
+                    const catIsExterior = isExteriorTypeUtil(catTypeId, entityTypeData);
                     const roomOpts = CATEGORIES.filter(c => isSpatial(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
-                    const roomVal = 'roomLabel' in vals ? (vals.roomLabel ?? "") : (vals.room || (catIsSpatialItem ? selectedItem.category : ""));
-                    return <ModelComboField value={roomVal} models={roomOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", v || null, selectedItem.stableKey)} />;
-                  }
-                  if (field.id === "exterior") {
-                    const catIsExteriorItem = isExteriorTypeUtil(resolveTypeId(selectedItem.category, effectiveCategoryTypes[selectedItem.category] || "system"), entityTypeData);
-                    const extOpts = CATEGORIES.filter(c => isExteriorTypeUtil(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
-                    const extVal = 'exteriorLabel' in vals ? (vals.exteriorLabel ?? "") : (catIsExteriorItem ? selectedItem.category : "");
-                    return <ModelComboField value={extVal} models={extOpts} fieldStyle={fieldStyle} onChange={v => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "exteriorLabel", v || null, selectedItem.stableKey)} />;
+                    const extOpts  = CATEGORIES.filter(c => isExteriorTypeUtil(resolveTypeId(c, effectiveCategoryTypes[c] || "system"), entityTypeData)).sort();
+                    const allOpts  = [...new Set([...roomOpts, ...extOpts])].sort();
+                    const currentRoom = 'roomLabel' in vals ? (vals.roomLabel ?? "") : (catIsSpatial && !catIsExterior ? selectedItem.category : "");
+                    const currentExt  = 'exteriorLabel' in vals ? (vals.exteriorLabel ?? "") : (catIsExterior ? selectedItem.category : "");
+                    const locVal = currentRoom || currentExt;
+                    const extSet = new Set(extOpts);
+                    function handleLocationChange(v) {
+                      const isExt = extSet.has(v);
+                      if (isExt) {
+                        handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "exteriorLabel", v || null, selectedItem.stableKey);
+                        if (currentRoom) handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", null, selectedItem.stableKey);
+                      } else {
+                        handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "roomLabel", v || null, selectedItem.stableKey);
+                        if (currentExt) handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "exteriorLabel", null, selectedItem.stableKey);
+                      }
+                    }
+                    return <ModelComboField value={locVal} models={allOpts} fieldStyle={fieldStyle} onChange={handleLocationChange} />;
                   }
                   if (field.id === "manufacturer") {
                     const mfrs = getManufacturers(selectedItem.item);
@@ -6553,15 +6564,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                     </div>
                     <div style={{ marginBottom: "0.45rem" }}>
                       <div style={{ marginBottom: "0.2rem" }}>
-                        <span style={labelStyle}>Room</span>
+                        <span style={labelStyle}>Location</span>
                       </div>
-                      {renderFieldInput({ id: "room", name: "Room", type: "text" })}
-                    </div>
-                    <div style={{ marginBottom: "0.45rem" }}>
-                      <div style={{ marginBottom: "0.2rem" }}>
-                        <span style={labelStyle}>Exterior</span>
-                      </div>
-                      {renderFieldInput({ id: "exterior", name: "Exterior", type: "text" })}
+                      {renderFieldInput({ id: "location", name: "Location", type: "text" })}
                     </div>
                     {inheritedFields.length > 0 && (
                       <>

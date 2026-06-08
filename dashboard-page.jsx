@@ -1,6 +1,7 @@
 import { useState, useMemo, forwardRef } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { toMonthly } from "./lib/services.js";
+import { buildRoster, computeForecast, computeReserve, computeInvested } from "./lib/lifecycleStats.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -142,6 +143,18 @@ export default function DashboardPage({ navigate }) {
   const activeServices  = useMemo(() => Object.values(svcData.services).filter(s => s.active), [svcData]);
   const monthlyServices = useMemo(() => activeServices.reduce((sum, s) => sum + toMonthly(s.cost, s.billingCycle), 0), [activeServices]);
 
+  const itemFieldValues = useForemanStore(s => s.itemFieldValues);
+  const inventory       = useForemanStore(s => s.inventory);
+  const lifecycleStat = useMemo(() => {
+    const roster = buildRoster(itemFieldValues, inventory);
+    const reserve = computeReserve(computeForecast(roster));
+    if (reserve.annual > 0) {
+      return { value: "$" + Math.round(reserve.annual), color: "var(--fm-amber)", sub: `reserve /yr · ${reserve.count} due soon` };
+    }
+    const invested = computeInvested(roster);
+    return { value: "$" + Math.round(invested.total), color: "var(--fm-brass)", sub: `${invested.priced} items priced` };
+  }, [itemFieldValues, inventory]);
+
   // ── Mutable state ────────────────────────────────────────────────────────────
   const [nextDatesMap, setNextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
   const [completedDatesMap, setCompletedDatesMap] = useState(() => storageGet("maintenance-dates") ?? {});
@@ -149,6 +162,11 @@ export default function DashboardPage({ navigate }) {
   const [choreCompletedDates, setChoreCompletedDates] = useState(() => loadChoreCompletedDates());
   const [logItKey, setLogItKey]   = useState(null);
   const [logItDate, setLogItDate] = useState(() => new Date());
+  const [todoSort, setTodoSort] = useState({ col: "status", dir: "asc" });
+  const [projSort, setProjSort] = useState({ col: "name",   dir: "asc" });
+
+  function handleTodoSort(col) { setTodoSort(s => ({ col, dir: s.col === col && s.dir === "asc" ? "desc" : "asc" })); }
+  function handleProjSort(col) { setProjSort(s => ({ col, dir: s.col === col && s.dir === "asc" ? "desc" : "asc" })); }
 
   // ── Derived: maintenance ─────────────────────────────────────────────────────
   const activeRows = useMemo(() =>
@@ -450,6 +468,7 @@ export default function DashboardPage({ navigate }) {
               { label: "Chores",   value: upcomingChores.length,color: upcomingChores.length > 0 ? "var(--fm-amber)" : "var(--fm-ink-dim)", sub: "due this week",                                                                             nav: () => navigate("chores") },
               { label: "To Dos",   value: openTodosCount,       color: "var(--fm-ink-mute)",                                              sub: `${todoStatusCounts["in-progress"]} in progress`,                                               nav: () => navigate("board") },
               { label: "Services", value: "$" + Math.round(monthlyServices), color: "var(--fm-cyan)", sub: `${activeServices.length} active /mo`, nav: () => navigate("services") },
+              { label: "Lifecycle", value: lifecycleStat.value, color: lifecycleStat.color, sub: lifecycleStat.sub, nav: () => navigate("lifecycle") },
             ].map(s => (
               <button key={s.label} onClick={s.nav}
                 style={{ alignItems: "baseline", background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: "0.5rem", padding: 0, textAlign: "left", width: "100%" }}
@@ -538,26 +557,27 @@ export default function DashboardPage({ navigate }) {
             ) : (
               <>
                 <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", padding: "0.3rem 0 0.15rem" }}>
-                  <ColHeader label="Title"    tip="To do title"                                        style={{ flex: 1, minWidth: 0 }} />
-                  <ColHeader label="Status"   tip="Current status"                                     style={{ width: "78px" }} />
-                  <ColHeader label="Priority" tip="Priority level"                                     style={{ width: "60px" }} />
-                  <ColHeader label="Due"      tip="Target completion date"                             style={{ width: "60px", textAlign: "right" }} />
-                  <ColHeader label="Project"  tip="Linked project, if any"                            style={{ width: "70px", textAlign: "right" }} />
+                  <ColHeader label="Title"    tip="To do title"             sortKey="title"    sortState={todoSort} onSort={handleTodoSort} style={{ flex: 1, minWidth: 0 }} />
+                  <ColHeader label="Status"   tip="Current status"          sortKey="status"   sortState={todoSort} onSort={handleTodoSort} style={{ width: "78px" }} />
+                  <ColHeader label="Priority" tip="Priority level"          sortKey="priority" sortState={todoSort} onSort={handleTodoSort} style={{ width: "60px" }} />
+                  <ColHeader label="Due"      tip="Target completion date"  sortKey="due"      sortState={todoSort} onSort={handleTodoSort} style={{ width: "60px", textAlign: "right" }} />
+                  <ColHeader label="Project"  tip="Linked project, if any"  sortKey="project"  sortState={todoSort} onSort={handleTodoSort} style={{ width: "70px", textAlign: "right" }} />
                 </div>
                 <div style={{ flex: 1, overflowY: "auto" }}>
-                  {[...todos]
-                    .filter(t => !t._isOverdueChore && !t._isOverdueMaintenance)
-                    .sort((a, b) => {
-                      const statusOrder = { "in-progress": 0, "not-started": 1, done: 2 };
-                      const so = (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1);
-                      if (so !== 0) return so;
-                      const po = { urgent: 0, high: 1, medium: 2, low: 3 };
-                      return (po[a.priority] ?? 2) - (po[b.priority] ?? 2);
-                    })
-                    .map(t => {
-                      const proj = projects.find(p => p.id === t.projectId);
-                      return <TodoRow key={t.id} t={t} updateTodo={updateTodo} projectName={proj?.name ?? null} />;
-                    })}
+                  {sortedBy(
+                    todos.filter(t => !t._isOverdueChore && !t._isOverdueMaintenance),
+                    todoSort.col, todoSort.dir,
+                    {
+                      title:    t => t.title?.toLowerCase(),
+                      status:   t => STATUS_ORDER[t.status] ?? 1,
+                      priority: t => PRIORITY_ORDER[t.priority] ?? 2,
+                      due:      t => t.dueDate ? new Date(t.dueDate + "T00:00:00").getTime() : null,
+                      project:  t => projects.find(p => p.id === t.projectId)?.name?.toLowerCase() ?? null,
+                    }
+                  ).map(t => {
+                    const proj = projects.find(p => p.id === t.projectId);
+                    return <TodoRow key={t.id} t={t} updateTodo={updateTodo} projectName={proj?.name ?? null} />;
+                  })}
                 </div>
               </>
             )}
@@ -574,13 +594,22 @@ export default function DashboardPage({ navigate }) {
             ) : (
               <>
                 <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", padding: "0.3rem 0 0.15rem" }}>
-                  <ColHeader label="Name"     tip="Project name"                 style={{ flex: 1, minWidth: 0 }} />
-                  <ColHeader label="Status"   tip="Current project status"       style={{ width: "78px" }} />
-                  <ColHeader label="Priority" tip="Priority level"               style={{ width: "60px" }} />
-                  <ColHeader label="Due"      tip="Target completion date"       style={{ width: "60px", textAlign: "right" }} />
-                  <ColHeader label="Tasks"    tip="Completed tasks out of total" style={{ width: "30px", textAlign: "right" }} />
+                  <ColHeader label="Name"     tip="Project name"                 sortKey="name"     sortState={projSort} onSort={handleProjSort} style={{ flex: 1, minWidth: 0 }} />
+                  <ColHeader label="Status"   tip="Current project status"       sortKey="status"   sortState={projSort} onSort={handleProjSort} style={{ width: "78px" }} />
+                  <ColHeader label="Priority" tip="Priority level"               sortKey="priority" sortState={projSort} onSort={handleProjSort} style={{ width: "60px" }} />
+                  <ColHeader label="Due"      tip="Target completion date"       sortKey="due"      sortState={projSort} onSort={handleProjSort} style={{ width: "60px", textAlign: "right" }} />
+                  <ColHeader label="Tasks"    tip="Completed tasks out of total" sortKey="tasks"    sortState={projSort} onSort={handleProjSort} style={{ width: "30px", textAlign: "right" }} />
                 </div>
-                {projectsWithProgress.map((p, i) => (
+                {sortedBy(
+                  projectsWithProgress, projSort.col, projSort.dir,
+                  {
+                    name:     p => p.name?.toLowerCase(),
+                    status:   p => STATUS_ORDER[p.status] ?? 1,
+                    priority: p => PRIORITY_ORDER[p.priority] ?? 2,
+                    due:      p => p.dueDate ? new Date(p.dueDate + "T00:00:00").getTime() : null,
+                    tasks:    p => p.totalTasks > 0 ? p.completedTasks / p.totalTasks : 0,
+                  }
+                ).map((p, i) => (
                   <ProjectRow key={p.id ?? i} p={p} updateProject={updateProject} />
                 ))}
               </>
@@ -791,6 +820,20 @@ const STATUS_STYLE = {
   "not-started": { bg: "var(--fm-bg-raised)",   border: "var(--fm-hairline2)",   color: "var(--fm-ink-mute)" },
 };
 const STATUS_LABEL = { "not-started": "Not Started", "in-progress": "In Progress", done: "Done" };
+const STATUS_ORDER   = { "in-progress": 0, "not-started": 1, done: 2 };
+const PRIORITY_ORDER = { urgent: 0, high: 1, medium: 2, low: 3 };
+
+function sortedBy(arr, col, dir, getters) {
+  return [...arr].sort((a, b) => {
+    const va = getters[col]?.(a);
+    const vb = getters[col]?.(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    const cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+    return dir === "asc" ? cmp : -cmp;
+  });
+}
 
 function ProjectRow({ p, updateProject }) {
   const [editingDue, setEditingDue] = useState(false);
@@ -1108,18 +1151,32 @@ function TodoRow({ t, updateTodo, projectName }) {
   );
 }
 
-function ColHeader({ label, tip, style: extraStyle = {} }) {
+function ColHeader({ label, tip, style: extraStyle = {}, sortKey, sortState, onSort }) {
   const [visible, setVisible] = useState(false);
+  const isActive = sortKey && sortState?.col === sortKey;
+  const isClickable = !!(sortKey && onSort);
   return (
     <span
-      style={{ position: "relative", cursor: "default", ...extraStyle }}
+      style={{ position: "relative", cursor: isClickable ? "pointer" : "default", userSelect: "none", ...extraStyle }}
       onMouseEnter={() => setVisible(true)}
       onMouseLeave={() => setVisible(false)}
+      onClick={isClickable ? () => onSort(sortKey) : undefined}
     >
-      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px dotted var(--fm-hairline2)" }}>
+      <span style={{
+        alignItems: "center",
+        borderBottom: `1px ${isClickable ? "solid" : "dotted"} ${isActive ? "var(--fm-brass)" : "var(--fm-hairline2)"}`,
+        color: isActive ? "var(--fm-brass)" : "var(--fm-ink-mute)",
+        display: "inline-flex",
+        fontFamily: "var(--fm-mono)",
+        fontSize: "0.55rem",
+        gap: "0.2rem",
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+      }}>
         {label}
+        {isActive && <span style={{ fontSize: "0.45rem", lineHeight: 1 }}>{sortState.dir === "asc" ? "▲" : "▼"}</span>}
       </span>
-      {visible && (
+      {visible && tip && (
         <span style={{
           background: "var(--fm-bg-raised)",
           border: "1px solid var(--fm-hairline2)",
@@ -1146,6 +1203,25 @@ function ColHeader({ label, tip, style: extraStyle = {} }) {
 }
 
 function ArchSection({ title, cats, catHealthMap, catNextDueMap, emptyMsg }) {
+  const [sortCol, setSortCol] = useState("name");
+  const [sortDir, setSortDir] = useState("asc");
+
+  function handleSort(col) {
+    if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
+  }
+
+  const sortState = { col: sortCol, dir: sortDir };
+
+  const sortedCats = useMemo(() => {
+    const getters = {
+      name:    cat => cat.toLowerCase(),
+      score:   cat => catHealthMap[cat] ?? 100,
+      nextDue: cat => catNextDueMap[cat] ? catNextDueMap[cat].getTime() : null,
+    };
+    return sortedBy(cats, sortCol, sortDir, getters);
+  }, [cats, sortCol, sortDir, catHealthMap, catNextDueMap]);
+
   return (
     <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", display: "flex", flexDirection: "column", minHeight: 0, padding: "1.25rem 1.5rem" }}>
       <div style={{ borderBottom: "1px solid var(--fm-hairline)", flexShrink: 0, marginBottom: "0.25rem", paddingBottom: "0.5rem" }}>
@@ -1153,16 +1229,16 @@ function ArchSection({ title, cats, catHealthMap, catNextDueMap, emptyMsg }) {
       </div>
       {cats.length > 0 && (
         <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", padding: "0.3rem 0 0.15rem" }}>
-          <ColHeader label="Name"     tip="Category name"                                                         style={{ flex: "0 0 120px" }} />
-          <ColHeader label="Health"   tip="Maintenance health — drops as tasks go overdue"                        style={{ flex: 1 }} />
-          <ColHeader label="Score"    tip="0–100 score; loses points per overdue task, weighted by how late"      style={{ flex: "0 0 32px", textAlign: "right" }} />
-          <ColHeader label="Next Due" tip="Earliest upcoming task due date across all items in this category"     style={{ flex: "0 0 52px", textAlign: "right" }} />
+          <ColHeader label="Name"     tip="Category name"                                                         sortKey="name"    sortState={sortState} onSort={handleSort} style={{ flex: "0 0 120px" }} />
+          <ColHeader label="Health"   tip="Maintenance health — drops as tasks go overdue"                        sortKey="score"   sortState={sortState} onSort={handleSort} style={{ flex: 1 }} />
+          <ColHeader label="Score"    tip="0–100 score; loses points per overdue task, weighted by how late"      sortKey="score"   sortState={sortState} onSort={handleSort} style={{ flex: "0 0 32px", textAlign: "right" }} />
+          <ColHeader label="Next Due" tip="Earliest upcoming task due date across all items in this category"     sortKey="nextDue" sortState={sortState} onSort={handleSort} style={{ flex: "0 0 52px", textAlign: "right" }} />
         </div>
       )}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {cats.length === 0 ? (
           <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.5rem 0" }}>{emptyMsg}</div>
-        ) : cats.map(cat => {
+        ) : sortedCats.map(cat => {
           const score = catHealthMap[cat] ?? 100;
           const nextDue = catNextDueMap[cat];
           return (

@@ -131,6 +131,7 @@ const PAGES = [
   ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set frequency, and mark them done as you go. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
+  ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and normalizes recurring service spend into an annual figure. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
   ["Notebook", "A knowledge base for your home. Articles and notes organized by system: a place to document how something works, what product you used, lessons from a past repair, or reference material for a future project."],
   ["Preferences", "Configure the structure of your home: floors, rooms, entity types, and application settings. The definitions here shape how data is organized across all other pages."],
 ];
@@ -310,6 +311,10 @@ function ArchTab() {
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-services</span> as a single object with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>services</span> (id → Service) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>visits</span> (id → ServiceVisit). A Service carries provider name, phone, category (from a fixed 15-item taxonomy with an "Other" escape hatch), cost, billing cycle, renewal date, and auto-renews flag. A ServiceVisit is a child record of a Service and records the date, technician, notes, and an optional cost override. Monthly cost is normalized from the billing cycle — annual cost divided by 12, quarterly by 3, one-time excluded — and surfaced on the Dashboard and in the Services stats bar.</p>
           </div>
           <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Expenses</div>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-expenses</span> as a flat map keyed by id. Each expense records a date, amount, free-text description, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedItem</span> (an inventory stable key). The Lifecycle page reads these to compute a trailing-12-month repair total and, when linked, attributes the cost to an item's system or room.</p>
+          </div>
+          <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Entity types</div>
             <p style={bodyText}>Power the categorization system. Built-in types (room, exterior, system, HVAC, plumbing, electrical, safety, structure) each belong to a behavioral class: spatial (location-based, like rooms) or functional (system-based, like HVAC). This distinction controls how categories are grouped and filtered across all pages. Users can create custom types that extend the built-in hierarchy.</p>
           </div>
@@ -368,9 +373,15 @@ function ArchTab() {
 // ─── Development Roadmap tab ───────────────────────────────────────────────────
 
 const ROADMAP_SECTIONS = [
-  { id: "road-mobile",  label: "Mobile App" },
-  { id: "road-ha",      label: "Home Assistant" },
-  { id: "road-advisor", label: "AI Advisor" },
+  { id: "road-mobile",   label: "Mobile App" },
+  { id: "road-ha",       label: "Home Assistant" },
+  { id: "road-gcal",     label: "Google Calendar" },
+  { id: "road-notebook",  label: "Notebook Overhaul" },
+  { id: "road-vault",     label: "Document Vault" },
+  { id: "road-handoff",   label: "Handoff Export" },
+  { id: "road-utilities", label: "Utilities Tracker" },
+  { id: "road-furniture", label: "Furniture Planning" },
+  { id: "road-advisor",   label: "AI Advisor" },
 ];
 
 function RoadmapTab() {
@@ -413,6 +424,71 @@ function RoadmapTab() {
         </p>
       </ArchSection>
 
+      <ArchSection id="road-gcal" label="Google Calendar" heading="Google Calendar Integration" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          A Google Calendar integration is planned so that your maintenance schedule, chore due dates, and project deadlines appear alongside your existing calendar events — without requiring you to copy anything manually.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          The integration is designed in two stages. The first is a .ics export: a standards-based calendar feed any application can subscribe to — Google Calendar, Apple Calendar, Outlook, and others. Subscribe once and your calendar stays current as due dates shift. The second stage is a direct Google Calendar push via OAuth, giving Foreman a dedicated calendar in your account that it updates as tasks are logged or rescheduled.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          Events will carry enough context to be actionable: the category, item name, and task description, not just a bare "Maintenance Due" notification. The goal is that Foreman fits inside the tools your household already checks, rather than becoming another app to remember to open.
+        </p>
+      </ArchSection>
+
+      <ArchSection id="road-notebook" label="Notebook Overhaul" heading="Notebook Overhaul: improved article organization, updatable item details" sectionRefs={sectionRefs}>
+      </ArchSection>
+
+      <ArchSection id="road-vault" label="Documents" heading="Document Vault" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman already attaches receipts to inventory items and parses equipment manuals locally, but documents are scattered across individual items with no central place to store, search, or retrieve them. The Document Vault is a single repository for every piece of paper a home generates — kept local, like everything else in Foreman.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["One repository", "Receipts, warranties, permits, insurance policies, contractor contracts, inspection reports, appliance manuals, and material spec sheets — all in one searchable place instead of a drawer and three email accounts."],
+            ["Linked, not siloed", "Every document attaches to an inventory item, project, service, or maintenance task. The contract for a roof replacement sits with both the Roof item and the project that installed it, reachable from either."],
+            ["Expiry tracking", "Documents with a date — warranties, permits, insurance renewals — surface as Dashboard alerts and Calendar chips before they lapse, so the claim gets filed while it still counts."],
+            ["Local-first and searchable", "Files are stored in IndexedDB alongside the rest of your data; nothing is uploaded. PDF text is extracted locally (via the existing PDF.js pipeline) to power full-text search across the whole vault."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-handoff" label="Export" heading="Handoff Export" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          A home's complete record is most valuable at the moment of transfer — selling the house, onboarding a new owner, filing an insurance claim, or handing a property manager the keys. The Handoff Export compiles everything Foreman knows into a single portable dossier, honoring the tenet that the registry should outlast the renovation.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Complete dossier", "Inventory with specs and install dates, full maintenance history, service contracts and visit logs, warranty status, cost-of-ownership summary, attached documents, and the floor plan — assembled into one record."],
+            ["Two formats", "A polished PDF report for a person (buyer, agent, insurer) and a structured JSON export for importing into another Foreman instance, so a new owner inherits the live registry rather than a static printout."],
+            ["Scoped and redactable", "Choose what leaves the device. A buyer gets maintenance history and specs; an insurer gets one item's purchase price, warranty, and receipts; a contractor gets the relevant system. You decide the scope per export."],
+            ["Inherited knowledge", "The new owner imports the dossier and starts with decades of structured home knowledge already in place, instead of guessing when the water heater was installed."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-utilities" label="Utilities" heading="Utilities Tracker" sectionRefs={sectionRefs}>
+      </ArchSection>
+
+      <ArchSection id="road-furniture" label="Furniture" heading="Furniture Planning" sectionRefs={sectionRefs}>
+      </ArchSection>
+
       <ArchSection id="road-advisor" label="AI" heading="AI-Powered Home Advisor" sectionRefs={sectionRefs}>
         <p style={bodyText}>
           A conversational AI advisor is planned as a dedicated page in Foreman, trained on trade knowledge across the major disciplines of residential construction and systems: HVAC, plumbing, electrical, roofing, structural, insulation, and finish work. The advisor is current on applicable building codes and standard maintenance intervals.
@@ -431,6 +507,18 @@ function RoadmapTab() {
 // ─── Updates tab ──────────────────────────────────────────────────────────────
 
 const UPDATES = [
+  {
+    date: "June 7, 2026",
+    heading: "Lifecycle: Cost of Ownership & Replacement Forecast",
+    bullets: [
+      ["Cost of Ownership", "A new page that rolls up recorded purchase prices by system and room, and normalizes recurring service spend into monthly and annual cost-of-ownership figures. Built entirely from data you'd already entered — no new fields required."],
+      ["Replacement Forecast", "Ages each item against a curated expected-lifespan table (~90 item types), showing life remaining as a color-coded bar sorted soonest-first, with an estimated replacement cost per item."],
+      ["Replacement reserve", "Projects a suggested annual set-aside by spreading the cost of every item within ~5 years of end-of-life across its remaining runway — turning surprise replacements into a planned budget line."],
+      ["Warranty alerts", "Surfaces warranties expiring within 90 days (or recently lapsed) so claims get filed while they still count."],
+      ["Expense log", "Log one-off repair and part costs and optionally link each to an inventory item; a trailing-12-month repairs total rolls up on the Cost of Ownership tab."],
+      ["Surfaced everywhere", "The Dashboard At a Glance gains a Lifecycle stat (annual replacement reserve, or total invested before any forecast exists), and warranty-expiry dates now appear as amber chips across the Calendar's month, week, and agenda views."],
+    ],
+  },
   {
     date: "June 7, 2026",
     heading: "Offline / Online Mode",
@@ -462,14 +550,16 @@ function UpdatesTab() {
             <h2 style={sectionHeading}>{heading}</h2>
             <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", flexShrink: 0 }}>{date}</span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
-            {bullets.map(([name, desc]) => (
-              <div key={name}>
-                <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
-                <span style={{ ...bodyText, display: "inline" }}> — {desc}</span>
-              </div>
-            ))}
-          </div>
+          {bullets.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
+              {bullets.map(([name, desc]) => (
+                <div key={name}>
+                  <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
+                  <span style={{ ...bodyText, display: "inline" }}> — {desc}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>

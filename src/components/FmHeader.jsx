@@ -28,6 +28,7 @@ const FOREMAN_PAGES = [
   { key: 'Chores' },
   { key: 'To Dos' },
   { key: 'Projects' },
+  { key: 'Lifecycle' },
   { key: 'Notebook' },
   { key: 'Preferences' },
 ];

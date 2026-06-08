@@ -12,6 +12,7 @@ import {
   computeNextOccurrenceFromStart, computeChoreNextDate,
 } from "./lib/chores.js";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides } from "./lib/data.js";
+import { buildRoster } from "./lib/lifecycleStats.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { getScheduleColor } from "./lib/scheduleColor.js";
@@ -181,7 +182,7 @@ function checkMaintenanceCompleted(key, projectedDate, schedule, maintenanceDate
   return last > prevDue && last <= new Date(projectedDate.getTime() + 86400000);
 }
 
-function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData) {
+function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData, warrantyItems) {
   const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
   const events = [];
   for (const chore of chores) {
@@ -224,6 +225,13 @@ function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, 
       const rd = new Date(svc.renewalDate + "T00:00:00");
       if (rd.getFullYear() === y && rd.getMonth() === m && rd.getDate() === d)
         events.push({ type: "renewal", service: svc, date: rd, isCompleted: false });
+    }
+  }
+  if (warrantyItems) {
+    for (const it of warrantyItems) {
+      const wd = new Date(it.warrantyIso + "T00:00:00");
+      if (wd.getFullYear() === y && wd.getMonth() === m && wd.getDate() === d)
+        events.push({ type: "warranty", item: it.item, category: it.category, date: wd, isCompleted: false });
     }
   }
   return events;
@@ -339,6 +347,12 @@ export default function CalendarPage({ navigate }) {
 
   const chores  = useForemanStore(s => s.chores);
   const svcData = useForemanStore(s => s.services ?? { services: {}, visits: {} });
+  const itemFieldValues = useForemanStore(s => s.itemFieldValues);
+  const inventory       = useForemanStore(s => s.inventory);
+  const warrantyItems = useMemo(
+    () => buildRoster(itemFieldValues, inventory).filter(it => it.warrantyIso),
+    [itemFieldValues, inventory]
+  );
   const [maintenanceRows]       = useState(() => {
     const deletedCats   = loadDeletedCategories();
     const deletedItems  = loadDeletedItems();
@@ -449,9 +463,16 @@ export default function CalendarPage({ navigate }) {
         push(d.getDate(), { type: "renewal", service: svc, date: d, isCompleted: false });
       }
     }
+    // Warranty expiries for inventory items
+    for (const it of warrantyItems) {
+      const d = new Date(it.warrantyIso + "T00:00:00");
+      if (d.getFullYear() === view.y && d.getMonth() === view.m) {
+        push(d.getDate(), { type: "warranty", item: it.item, category: it.category, date: d, isCompleted: false });
+      }
+    }
 
     return map;
-  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, view, activeFilter, svcData]);
+  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, view, activeFilter, svcData, warrantyItems]);
 
   // Maintenance tasks that have no start date yet (need scheduling)
   const unscheduledMaintenance = useMemo(() =>
@@ -479,11 +500,11 @@ export default function CalendarPage({ navigate }) {
     const result = [];
     for (let i = 0; i < 90; i++) {
       const d = new Date(today); d.setDate(today.getDate() + i);
-      const evts = getEventsForDate(d, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData);
+      const evts = getEventsForDate(d, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData, warrantyItems);
       if (evts.length > 0) result.push({ date: d, events: evts });
     }
     return result;
-  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData]);
+  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData, warrantyItems]);
 
   // Year view: per-month event-day sets for the viewed year
   const yearEventMap = useMemo(() => {
@@ -493,13 +514,13 @@ export default function CalendarPage({ navigate }) {
       const days = new Set();
       for (let d = 1; d <= daysInM; d++) {
         const dt = new Date(view.y, m, d);
-        const evts = getEventsForDate(dt, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, "All", svcData);
+        const evts = getEventsForDate(dt, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, "All", svcData, warrantyItems);
         if (evts.length > 0) days.add(d);
       }
       map[m] = days;
     }
     return map;
-  }, [view.y, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, svcData]);
+  }, [view.y, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, svcData, warrantyItems]);
 
   function handleCellClick(day) {
     const date = new Date(view.y, view.m, day);
@@ -676,6 +697,9 @@ export default function CalendarPage({ navigate }) {
                       if (evt.type === "renewal") {
                         return <div key={idx} style={{ borderLeft: "3px solid var(--fm-brass)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-brass)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name}</span></div>;
                       }
+                      if (evt.type === "warranty") {
+                        return <div key={idx} style={{ borderLeft: "3px solid var(--fm-amber)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-amber)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>⚠ {evt.item}</span></div>;
+                      }
                       const isMaint = evt.type === "maintenance";
                       const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? evt.row.item : evt.chore.title;
@@ -720,6 +744,15 @@ export default function CalendarPage({ navigate }) {
                               <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-serif)", fontSize: "0.88rem", minWidth: "20px", textAlign: "right" }}>{day}</span>
                               <span style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>SVC</span>
                               <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name} renewal</span>
+                            </div>
+                          );
+                        }
+                        if (evt.type === "warranty") {
+                          return (
+                            <div key={`${day}-${idx}`} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.32rem 0" }}>
+                              <span style={{ color: "var(--fm-amber)", flexShrink: 0, fontFamily: "var(--fm-serif)", fontSize: "0.88rem", minWidth: "20px", textAlign: "right" }}>{day}</span>
+                              <span style={{ background: "var(--fm-amber-bg, rgba(224,178,102,0.12))", border: "1px solid var(--fm-amber)", borderRadius: "var(--fm-radius)", color: "var(--fm-amber)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>WTY</span>
+                              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>⚠ {evt.item} warranty ends</span>
                             </div>
                           );
                         }
@@ -798,6 +831,13 @@ export default function CalendarPage({ navigate }) {
                           </div>
                         );
                       }
+                      if (evt.type === "warranty") {
+                        return (
+                          <div key={idx} style={{ borderLeft: "3px solid var(--fm-amber)", borderRadius: "0 2px 2px 0", marginBottom: "2px", overflow: "hidden", padding: "2px 4px" }}>
+                            <span style={{ color: "var(--fm-amber)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>⚠ {evt.item}</span>
+                          </div>
+                        );
+                      }
                       const isMaint = evt.type === "maintenance";
                       const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? evt.row.item : evt.chore.title;
@@ -845,6 +885,15 @@ export default function CalendarPage({ navigate }) {
                             <span style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>SVC</span>
                             <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem" }}>↻ {evt.service.name} renewal</span>
                             <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{evt.service.providerName || ""}</span>
+                          </div>
+                        );
+                      }
+                      if (evt.type === "warranty") {
+                        return (
+                          <div key={idx} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", padding: "0.35rem 0.3rem" }}>
+                            <span style={{ background: "var(--fm-amber-bg, rgba(224,178,102,0.12))", border: "1px solid var(--fm-amber)", borderRadius: "var(--fm-radius)", color: "var(--fm-amber)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>WTY</span>
+                            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem" }}>⚠ {evt.item} warranty ends</span>
+                            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{evt.category}</span>
                           </div>
                         );
                       }
