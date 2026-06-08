@@ -1,10 +1,11 @@
 import { useState, useMemo, forwardRef } from "react";
 import { useForemanStore } from "./lib/store.js";
+import { toMonthly } from "./lib/services.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import FmHeader from "./src/components/FmHeader.jsx";
-import { loadTodos } from "./lib/todos.js";
+import { loadTodos, saveTodos } from "./lib/todos.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
@@ -14,7 +15,7 @@ import {
   saveChoreNextDates, saveChoreCompletedDates,
 } from "./lib/chores.js";
 import { computeNextDate } from "./lib/scheduleInterval.js";
-import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
+import { loadCategoryTypeOverrides, BUILT_IN_CATEGORY_TYPES } from "./lib/categoryTypes.js";
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -132,8 +133,14 @@ export default function DashboardPage({ navigate }) {
   const deletedCategories = useMemo(() => loadDeletedCategories(), []);
   const deletedItems      = useMemo(() => loadDeletedItems(), []);
   const chores   = useForemanStore(s => s.chores);
-  const todos    = useMemo(() => loadTodos(), []);
-  const projects = useForemanStore(s => s.projects);
+  const [todos, setTodos] = useState(() => loadTodos());
+  function persistTodos(next) { setTodos(next); saveTodos(next); }
+  function updateTodo(id, patch) { persistTodos(todos.map(t => t.id === id ? { ...t, ...patch } : t)); }
+  const projects       = useForemanStore(s => s.projects);
+  const updateProject  = useForemanStore(s => s.updateProject);
+  const svcData  = useForemanStore(s => s.services ?? { services: {}, visits: {} });
+  const activeServices  = useMemo(() => Object.values(svcData.services).filter(s => s.active), [svcData]);
+  const monthlyServices = useMemo(() => activeServices.reduce((sum, s) => sum + toMonthly(s.cost, s.billingCycle), 0), [activeServices]);
 
   // ── Mutable state ────────────────────────────────────────────────────────────
   const [nextDatesMap, setNextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
@@ -263,7 +270,17 @@ export default function DashboardPage({ navigate }) {
     const catInfoMap = {};
     activeRows.forEach(row => {
       if (!row.category) return;
-      if (!catInfoMap[row.category]) catInfoMap[row.category] = { type: row.categoryType || "system" };
+      if (!catInfoMap[row.category]) {
+        const type = row.categoryType || BUILT_IN_CATEGORY_TYPES[row.category] || "system";
+        catInfoMap[row.category] = { type };
+      }
+    });
+    // Include rooms that exist only as chore locations (no maintenance rows)
+    chores.forEach(c => {
+      if (!c.room || c.room === "Whole House") return;
+      if (!catInfoMap[c.room]) {
+        catInfoMap[c.room] = { type: "room" };
+      }
     });
     const systems = [], rooms = [];
     Object.entries(catInfoMap).forEach(([cat, info]) => {
@@ -272,12 +289,13 @@ export default function DashboardPage({ navigate }) {
       else systems.push(cat);
     });
     return { systems: systems.sort(), rooms: rooms.sort() };
-  }, [activeRows]);
+  }, [activeRows, chores]);
 
   const catHealthMap = useMemo(() => {
     const map = {};
     [...categoryGroups.systems, ...categoryGroups.rooms].forEach(cat => {
       let penalty = 0;
+      // Overdue maintenance rows in this category
       activeRows.filter(r => r.category === cat).forEach(row => {
         const d = nextDatesMap[keyOf(row)];
         if (!d) return;
@@ -286,10 +304,17 @@ export default function DashboardPage({ navigate }) {
         const weeksOver = Math.max(0, (today - dt) / (7 * 86400000));
         penalty += 8 * (1 + Math.log1p(weeksOver));
       });
+      // Overdue chores assigned to this room
+      chores.filter(c => c.room === cat).forEach(c => {
+        const dt = choreNextDate(c);
+        if (!dt || dt >= today) return;
+        const weeksOver = Math.max(0, (today - dt) / (7 * 86400000));
+        penalty += 4 * (1 + Math.log1p(weeksOver));
+      });
       map[cat] = Math.max(0, Math.min(100, Math.round(100 - penalty)));
     });
     return map;
-  }, [categoryGroups, activeRows, nextDatesMap, today]);
+  }, [categoryGroups, activeRows, nextDatesMap, chores, choreNextDates, today]);
 
   const catNextDueMap = useMemo(() => {
     const map = {};
@@ -299,8 +324,15 @@ export default function DashboardPage({ navigate }) {
       const dt = new Date(d);
       if (!map[row.category] || dt < map[row.category]) map[row.category] = dt;
     });
+    // Include chore next dates for rooms that may have no maintenance rows
+    chores.forEach(c => {
+      if (!c.room || c.room === "Whole House") return;
+      const dt = choreNextDate(c);
+      if (!dt) return;
+      if (!map[c.room] || dt < map[c.room]) map[c.room] = dt;
+    });
     return map;
-  }, [activeRows, nextDatesMap]);
+  }, [activeRows, nextDatesMap, chores, choreNextDates]);
 
   // ── Triage: overdue + due this week ─────────────────────────────────────────
   const triageItems = useMemo(() => {
@@ -403,7 +435,7 @@ export default function DashboardPage({ navigate }) {
       <div style={{ flex: 1, overflowY: "auto", padding: "var(--fm-spacing-5xl)" }}>
 
         {/* Top row: health dial · stat summary · triage · systems · rooms */}
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "180px 180px 1.6fr 1fr 1fr", marginBottom: "1rem" }}>
+        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "180px 180px 1.2fr 1fr 1fr", marginBottom: "1rem" }}>
 
           <CircleHealthDial score={healthScore} />
 
@@ -417,6 +449,7 @@ export default function DashboardPage({ navigate }) {
               { label: "Upcoming", value: upcomingItems.length, color: "var(--fm-amber)",                                                 sub: "maint / 30 days",                                                                              nav: () => navigate("maintenance") },
               { label: "Chores",   value: upcomingChores.length,color: upcomingChores.length > 0 ? "var(--fm-amber)" : "var(--fm-ink-dim)", sub: "due this week",                                                                             nav: () => navigate("chores") },
               { label: "To Dos",   value: openTodosCount,       color: "var(--fm-ink-mute)",                                              sub: `${todoStatusCounts["in-progress"]} in progress`,                                               nav: () => navigate("board") },
+              { label: "Services", value: "$" + Math.round(monthlyServices), color: "var(--fm-cyan)", sub: `${activeServices.length} active /mo`, nav: () => navigate("services") },
             ].map(s => (
               <button key={s.label} onClick={s.nav}
                 style={{ alignItems: "baseline", background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: "0.5rem", padding: 0, textAlign: "left", width: "100%" }}
@@ -433,8 +466,11 @@ export default function DashboardPage({ navigate }) {
           {/* Triage queue */}
           <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: 0 }}>
             <div style={{ ...sectionHeader, flexShrink: 0 }}>
-              <span style={sectionTitle}>Triage · Overdue + Due This Week</span>
-              <button style={navLink} onClick={() => navigate("maintenance")}>&rarr; Maintenance</button>
+              <span style={sectionTitle}>Triage</span>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button style={navLink} onClick={() => navigate("chores")}>&rarr; Chores</button>
+                <button style={navLink} onClick={() => navigate("maintenance")}>&rarr; Maintenance</button>
+              </div>
             </div>
             <div style={{ flex: 1, overflowY: "auto" }}>
               {triageItems.length === 0 ? (
@@ -489,32 +525,75 @@ export default function DashboardPage({ navigate }) {
 
         </div>
 
-        {/* Coverage alerts */}
-        {(zeroTaskItemCount > 0 || unscheduledTaskCount > 0) && (
-          <div style={{ ...card, display: "flex", gap: "2rem", marginBottom: "1rem" }}>
-            <div style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", paddingTop: "0.1rem", textTransform: "uppercase" }}>Coverage</div>
-            <div style={{ display: "flex", flex: 1, gap: "1.5rem" }}>
-              {zeroTaskItemCount > 0 && (
-                <button onClick={() => navigate("inventory", { expandAll: true })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
-                  <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "1.4rem", fontWeight: 300 }}>{zeroTaskItemCount}</span>
-                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.4rem" }}>items with no tasks</span>
-                </button>
-              )}
-              {unscheduledTaskCount > 0 && (
-                <button onClick={() => navigate("inventory", { expandAll: true })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
-                  <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "1.4rem", fontWeight: 300 }}>{unscheduledTaskCount}</span>
-                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.4rem" }}>tasks not scheduled</span>
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* To Dos + Projects */}
+        {/* To Dos columnar + Projects */}
         <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1rem" }}>
-          <div style={card}>
+          {/* To Dos columnar panel */}
+          <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: 0 }}>
             <div style={sectionHeader}>
               <span style={sectionTitle}>To Dos</span>
+              <button style={navLink} onClick={() => navigate("board")}>&rarr; To Dos</button>
+            </div>
+            {todos.length === 0 ? (
+              <div style={emptyText}>No to dos yet</div>
+            ) : (
+              <>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", padding: "0.3rem 0 0.15rem" }}>
+                  <ColHeader label="Title"    tip="To do title"                                        style={{ flex: 1, minWidth: 0 }} />
+                  <ColHeader label="Status"   tip="Current status"                                     style={{ width: "78px" }} />
+                  <ColHeader label="Priority" tip="Priority level"                                     style={{ width: "60px" }} />
+                  <ColHeader label="Due"      tip="Target completion date"                             style={{ width: "60px", textAlign: "right" }} />
+                  <ColHeader label="Project"  tip="Linked project, if any"                            style={{ width: "70px", textAlign: "right" }} />
+                </div>
+                <div style={{ flex: 1, overflowY: "auto" }}>
+                  {[...todos]
+                    .filter(t => !t._isOverdueChore && !t._isOverdueMaintenance)
+                    .sort((a, b) => {
+                      const statusOrder = { "in-progress": 0, "not-started": 1, done: 2 };
+                      const so = (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1);
+                      if (so !== 0) return so;
+                      const po = { urgent: 0, high: 1, medium: 2, low: 3 };
+                      return (po[a.priority] ?? 2) - (po[b.priority] ?? 2);
+                    })
+                    .map(t => {
+                      const proj = projects.find(p => p.id === t.projectId);
+                      return <TodoRow key={t.id} t={t} updateTodo={updateTodo} projectName={proj?.name ?? null} />;
+                    })}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Projects columnar panel */}
+          <div style={card}>
+            <div style={sectionHeader}>
+              <span style={sectionTitle}>Projects</span>
+              <button style={navLink} onClick={() => navigate("projects")}>&rarr; Projects</button>
+            </div>
+            {projectsWithProgress.length === 0 ? (
+              <div style={emptyText}>No projects yet</div>
+            ) : (
+              <>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", padding: "0.3rem 0 0.15rem" }}>
+                  <ColHeader label="Name"     tip="Project name"                 style={{ flex: 1, minWidth: 0 }} />
+                  <ColHeader label="Status"   tip="Current project status"       style={{ width: "78px" }} />
+                  <ColHeader label="Priority" tip="Priority level"               style={{ width: "60px" }} />
+                  <ColHeader label="Due"      tip="Target completion date"       style={{ width: "60px", textAlign: "right" }} />
+                  <ColHeader label="Tasks"    tip="Completed tasks out of total" style={{ width: "30px", textAlign: "right" }} />
+                </div>
+                {projectsWithProgress.map((p, i) => (
+                  <ProjectRow key={p.id ?? i} p={p} updateProject={updateProject} />
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* To Dos summary + Coverage — below */}
+        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1rem" }}>
+          {/* Original To Dos summary */}
+          <div style={card}>
+            <div style={sectionHeader}>
+              <span style={sectionTitle}>To Do Summary</span>
               <button style={navLink} onClick={() => navigate("board")}>&rarr; To Dos</button>
             </div>
             <div style={{ display: "flex", gap: "1.5rem", marginBottom: "0.75rem" }}>
@@ -534,56 +613,58 @@ export default function DashboardPage({ navigate }) {
             ) : (
               <>
                 <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", marginBottom: "0.4rem", textTransform: "uppercase" }}>High Priority Open</div>
-                {highPriorityTodos.slice(0, 6).map((t, i) => (
+                {highPriorityTodos.slice(0, 5).map((t, i) => (
                   <div key={i} style={rowStyle}>
                     <span style={{ color: PRIORITY_COLORS[t.priority], minWidth: "50px" }}>{t.priority}</span>
                     <span style={{ fontFamily: "var(--fm-sans)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
                   </div>
                 ))}
-                {highPriorityTodos.length > 6 && <div style={{ ...emptyText, marginTop: "0.25rem" }}>+{highPriorityTodos.length - 6} more</div>}
+                {highPriorityTodos.length > 5 && <div style={{ ...emptyText, marginTop: "0.25rem" }}>+{highPriorityTodos.length - 5} more</div>}
               </>
             )}
           </div>
 
+          {/* Coverage */}
           <div style={card}>
             <div style={sectionHeader}>
-              <span style={sectionTitle}>Projects</span>
-              <button style={navLink} onClick={() => navigate("projects")}>&rarr; Projects</button>
+              <span style={sectionTitle}>Coverage</span>
+              <button style={navLink} onClick={() => navigate("inventory", { expandAll: true })}>&rarr; Inventory</button>
             </div>
-            {projectsWithProgress.length === 0 ? (
-              <div style={emptyText}>No projects yet</div>
-            ) : projectsWithProgress.map((p, i) => {
-              const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-              return (
-                <div key={i} style={{ marginBottom: "0.85rem" }}>
-                  <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.3rem" }}>
-                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-                    <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.5rem" }}>{p.done}/{p.total}</span>
-                  </div>
-                  <div style={{ background: "var(--fm-hairline)", borderRadius: "2px", height: "3px", width: "100%" }}>
-                    <div style={{ background: pct === 100 ? "var(--fm-green)" : "var(--fm-brass)", borderRadius: "2px", height: "100%", transition: "width 0.3s", width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
+            {zeroTaskItemCount === 0 && unscheduledTaskCount === 0 ? (
+              <div style={emptyText}>All items have tasks and schedules</div>
+            ) : (
+              <div style={{ display: "flex", gap: "1.5rem" }}>
+                {zeroTaskItemCount > 0 && (
+                  <button onClick={() => navigate("inventory", { expandAll: true })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
+                    <span style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "1.4rem", fontWeight: 300 }}>{zeroTaskItemCount}</span>
+                    <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.4rem" }}>items with no tasks</span>
+                  </button>
+                )}
+                {unscheduledTaskCount > 0 && (
+                  <button onClick={() => navigate("inventory", { expandAll: true })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
+                    <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "1.4rem", fontWeight: 300 }}>{unscheduledTaskCount}</span>
+                    <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.4rem" }}>tasks not scheduled</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Schedule timeline stub */}
-        <div style={{ ...card, marginBottom: "1rem", overflow: "hidden", position: "relative" }}>
-          <div style={{ alignItems: "center", backdropFilter: "blur(3px)", background: "rgba(14,16,20,0.65)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "absolute", right: 0, top: 0, zIndex: 2 }}>
-            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>Coming soon</span>
-          </div>
+        {/* Schedule timeline */}
+        <div style={{ ...card, marginBottom: "1rem" }}>
           <div style={sectionHeader}>
             <span style={sectionTitle}>Schedule · T−30 to T+90</span>
           </div>
-          <div style={{ alignItems: "center", display: "flex", height: "40px", justifyContent: "space-between", padding: "0 0.25rem", position: "relative" }}>
-            <div style={{ background: "var(--fm-hairline)", height: "1px", left: 0, position: "absolute", right: 0, top: "50%" }} />
-            {[...Array(9)].map((_, i) => (
-              <div key={i} style={{ background: i < 2 ? "var(--fm-red)" : i < 4 ? "var(--fm-amber)" : "var(--fm-brass)", borderRadius: "50%", height: "7px", position: "relative", width: "7px", zIndex: 1 }} />
-            ))}
-          </div>
-          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", marginTop: "0.25rem", textAlign: "center" }}>T−30d · · · today · · · T+90d</div>
+          <ScheduleTimeline
+            activeRows={activeRows}
+            nextDatesMap={nextDatesMap}
+            chores={chores}
+            choreNextDate={choreNextDate}
+            todos={todos}
+            projects={projects}
+            today={today}
+          />
         </div>
 
         {/* Completion chart */}
@@ -703,12 +784,381 @@ function HealthBar({ score }) {
   );
 }
 
+const PRIORITY_COLOR = { low: "#7fb087", medium: "#c9a96e", high: "#e0b266", urgent: "#e07b6a" };
+const STATUS_STYLE = {
+  done:          { bg: "rgba(127,176,135,0.1)", border: "rgba(127,176,135,0.3)", color: "var(--fm-green)" },
+  "in-progress": { bg: "var(--fm-brass-bg)",    border: "rgba(201,169,110,0.3)", color: "var(--fm-brass)" },
+  "not-started": { bg: "var(--fm-bg-raised)",   border: "var(--fm-hairline2)",   color: "var(--fm-ink-mute)" },
+};
+const STATUS_LABEL = { "not-started": "Not Started", "in-progress": "In Progress", done: "Done" };
+
+function ProjectRow({ p, updateProject }) {
+  const [editingDue, setEditingDue] = useState(false);
+  const ss = STATUS_STYLE[p.status] ?? STATUS_STYLE["not-started"];
+  const priorityColor = PRIORITY_COLOR[p.priority] ?? "#c9a96e";
+  const due = p.dueDate
+    ? new Date(p.dueDate + "T00:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })
+    : "—";
+
+  const cellSelect = {
+    appearance: "none", background: "transparent", border: "none", cursor: "pointer",
+    fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.06em",
+    outline: "none", padding: 0, textTransform: "uppercase", width: "100%",
+  };
+
+  return (
+    <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.4rem 0" }}>
+      {/* Name */}
+      <span style={{ color: "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+
+      {/* Status */}
+      <span style={{ background: ss.bg, border: `1px solid ${ss.border}`, borderRadius: "var(--fm-radius)", boxSizing: "border-box", color: ss.color, flexShrink: 0, padding: "0.1rem 0.35rem", width: "78px" }}>
+        <select
+          value={p.status ?? "not-started"}
+          onChange={e => updateProject(p.id, { status: e.target.value })}
+          style={{ ...cellSelect, color: ss.color }}
+          title="Change status"
+        >
+          <option value="not-started">Not Started</option>
+          <option value="in-progress">In Progress</option>
+          <option value="done">Done</option>
+        </select>
+      </span>
+
+      {/* Priority */}
+      <span style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.25rem", width: "60px" }}>
+        <span style={{ background: priorityColor, borderRadius: "50%", display: "inline-block", flexShrink: 0, height: "6px", width: "6px" }} />
+        <select
+          value={p.priority ?? "medium"}
+          onChange={e => updateProject(p.id, { priority: e.target.value })}
+          style={{ ...cellSelect, color: "var(--fm-ink-mute)", fontSize: "0.6rem", letterSpacing: 0, textTransform: "capitalize" }}
+          title="Change priority"
+        >
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="urgent">Urgent</option>
+        </select>
+      </span>
+
+      {/* Due date */}
+      <span style={{ flexShrink: 0, textAlign: "right", width: "60px" }}>
+        {editingDue ? (
+          <input
+            type="date"
+            autoFocus
+            defaultValue={p.dueDate ?? ""}
+            onBlur={e => {
+              updateProject(p.id, { dueDate: e.target.value || null });
+              setEditingDue(false);
+            }}
+            onKeyDown={e => { if (e.key === "Escape") setEditingDue(false); }}
+            style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-brass)", borderRadius: "3px", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", outline: "none", padding: "0.1rem 0.2rem", width: "100%" }}
+          />
+        ) : (
+          <span
+            onClick={() => setEditingDue(true)}
+            title="Set due date"
+            style={{ color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+          >{due}</span>
+        )}
+      </span>
+
+      {/* Tasks */}
+      <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", textAlign: "right", width: "30px" }}>{p.done}/{p.total}</span>
+    </div>
+  );
+}
+
+const SCHED_PAST = 30;
+const SCHED_FUTURE = 90;
+const SCHED_TOTAL = SCHED_PAST + SCHED_FUTURE;
+const DOT_R = 4;
+const DOT_GAP = 3;
+const TRACK_H = 72;
+
+const TYPE_COLOR = {
+  maint:   "var(--fm-brass)",
+  chore:   "var(--fm-green)",
+  todo:    "var(--fm-cyan)",
+  project: "var(--fm-amber)",
+};
+const TYPE_LABEL = { maint: "Maintenance", chore: "Chore", todo: "To Do", project: "Project" };
+
+function urgencyColor(days) {
+  if (days < 0)   return "var(--fm-red)";
+  if (days <= 3)  return "var(--fm-amber)";
+  if (days <= 14) return "var(--fm-brass)";
+  return "var(--fm-ink-dim)";
+}
+
+function SchedDot({ item }) {
+  const [hover, setHover] = useState(false);
+  const uc = urgencyColor(item.days);
+  const tc = TYPE_COLOR[item.type];
+  const color = item.days < 0 ? uc : tc;
+  const dayLabel = item.days === 0 ? "Today" : item.days < 0 ? `${-item.days}d overdue` : `In ${item.days}d`;
+
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: color,
+        borderRadius: "50%",
+        boxShadow: item.days < 0 ? `0 0 4px ${uc}` : "none",
+        cursor: "default",
+        height: DOT_R * 2,
+        left: `${((item.days + SCHED_PAST) / SCHED_TOTAL) * 100}%`,
+        opacity: item.days > 30 ? 0.55 : 1,
+        position: "absolute",
+        top: item.y,
+        transform: "translateX(-50%)",
+        width: DOT_R * 2,
+        zIndex: hover ? 20 : 1,
+      }}
+    >
+      {hover && (
+        <div style={{
+          background: "var(--fm-bg-raised)",
+          border: "1px solid var(--fm-hairline2)",
+          borderRadius: "4px",
+          bottom: "calc(100% + 7px)",
+          boxShadow: "0 4px 14px #00000050",
+          color: "var(--fm-ink-dim)",
+          fontFamily: "var(--fm-mono)",
+          fontSize: "0.62rem",
+          left: "50%",
+          lineHeight: 1.5,
+          maxWidth: "220px",
+          minWidth: "130px",
+          padding: "0.4rem 0.6rem",
+          pointerEvents: "none",
+          position: "absolute",
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
+          zIndex: 50,
+        }}>
+          <div style={{ color: color, fontSize: "0.5rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>{TYPE_LABEL[item.type]}</div>
+          <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{item.label}</div>
+          <div style={{ color: item.days < 0 ? "var(--fm-red)" : "var(--fm-ink-mute)", fontSize: "0.55rem", marginTop: "0.15rem" }}>{dayLabel}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScheduleTimeline({ activeRows, nextDatesMap, chores, choreNextDate, todos, projects, today }) {
+  const items = [];
+
+  activeRows.forEach(row => {
+    const d = nextDatesMap[keyOf(row)];
+    if (!d) return;
+    const days = Math.round((new Date(d) - today) / 86400000);
+    if (days < -SCHED_PAST || days > SCHED_FUTURE) return;
+    items.push({ type: "maint", label: `${row.category} · ${row.task}`, days });
+  });
+
+  chores.forEach(c => {
+    const dt = choreNextDate(c);
+    if (!dt) return;
+    const days = Math.round((dt - today) / 86400000);
+    if (days < -SCHED_PAST || days > SCHED_FUTURE) return;
+    items.push({ type: "chore", label: c.title, days });
+  });
+
+  todos.filter(t => t.dueDate && !t._isOverdueChore && !t._isOverdueMaintenance).forEach(t => {
+    const days = Math.round((new Date(t.dueDate + "T00:00:00") - today) / 86400000);
+    if (days < -SCHED_PAST || days > SCHED_FUTURE) return;
+    items.push({ type: "todo", label: t.title, days });
+  });
+
+  projects.filter(p => p.dueDate && p.status !== "done").forEach(p => {
+    const days = Math.round((new Date(p.dueDate + "T00:00:00") - today) / 86400000);
+    if (days < -SCHED_PAST || days > SCHED_FUTURE) return;
+    items.push({ type: "project", label: p.name, days });
+  });
+
+  // Group by day, stack vertically bottom-up
+  const byDay = {};
+  items.forEach(item => {
+    (byDay[item.days] ??= []).push(item);
+  });
+  const dots = [];
+  Object.entries(byDay).forEach(([dayStr, group]) => {
+    group.forEach((item, i) => {
+      const y = TRACK_H - DOT_R * 2 - i * (DOT_R * 2 + DOT_GAP);
+      if (y < 0) return;
+      dots.push({ ...item, y });
+    });
+  });
+
+  // Month boundary markers within window
+  const monthMarkers = [];
+  for (let d = -SCHED_PAST + 1; d <= SCHED_FUTURE; d++) {
+    const dt = new Date(today);
+    dt.setDate(dt.getDate() + d);
+    if (dt.getDate() === 1) {
+      monthMarkers.push({ x: ((d + SCHED_PAST) / SCHED_TOTAL) * 100, label: dt.toLocaleDateString("en-US", { month: "short" }) });
+    }
+  }
+
+  const todayX = (SCHED_PAST / SCHED_TOTAL) * 100;
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      {/* Dot track */}
+      <div style={{ height: TRACK_H, position: "relative", width: "100%" }}>
+        {/* Today vertical rule */}
+        <div style={{ background: "var(--fm-brass)", bottom: 0, left: `${todayX}%`, opacity: 0.3, position: "absolute", top: 0, width: "1px" }} />
+        {dots.map((dot, i) => <SchedDot key={i} item={dot} />)}
+      </div>
+
+      {/* Axis line */}
+      <div style={{ background: "var(--fm-hairline2)", height: "1px", width: "100%" }} />
+
+      {/* Axis labels */}
+      <div style={{ height: "18px", position: "relative", width: "100%" }}>
+        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.48rem", left: 0, position: "absolute", top: "4px" }}>T−30d</span>
+        <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", left: `${todayX}%`, position: "absolute", top: "4px", transform: "translateX(-50%)" }}>TODAY</span>
+        {monthMarkers.map(m => (
+          <span key={m.x} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.48rem", left: `${m.x}%`, position: "absolute", top: "4px", transform: "translateX(-50%)" }}>{m.label}</span>
+        ))}
+        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.48rem", position: "absolute", right: 0, top: "4px" }}>T+90d</span>
+      </div>
+
+      {/* Legend */}
+      <div style={{ alignItems: "center", display: "flex", gap: "1.25rem", marginTop: "0.5rem" }}>
+        {[["maint","Maintenance"],["chore","Chore"],["todo","To Do"],["project","Project"]].map(([type, label]) => (
+          <span key={type} style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", gap: "0.3rem" }}>
+            <span style={{ background: TYPE_COLOR[type], borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+            {label}
+          </span>
+        ))}
+        <span style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", gap: "0.3rem", marginLeft: "0.5rem" }}>
+          <span style={{ background: "var(--fm-red)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+          Overdue
+        </span>
+        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", marginLeft: "auto" }}>{dots.length} item{dots.length !== 1 ? "s" : ""} in window</span>
+      </div>
+    </div>
+  );
+}
+
+function TodoRow({ t, updateTodo, projectName }) {
+  const [editingDue, setEditingDue] = useState(false);
+  const ss = STATUS_STYLE[t.status] ?? STATUS_STYLE["not-started"];
+  const priorityColor = PRIORITY_COLOR[t.priority] ?? "#c9a96e";
+  const due = t.dueDate
+    ? new Date(t.dueDate + "T00:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })
+    : "—";
+
+  const cellSelect = {
+    appearance: "none", background: "transparent", border: "none", cursor: "pointer",
+    fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.06em",
+    outline: "none", padding: 0, textTransform: "uppercase", width: "100%",
+  };
+
+  return (
+    <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.4rem 0" }}>
+      <span style={{ color: t.status === "done" ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", minWidth: 0, overflow: "hidden", textDecoration: t.status === "done" ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
+
+      {/* Status */}
+      <span style={{ background: ss.bg, border: `1px solid ${ss.border}`, borderRadius: "var(--fm-radius)", boxSizing: "border-box", color: ss.color, flexShrink: 0, padding: "0.1rem 0.35rem", width: "78px" }}>
+        <select value={t.status ?? "not-started"} onChange={e => updateTodo(t.id, { status: e.target.value })} style={{ ...cellSelect, color: ss.color }} title="Change status">
+          <option value="not-started">Not Started</option>
+          <option value="in-progress">In Progress</option>
+          <option value="done">Done</option>
+        </select>
+      </span>
+
+      {/* Priority */}
+      <span style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.25rem", width: "60px" }}>
+        <span style={{ background: priorityColor, borderRadius: "50%", display: "inline-block", flexShrink: 0, height: "6px", width: "6px" }} />
+        <select value={t.priority ?? "medium"} onChange={e => updateTodo(t.id, { priority: e.target.value })} style={{ ...cellSelect, color: "var(--fm-ink-mute)", fontSize: "0.6rem", letterSpacing: 0, textTransform: "capitalize" }} title="Change priority">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="urgent">Urgent</option>
+        </select>
+      </span>
+
+      {/* Due date */}
+      <span style={{ flexShrink: 0, textAlign: "right", width: "60px" }}>
+        {editingDue ? (
+          <input type="date" autoFocus defaultValue={t.dueDate ?? ""}
+            onBlur={e => { updateTodo(t.id, { dueDate: e.target.value || null }); setEditingDue(false); }}
+            onKeyDown={e => { if (e.key === "Escape") setEditingDue(false); }}
+            style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-brass)", borderRadius: "3px", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", outline: "none", padding: "0.1rem 0.2rem", width: "100%" }}
+          />
+        ) : (
+          <span onClick={() => setEditingDue(true)} title="Set due date"
+            style={{ color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+          >{due}</span>
+        )}
+      </span>
+
+      {/* Project */}
+      <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textAlign: "right", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "70px" }} title={projectName ?? ""}>{projectName ?? "—"}</span>
+    </div>
+  );
+}
+
+function ColHeader({ label, tip, style: extraStyle = {} }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <span
+      style={{ position: "relative", cursor: "default", ...extraStyle }}
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px dotted var(--fm-hairline2)" }}>
+        {label}
+      </span>
+      {visible && (
+        <span style={{
+          background: "var(--fm-bg-raised)",
+          border: "1px solid var(--fm-hairline2)",
+          borderRadius: "4px",
+          bottom: "calc(100% + 6px)",
+          boxShadow: "0 4px 12px #00000040",
+          color: "var(--fm-ink-dim)",
+          fontFamily: "var(--fm-mono)",
+          fontSize: "0.65rem",
+          left: "50%",
+          lineHeight: 1.5,
+          padding: "0.4rem 0.6rem",
+          pointerEvents: "none",
+          position: "absolute",
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
+          zIndex: 50,
+        }}>
+          {tip}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ArchSection({ title, cats, catHealthMap, catNextDueMap, emptyMsg }) {
   return (
     <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", display: "flex", flexDirection: "column", minHeight: 0, padding: "1.25rem 1.5rem" }}>
       <div style={{ borderBottom: "1px solid var(--fm-hairline)", flexShrink: 0, marginBottom: "0.25rem", paddingBottom: "0.5rem" }}>
         <span style={sectionTitle}>{title}</span>
       </div>
+      {cats.length > 0 && (
+        <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", padding: "0.3rem 0 0.15rem" }}>
+          <ColHeader label="Name"     tip="Category name"                                                         style={{ flex: "0 0 120px" }} />
+          <ColHeader label="Health"   tip="Maintenance health — drops as tasks go overdue"                        style={{ flex: 1 }} />
+          <ColHeader label="Score"    tip="0–100 score; loses points per overdue task, weighted by how late"      style={{ flex: "0 0 32px", textAlign: "right" }} />
+          <ColHeader label="Next Due" tip="Earliest upcoming task due date across all items in this category"     style={{ flex: "0 0 52px", textAlign: "right" }} />
+        </div>
+      )}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {cats.length === 0 ? (
           <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.5rem 0" }}>{emptyMsg}</div>
@@ -717,10 +1167,10 @@ function ArchSection({ title, cats, catHealthMap, catNextDueMap, emptyMsg }) {
           const nextDue = catNextDueMap[cat];
           return (
             <div key={cat} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.75rem", padding: "0.45rem 0" }}>
-              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", minWidth: "80px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</span>
+              <span style={{ color: "var(--fm-ink-dim)", flex: "0 0 120px", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</span>
               <HealthBar score={score} />
-              <span style={{ color: score >= 80 ? "var(--fm-green)" : score >= 50 ? "var(--fm-amber)" : "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", minWidth: "26px", textAlign: "right" }}>{score}</span>
-              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto" }}>{fmtDate(nextDue)}</span>
+              <span style={{ color: score >= 80 ? "var(--fm-green)" : score >= 50 ? "var(--fm-amber)" : "var(--fm-red)", flex: "0 0 32px", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", textAlign: "right" }}>{score}</span>
+              <span style={{ color: "var(--fm-ink-mute)", flex: "0 0 52px", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", textAlign: "right" }}>{fmtDate(nextDue)}</span>
             </div>
           );
         })}

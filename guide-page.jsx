@@ -251,8 +251,8 @@ export default function GuidePage({ navigate }) {
     const q = searchQuery.toLowerCase();
     return grouped
       .map(g => ({ ...g, items: g.items.filter(({ item }) => item.toLowerCase().includes(q)) }))
-      .filter(g => g.items.length > 0 || formatRoomLabel(g.category, roomSubtypes).toLowerCase().includes(q));
-  }, [grouped, searchQuery, roomSubtypes]);
+      .filter(g => g.items.length > 0 || g.category.toLowerCase().includes(q));
+  }, [grouped, searchQuery]);
 
   const deletedCount = useMemo(() =>
     useDefaultData
@@ -377,7 +377,7 @@ export default function GuidePage({ navigate }) {
               {filteredGroups.map(({ category, items }) => (
                 <div key={category}>
                   <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.14em", padding: "0.55rem 1rem 0.2rem", textTransform: "uppercase" }}>
-                    {formatRoomLabel(category, roomSubtypes)}
+                    {category}
                   </div>
                   {items.map(({ item }) => {
                     const isActive = selectedItem?.category === category && selectedItem?.item === item;
@@ -507,7 +507,7 @@ export default function GuidePage({ navigate }) {
                 {/* Article header */}
                 <div style={{ borderBottom: "var(--fm-border)", flexShrink: 0, padding: "1.75rem 2.5rem 1.25rem" }}>
                   <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.14em", marginBottom: "0.4rem", textTransform: "uppercase" }}>
-                    {formatRoomLabel(selectedItem.category, roomSubtypes)}
+                    {selectedItem.category}
                   </div>
                   <h1 style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.4rem", fontWeight: 400, margin: "0 0 0.4rem" }}>
                     {selectedItem.item}

@@ -24,6 +24,7 @@ const FOREMAN_PAGES = [
   { key: 'Floor Plan' },
   { key: 'Inventory' },
   { key: 'Maintenance' },
+  { key: 'Services' },
   { key: 'Chores' },
   { key: 'To Dos' },
   { key: 'Projects' },
@@ -31,9 +32,15 @@ const FOREMAN_PAGES = [
   { key: 'Preferences' },
 ];
 
+function readOnlineMode() {
+  try { return JSON.parse(localStorage.getItem('foreman-online-mode') ?? 'false'); }
+  catch { return false; }
+}
+
 export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline = 'your house, in order' }) {
   const nav = useContext(FmNavContext);
   const currentActive = active || nav.current;
+  const onlineMode = readOnlineMode();
 
   return (
     <header
@@ -72,7 +79,13 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
           <span style={{ color: 'var(--fm-brass-dim)', fontStyle: 'italic' }}>{tagline}</span>
         </h1>
       </div>
-      <nav style={{ display: 'flex', gap: 6 }}>
+      <nav style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {onlineMode && (
+          <div style={{ alignItems: 'center', display: 'flex', gap: '0.3rem', marginRight: '0.5rem' }}>
+            <span style={{ background: 'var(--fm-green)', borderRadius: '50%', display: 'inline-block', height: '5px', width: '5px' }} />
+            <span style={{ color: 'var(--fm-green)', fontFamily: 'var(--fm-mono)', fontSize: 9.5, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Online</span>
+          </div>
+        )}
         {FOREMAN_PAGES.map((p) => {
           const isActive = p.key === currentActive;
           return (

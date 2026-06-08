@@ -181,7 +181,7 @@ function checkMaintenanceCompleted(key, projectedDate, schedule, maintenanceDate
   return last > prevDue && last <= new Date(projectedDate.getTime() + 86400000);
 }
 
-function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter) {
+function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData) {
   const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
   const events = [];
   for (const chore of chores) {
@@ -216,6 +216,14 @@ function getEventsForDate(date, chores, maintenanceRows, maintenanceStartDates, 
         if (lastDate.getFullYear() === y && lastDate.getMonth() === m && lastDate.getDate() === d)
           events.push({ type: "maintenance", row, key, isCompleted: true });
       }
+    }
+  }
+  if (svcData) {
+    for (const svc of Object.values(svcData.services || {})) {
+      if (!svc.renewalDate || !svc.active) continue;
+      const rd = new Date(svc.renewalDate + "T00:00:00");
+      if (rd.getFullYear() === y && rd.getMonth() === m && rd.getDate() === d)
+        events.push({ type: "renewal", service: svc, date: rd, isCompleted: false });
     }
   }
   return events;
@@ -329,7 +337,8 @@ export default function CalendarPage({ navigate }) {
   const todayMonth = todayRaw.getMonth();
   const todayDay   = todayRaw.getDate();
 
-  const chores = useForemanStore(s => s.chores);
+  const chores  = useForemanStore(s => s.chores);
+  const svcData = useForemanStore(s => s.services ?? { services: {}, visits: {} });
   const [maintenanceRows]       = useState(() => {
     const deletedCats   = loadDeletedCategories();
     const deletedItems  = loadDeletedItems();
@@ -432,8 +441,17 @@ export default function CalendarPage({ navigate }) {
         }
       }
     }
+    // Renewal dates for active services
+    for (const svc of Object.values(svcData.services)) {
+      if (!svc.renewalDate || !svc.active) continue;
+      const d = new Date(svc.renewalDate + "T00:00:00");
+      if (d.getFullYear() === view.y && d.getMonth() === view.m) {
+        push(d.getDate(), { type: "renewal", service: svc, date: d, isCompleted: false });
+      }
+    }
+
     return map;
-  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, view, activeFilter]);
+  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, view, activeFilter, svcData]);
 
   // Maintenance tasks that have no start date yet (need scheduling)
   const unscheduledMaintenance = useMemo(() =>
@@ -461,11 +479,11 @@ export default function CalendarPage({ navigate }) {
     const result = [];
     for (let i = 0; i < 90; i++) {
       const d = new Date(today); d.setDate(today.getDate() + i);
-      const evts = getEventsForDate(d, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter);
+      const evts = getEventsForDate(d, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData);
       if (evts.length > 0) result.push({ date: d, events: evts });
     }
     return result;
-  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter]);
+  }, [chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, activeFilter, svcData]);
 
   // Year view: per-month event-day sets for the viewed year
   const yearEventMap = useMemo(() => {
@@ -475,13 +493,13 @@ export default function CalendarPage({ navigate }) {
       const days = new Set();
       for (let d = 1; d <= daysInM; d++) {
         const dt = new Date(view.y, m, d);
-        const evts = getEventsForDate(dt, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, "All");
+        const evts = getEventsForDate(dt, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, "All", svcData);
         if (evts.length > 0) days.add(d);
       }
       map[m] = days;
     }
     return map;
-  }, [view.y, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions]);
+  }, [view.y, chores, maintenanceRows, maintenanceStartDates, maintenanceDates, maintenanceNextDates, choreCompletions, svcData]);
 
   function handleCellClick(day) {
     const date = new Date(view.y, view.m, day);
@@ -655,6 +673,9 @@ export default function CalendarPage({ navigate }) {
                       {isToday ? <span style={{ alignItems: "center", background: "var(--fm-brass)", borderRadius: "50%", color: "var(--fm-bg)", display: "inline-flex", height: "18px", justifyContent: "center", width: "18px" }}>{day}</span> : <span style={{ color: "var(--fm-ink-dim)" }}>{day}</span>}
                     </div>
                     {visible.map((evt, idx) => {
+                      if (evt.type === "renewal") {
+                        return <div key={idx} style={{ borderLeft: "3px solid var(--fm-brass)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-brass)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name}</span></div>;
+                      }
                       const isMaint = evt.type === "maintenance";
                       const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? evt.row.item : evt.chore.title;
@@ -693,6 +714,15 @@ export default function CalendarPage({ navigate }) {
                   ) : (
                     Object.keys(eventsByDay).map(Number).sort((a, b) => a - b).flatMap(day =>
                       eventsByDay[day].map((evt, idx) => {
+                        if (evt.type === "renewal") {
+                          return (
+                            <div key={`${day}-${idx}`} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.5rem", padding: "0.32rem 0" }}>
+                              <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-serif)", fontSize: "0.88rem", minWidth: "20px", textAlign: "right" }}>{day}</span>
+                              <span style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>SVC</span>
+                              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.73rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name} renewal</span>
+                            </div>
+                          );
+                        }
                         const isMaint = evt.type === "maintenance";
                         const tag = isMaint ? getSysTag(evt.row.category) : "CHORE";
                         const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
@@ -761,6 +791,13 @@ export default function CalendarPage({ navigate }) {
                   <div style={{ flex: 1, overflowY: "auto", padding: "0.3rem" }}>
                     {events.length === 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", padding: "0.2rem 0.1rem" }}>—</div>}
                     {events.map((evt, idx) => {
+                      if (evt.type === "renewal") {
+                        return (
+                          <div key={idx} style={{ borderLeft: "3px solid var(--fm-brass)", borderRadius: "0 2px 2px 0", marginBottom: "2px", overflow: "hidden", padding: "2px 4px" }}>
+                            <span style={{ color: "var(--fm-brass)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name}</span>
+                          </div>
+                        );
+                      }
                       const isMaint = evt.type === "maintenance";
                       const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
                       const label = isMaint ? evt.row.item : evt.chore.title;
@@ -802,6 +839,15 @@ export default function CalendarPage({ navigate }) {
                       {isToday && <span style={{ background: "var(--fm-brass)", borderRadius: "10px", color: "var(--fm-bg)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.08em", padding: "0.1rem 0.45rem", textTransform: "uppercase" }}>Today</span>}
                     </div>
                     {events.map((evt, idx) => {
+                      if (evt.type === "renewal") {
+                        return (
+                          <div key={idx} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", padding: "0.35rem 0.3rem" }}>
+                            <span style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>SVC</span>
+                            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem" }}>↻ {evt.service.name} renewal</span>
+                            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{evt.service.providerName || ""}</span>
+                          </div>
+                        );
+                      }
                       const isMaint = evt.type === "maintenance";
                       const tag = isMaint ? getSysTag(evt.row.category) : "CHORE";
                       const tagColor = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";

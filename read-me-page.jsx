@@ -104,7 +104,6 @@ function TocNav({ sections, activeSection, onSelect }) {
 const INSTRUCTIONS_SECTIONS = [
   { id: "sec-overview", label: "Foreman: Get More Shit Done" },
   { id: "sec-pages",    label: "Pages" },
-  { id: "sec-tenets",   label: "Design Tenets" },
 ];
 
 const TENETS = [
@@ -115,7 +114,7 @@ const TENETS = [
   ["Foreman is extendable.", "New systems, new pages, new data types. The foundation holds when the scope expands."],
   ["Foreman is flexible.", "It bends to how you actually work, not how the tool assumes you work."],
   ["Foreman is integrated and seamless.", "Inventory, maintenance, tasks, projects. One system, not four apps duct-taped together."],
-  ["Foreman is fun.", "It feels good to get shit done in Foreman. The satisfaction of a logged completion, a cleared column, a scheduled task. The tool makes the work feel worth doing. Tagline: Get More Shit Done."],
+  ["Foreman is fun.", "It feels good to get shit done in Foreman, and you get more shit done with Foreman. The tool makes the work feel worth doing."],
   ["Foreman is honest.", "It shows you what's real: what's overdue, what's untracked, what's been neglected. No hiding the score."],
   ["Foreman is yours.", "The structure bends to your home, not a generic template."],
   ["Foreman is durable.", "Built for decades of ownership, not a sprint. The registry outlasts the renovation."],
@@ -128,6 +127,7 @@ const PAGES = [
   ["Calendar", "All scheduled maintenance tasks and chores laid out across time. Supports month, week, day, and year views. Use it to see what's coming, identify clusters of work, and confirm what's been completed."],
   ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Inventory items link directly to maintenance tasks."],
   ["Maintenance", "The core of Foreman. A structured list of recurring maintenance tasks across every system in your home: HVAC, plumbing, electrical, roofing, and more. Each task has a schedule, an optional season constraint, and a completion log. Tracks what's overdue, what's due soon, and what's on schedule."],
+  ["Services", "A dedicated manager for recurring service contracts and subscriptions: pest control, lawn care, HVAC maintenance plans, home warranties, security monitoring, and more. Track provider details, costs, billing cycles, and renewal dates. Log individual service visits with technician notes. Renewal dates surface on the Calendar and monthly costs roll up to the Dashboard."],
   ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set frequency, and mark them done as you go. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
@@ -163,20 +163,30 @@ function InstructionsTab() {
         </div>
       </div>
 
-      <div ref={el => { sectionRefs.current["sec-tenets"] = el; }} id="sec-tenets" style={divider}>
-        <div style={sectionLabel}>Principles</div>
-        <h2 style={sectionHeading}>Design Tenets</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
-          {TENETS.map(([title, desc], i) => (
-            <div key={i} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", minWidth: "1.25rem", paddingTop: "0.25rem" }}>{i + 1}.</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{title}</span>{" "}
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
+    </div>
+  );
+}
+
+// ─── Design Tenets tab ─────────────────────────────────────────────────────────
+
+function TenetsTab() {
+  return (
+    <div>
+      <div style={sectionLabel}>Principles</div>
+      <h2 style={sectionHeading}>Our Design Tenets</h2>
+      <p style={{ ...bodyText, marginBottom: "1.75rem" }}>
+        These tenets govern every design, UX, and architecture decision in Foreman. When two options conflict, they break the tie. When scope creep whispers, they push back.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        {TENETS.map(([title, desc], i) => (
+          <div key={i} style={{ display: "flex", gap: "0.75rem" }}>
+            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", minWidth: "1.25rem", paddingTop: "0.25rem" }}>{i + 1}.</span>
+            <p style={bodyText}>
+              <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{title}</span>{" "}
+              {desc}
+            </p>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -253,7 +263,7 @@ function ArchTab() {
 
       <ArchSection id="arch-structure" label="Architecture" heading="Application Structure" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Foreman has 11 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
+          Foreman has 12 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, services-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component.
@@ -267,7 +277,7 @@ function ArchTab() {
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>Code is organized into four layers:</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
           {[
-            ["lib/store.js", "The global Zustand store. Holds slices for rooms, floors, floor plan data, spatial assignments, item field values, inventory state, projects, chores, and entity types. Pages read from slices via subscriptions; store actions handle all writes. Calling load*() directly in a page is a code smell after the refactor — the store is the source of truth."],
+            ["lib/store.js", "The global Zustand store. Holds slices for rooms, floors, floor plan data, spatial assignments, item field values, inventory state, projects, chores, services, and entity types. Pages read from slices via subscriptions; store actions handle all writes. Calling load*() directly in a page is a code smell after the refactor — the store is the source of truth."],
             ["lib/", "Data utility modules, one per domain (chores, maintenance, inventory, rooms, floors, reminders, etc.). Pure functions that read and write data via lib/storage.js, parse and format values, and compute derived results. No React code. The storage.js module is the single point of contact with IndexedDB — all other lib files call storageGet/storageSet rather than touching the browser storage API directly."],
             ["components/", "Domain-specific UI components: maintenance table, modals, date pickers, filter pills, schedule pickers."],
             ["src/components/", "Design system components shared across all pages: FmHeader, FmSubnav, FmCard, FmStatusDot, FmSysTag."],
@@ -294,6 +304,10 @@ function ArchTab() {
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Chores</div>
             <p style={bodyText}>Stored as objects with a unique ID. Schedules use a human-readable string format ("every 1 weeks", "every 3 months"). Next occurrence dates and per-occurrence completion records (who completed it, when, any notes) are stored in separate localStorage keys and linked by chore ID. Unlike maintenance, chores track every occurrence, not just the most recent.</p>
+          </div>
+          <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Services</div>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-services</span> as a single object with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>services</span> (id → Service) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>visits</span> (id → ServiceVisit). A Service carries provider name, phone, category (from a fixed 15-item taxonomy with an "Other" escape hatch), cost, billing cycle, renewal date, and auto-renews flag. A ServiceVisit is a child record of a Service and records the date, technician, notes, and an optional cost override. Monthly cost is normalized from the billing cycle — annual cost divided by 12, quarterly by 3, one-time excluded — and surfaced on the Dashboard and in the Services stats bar.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Entity types</div>
@@ -326,6 +340,9 @@ function ArchTab() {
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           The brass color (#c9a96e) anchors the design's identity. Three typefaces divide the visual hierarchy: Newsreader for display headings, Inter for body content, and JetBrains Mono for labels, tags, filter pills, and data-dense UI elements.
         </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          Two additional themes are available and selectable in Preferences. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Daylight</span> inverts the palette to a warm off-white background with dark ink — suited for bright environments. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Obsidian</span> uses a near-black background with indigo-tinted accents in place of brass. Themes are applied via a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>data-theme</span> attribute on the root element before React renders, so there is no flash of unstyled content on load. A <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>density control</span> in Preferences scales the root font size (Compact: 14px, Default: 16px, Comfortable: 18px), which propagates through every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>rem</span>-based measurement in the app.
+        </p>
       </ArchSection>
 
       <ArchSection id="arch-integrations" label="Integrations" heading="External Integrations" sectionRefs={sectionRefs}>
@@ -351,11 +368,9 @@ function ArchTab() {
 // ─── Development Roadmap tab ───────────────────────────────────────────────────
 
 const ROADMAP_SECTIONS = [
-  { id: "road-services", label: "Services" },
-  { id: "road-modes",    label: "Offline / Online Mode" },
-  { id: "road-mobile",   label: "Mobile App" },
-  { id: "road-ha",       label: "Home Assistant" },
-  { id: "road-advisor",  label: "AI Advisor" },
+  { id: "road-mobile",  label: "Mobile App" },
+  { id: "road-ha",      label: "Home Assistant" },
+  { id: "road-advisor", label: "AI Advisor" },
 ];
 
 function RoadmapTab() {
@@ -365,57 +380,7 @@ function RoadmapTab() {
     <div>
       <TocNav sections={ROADMAP_SECTIONS} activeSection={activeSection} onSelect={scrollTo} />
 
-      <ArchSection id="road-services" label="Entity Types" heading="Services &amp; Service Manager" sectionRefs={sectionRefs} first>
-        <p style={bodyText}>
-          Foreman currently models a home through four entity types: rooms, systems, structures, and exterior. The next entity type planned is <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Services</span> — recurring subscriptions and provider relationships that are part of running a home but don't map cleanly to a physical space or mechanical system.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          A service is anything with a recurring cost, a renewal date, and a provider: a Ring doorbell subscription, a pest control plan, a lawn care contract, a pool service, a home warranty. These are real ongoing obligations with real dollar amounts and real renewal cliffs — but Foreman currently has no place to track them.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The planned <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Service Manager</span> page handles two things in one place:
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginTop: "0.75rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
-          {[
-            ["Subscription tracking", "Each service carries its provider name, cost, billing cycle, renewal date, and cancellation details. At a glance you can see what you're paying for, what renews next, and what you'd need to do to cancel. A renewal calendar surfaces upcoming billing dates across all active subscriptions."],
-            ["Service history", "Each service accumulates a log of visits and events: the exterminator's last quarterly treatment, the lawn care crew's most recent visit, what was done and when. The history log is the same model as maintenance completion records — timestamped entries with notes, tied to the service rather than a physical item."],
-          ].map(([name, desc]) => (
-            <div key={name}>
-              <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
-              <span style={{ ...bodyText, display: "inline" }}> — {desc}</span>
-            </div>
-          ))}
-        </div>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Services will integrate with the existing data model: a pest control service can be linked to the rooms it covers, a pool service to the relevant exterior area, a home warranty to specific inventory items. The total monthly and annual cost across all active subscriptions will surface on the Dashboard.
-        </p>
-      </ArchSection>
-
-      <ArchSection id="road-modes" label="Architecture" heading="Offline / Online Mode" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          Foreman currently runs entirely in your browser with no required server. The plan is to formalize this into an explicit Offline / Online toggle, giving you clear control over what leaves your device and which capabilities are active.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Offline mode</span> keeps Foreman 100% local. No network calls are made. All data stays in your browser. The right choice for households that prioritize privacy or don't need cloud-connected features.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Online mode</span> unlocks capabilities that require an external service:
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginTop: "0.75rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
-          {[
-            ["AI maintenance task generation", "Given the make and model of an appliance from your inventory, Foreman queries an AI model (currently Groq) and returns a pre-populated set of manufacturer-recommended maintenance tasks and schedules, ready to add to your maintenance list."],
-            ["Inspection PDF to workflow", "Upload a home inspection report as a PDF and Foreman parses it, extracts the flagged issues, and offers to create Projects and To Dos from the findings — turning an inspector's report into an actionable work queue."],
-            ["Notification and calendar integrations", "Push due dates and completion reminders to Discord and Google Calendar, so Foreman fits into the tools your household already uses."],
-          ].map(([name, desc]) => (
-            <div key={name}>
-              <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
-              <span style={{ ...bodyText, display: "inline" }}> — {desc}</span>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
-
-      <ArchSection id="road-mobile" label="Mobile" heading="Mobile App" sectionRefs={sectionRefs}>
+      <ArchSection id="road-mobile" label="Mobile" heading="Mobile App" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
           A native mobile companion app is planned for the major mobile platforms. The mobile experience is designed around the moments when you're standing in front of the thing, not sitting at a desk. Three core workflows drive the design:
         </p>
@@ -463,6 +428,54 @@ function RoadmapTab() {
   );
 }
 
+// ─── Updates tab ──────────────────────────────────────────────────────────────
+
+const UPDATES = [
+  {
+    date: "June 7, 2026",
+    heading: "Offline / Online Mode",
+    bullets: [
+      ["Offline by default", "Foreman now ships in explicit offline mode — no network requests are made unless you opt in. All data stays in your browser."],
+      ["Online Mode toggle", "Enable Online Mode from Preferences → Profile (Connectivity section) or Preferences → Integrations. The toggle is mirrored in both places and writes to the same setting."],
+      ["Integration gating", "Discord reminders and the AI Inspection upload are locked behind Online Mode. Both show a clear notice when offline so you always know why a feature is unavailable."],
+      ["Header indicator", "When Online Mode is active, a small green dot and \"Online\" label appear in the top navigation bar so the current mode is always visible."],
+    ],
+  },
+  {
+    date: "June 7, 2026",
+    heading: "Services & Service Manager",
+    bullets: [
+      ["Services page", "A dedicated page for recurring service contracts and subscriptions — pest control, lawn care, HVAC maintenance plans, home warranties, security monitoring, and more. Each service carries provider details, cost, billing cycle, renewal date, and an auto-renews flag."],
+      ["Inline visit log", "Log individual service visits directly under each service row: date, technician, notes, and an optional cost override. Full cross-service visit history available on the History tab."],
+      ["Dashboard integration", "Total monthly cost across all active services (normalized from billing cycle) surfaces on the Dashboard At a Glance card."],
+      ["Calendar integration", "Renewal dates appear as brass chips on the Calendar across month, week, and agenda views."],
+    ],
+  },
+];
+
+function UpdatesTab() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
+      {UPDATES.map(({ date, heading, bullets }) => (
+        <div key={heading}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "0.75rem", marginBottom: "0.6rem" }}>
+            <h2 style={sectionHeading}>{heading}</h2>
+            <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em", flexShrink: 0 }}>{date}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
+            {bullets.map(([name, desc]) => (
+              <div key={name}>
+                <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
+                <span style={{ ...bodyText, display: "inline" }}> — {desc}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Page shell ────────────────────────────────────────────────────────────────
 
 export default function ReadMePage({ navigate }) {
@@ -472,15 +485,17 @@ export default function ReadMePage({ navigate }) {
     <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
       <FmHeader active="Read Me" tagline="what is foreman" />
       <FmSubnav
-        tabs={["Instructions", "Technical Architecture", "Development Roadmap"]}
+        tabs={["Instructions", "Our Design Tenets", "Technical Architecture", "Development Roadmap", "Updates"]}
         active={activeTab}
         onTabChange={setActiveTab}
       />
       <div style={{ flex: 1, overflowY: "auto" }}>
         <div style={{ maxWidth: 820, padding: "2.5rem 3rem" }}>
           {activeTab === "Instructions" && <InstructionsTab />}
+          {activeTab === "Our Design Tenets" && <TenetsTab />}
           {activeTab === "Technical Architecture" && <ArchTab />}
           {activeTab === "Development Roadmap" && <RoadmapTab />}
+          {activeTab === "Updates" && <UpdatesTab />}
         </div>
       </div>
     </div>

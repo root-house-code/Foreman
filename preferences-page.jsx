@@ -138,6 +138,7 @@ function inputStyle(focused) {
 // ─── ProfileSettings ──────────────────────────────────────────────────────────
 
 function ProfileSettings() {
+  const [onlineMode, setOnlineMode]   = useState(() => storageGet("foreman-online-mode") === true);
   const [activeProfile]  = useState(() => loadActiveProfile());
   const [allProfiles, setAllProfiles] = useState(() => getAllProfiles());
   const activeMeta = allProfiles.find(p => p.key === activeProfile);
@@ -544,6 +545,37 @@ function ProfileSettings() {
         </div>
       )}
 
+      {/* ── Online / Offline Mode ── */}
+      <div style={{ borderTop: "1px solid var(--fm-hairline)", marginTop: "2rem", paddingTop: "1.5rem" }}>
+        <div style={subheadStyle}>Connectivity</div>
+        <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.6rem" }}>
+          <input
+            type="checkbox"
+            checked={onlineMode}
+            onChange={e => {
+              const val = e.target.checked;
+              setOnlineMode(val);
+              if (val) storageSet("foreman-online-mode", true);
+              else storageDel("foreman-online-mode");
+            }}
+            style={{ accentColor: "var(--fm-green)", flexShrink: 0, marginTop: "0.15rem" }}
+          />
+          <div>
+            <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+              <span style={{ background: onlineMode ? "var(--fm-green)" : "var(--fm-ink-mute)", borderRadius: "50%", display: "inline-block", flexShrink: 0, height: "6px", transition: "background 0.2s", width: "6px" }} />
+              <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
+                {onlineMode ? "Online Mode" : "Offline Mode"}
+              </span>
+            </div>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, marginTop: "0.2rem" }}>
+              {onlineMode
+                ? "Network features enabled — Discord reminders and AI Inspection are active."
+                : "No network requests made. Enable to use integrations and AI features."}
+            </div>
+          </div>
+        </label>
+      </div>
+
     </div>
   );
 }
@@ -598,6 +630,7 @@ function isWebhookValid(url) {
 }
 
 function IntegrationsSettings() {
+  const [onlineMode, setOnlineMode]       = useState(() => storageGet("foreman-online-mode") === true);
   const [webhook, setWebhook]             = useState(() => getWebhookUrl());
   const [showWebhook, setShowWebhook]     = useState(false);
   const [hour, setHour]                   = useState(() => getSendHourLocal());
@@ -607,6 +640,12 @@ function IntegrationsSettings() {
   const [status, setStatus]               = useState(null);
   const [lastSync, setLastSync]           = useState(() => getLastSyncIso());
   const [webhookFocused, setWebhookFocused] = useState(false);
+
+  function handleOnlineModeToggle(enabled) {
+    setOnlineMode(enabled);
+    if (enabled) storageSet("foreman-online-mode", true);
+    else storageDel("foreman-online-mode");
+  }
 
   const trimmedWebhook = webhook.trim();
   const webhookValid   = trimmedWebhook === "" || isWebhookValid(trimmedWebhook);
@@ -676,12 +715,40 @@ function IntegrationsSettings() {
   return (
     <div style={{ maxWidth: "560px" }}>
       <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Integrations</h2>
-      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", margin: "0 0 2rem" }}>
+      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", margin: "0 0 1.5rem" }}>
         Connect Foreman with external tools to get your data where it needs to go.
       </p>
 
+      {/* ── Online / Offline Mode toggle ── */}
+      <div style={{ background: "var(--fm-bg-raised)", border: `1px solid ${onlineMode ? "var(--fm-green)" : "var(--fm-hairline)"}`, borderRadius: "6px", marginBottom: "1.5rem", padding: "1.1rem 1.25rem", transition: "border-color 0.2s" }}>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", justifyContent: "space-between" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.35rem" }}>
+              <span style={{ background: onlineMode ? "var(--fm-green)" : "var(--fm-ink-mute)", borderRadius: "50%", display: "inline-block", flexShrink: 0, height: "7px", transition: "background 0.2s", width: "7px" }} />
+              <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", fontWeight: 500 }}>
+                {onlineMode ? "Online Mode" : "Offline Mode"}
+              </span>
+            </div>
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: 0 }}>
+              {onlineMode
+                ? "Foreman can make network requests. Discord reminders and AI-powered features are enabled."
+                : "Foreman makes no network requests. All data stays on your device. Enable Online Mode to use integrations."}
+            </p>
+          </div>
+          <label style={{ cursor: "pointer", flexShrink: 0, marginLeft: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={onlineMode}
+              onChange={e => handleOnlineModeToggle(e.target.checked)}
+              style={{ accentColor: "var(--fm-green)", height: "16px", width: "16px" }}
+            />
+          </label>
+        </div>
+      </div>
+
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {/* Discord / Reminder Agent card */}
+        <div style={{ opacity: onlineMode ? 1 : 0.45, pointerEvents: onlineMode ? "auto" : "none", transition: "opacity 0.2s" }}>
         <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
           <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
             <svg width="18" height="18" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, opacity: 0.7 }}>
@@ -819,6 +886,7 @@ function IntegrationsSettings() {
               <div>Last sync: <span style={{ color: "var(--fm-brass-dim)" }}>{lastSyncText}</span></div>
             </div>
           </details>
+        </div>
         </div>
 
         {/* ICS Export card */}
@@ -1260,6 +1328,7 @@ function ImportExportSettings() {
   }
 
   // ── Inspection upload ──
+  const onlineMode = storageGet("foreman-online-mode") === true;
   const fileInputRef = useRef(null);
 
   const [meta, setMeta] = useState(() => storageGet(INSPECTION_META_KEY) ?? null);
@@ -1616,7 +1685,22 @@ function ImportExportSettings() {
         Upload a PDF copy of your home inspection report. Foreman will extract appliances, to dos, and projects for your review before adding anything to your profile.
       </p>
 
-      {hasFile ? (
+      {!onlineMode ? (
+        <div style={{ alignItems: "center", background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", display: "flex", gap: "0.85rem", padding: "1.25rem 1.5rem" }}>
+          <span style={{ color: "var(--fm-ink-mute)", fontSize: "1.25rem" }}>○</span>
+          <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", marginBottom: "0.25rem" }}>Online Mode required</div>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", lineHeight: 1.5 }}>
+              AI Inspection uses an external AI service to analyze your report. Enable Online Mode in{" "}
+              <span
+                style={{ color: "var(--fm-brass)", cursor: "pointer", textDecoration: "underline" }}
+                onClick={() => {}}
+              >Integrations</span>{" "}
+              to use this feature.
+            </div>
+          </div>
+        </div>
+      ) : hasFile ? (
         /* ── File loaded ── */
         <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.25rem" }}>
           <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem" }}>
