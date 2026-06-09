@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { toMonthly } from "./lib/services.js";
+import { monthlyUtilitiesTotal } from "./lib/utilities.js";
 import { expectedYears } from "./lib/lifespans.js";
 import {
   buildRoster, computeForecast, computeReserve, computeWarranties, computeRepairs12mo,
@@ -97,6 +98,7 @@ export default function LifecyclePage({ navigate }) {
   const itemFieldValues = useForemanStore(s => s.itemFieldValues);
   const inventory       = useForemanStore(s => s.inventory);
   const svcData         = useForemanStore(s => s.services);
+  const utilData        = useForemanStore(s => s.utilities);
   const expensesMap     = useForemanStore(s => s.expenses);
   const addExpense      = useForemanStore(s => s.addExpense);
   const updateExpense   = useForemanStore(s => s.updateExpense);
@@ -179,6 +181,8 @@ export default function LifecyclePage({ navigate }) {
   }, [svcData]);
 
   const annualService = monthlyService * 12;
+  const monthlyUtil = useMemo(() => monthlyUtilitiesTotal(utilData), [utilData]);
+  const annualUtil = monthlyUtil * 12;
 
   // ── Replacement forecast, reserve, warranties (shared lib) ─────────────────────
   const forecast   = useMemo(() => computeForecast(roster), [roster]);
@@ -216,10 +220,11 @@ export default function LifecyclePage({ navigate }) {
           {activeTab === "Cost of Ownership" && (
             <>
               {/* Summary cards */}
-              <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(3, 1fr)", marginBottom: "1.5rem" }}>
+              <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(4, 1fr)", marginBottom: "1.5rem" }}>
                 <SummaryCard label="Total Invested" value={fmtMoney(totalInvested)} sub={`${pricedCount} of ${totalCount} items priced`} color="var(--fm-brass)" />
                 <SummaryCard label="Repairs · 12 mo" value={fmtMoney(repairs12mo)} sub="logged repair & part costs" color="var(--fm-amber)" />
                 <SummaryCard label="Annual Services" value={fmtMoney(annualService)} sub={`${activeServices.length} active contract${activeServices.length !== 1 ? "s" : ""}`} color="var(--fm-cyan)" onClick={() => navigate("services")} />
+                <SummaryCard label="Annual Utilities" value={fmtMoney(annualUtil)} sub="est. from monthly bills" color="var(--fm-cyan)" onClick={() => navigate("utilities")} />
               </div>
 
               {/* Invested by system & room */}

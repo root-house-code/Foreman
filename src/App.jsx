@@ -32,6 +32,8 @@ import ReadMePage from "../read-me-page.jsx";
 import FloorPlanPage from "../floor-plan-page.jsx";
 import ServicesPage from "../services-page.jsx";
 import LifecyclePage from "../lifecycle-page.jsx";
+import SuppliesPage from "../supplies-page.jsx";
+import UtilitiesPage from "../utilities-page.jsx";
 
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
@@ -45,6 +47,8 @@ const PAGE_KEYS = {
   inventory: "Inventory",
   maintenance: "Maintenance",
   services: "Services",
+  utilities: "Utilities",
+  supplies: "Supplies",
   chores: "Chores",
   board: "To Dos",
   projects: "Projects",
@@ -81,6 +85,8 @@ export default function App() {
     if (page === "projects") return <ProjectsPage navigate={navigate} />;
     if (page === "guide") return <GuidePage navigate={navigate} />;
     if (page === "services") return <ServicesPage navigate={navigate} />;
+    if (page === "utilities") return <UtilitiesPage navigate={navigate} />;
+    if (page === "supplies") return <SuppliesPage navigate={navigate} />;
     if (page === "lifecycle") return <LifecyclePage navigate={navigate} />;
     if (page === "chores") return <ChoresPage navigate={navigate} navState={navState} />;
     if (page === "calendar") return <CalendarPage navigate={navigate} />;

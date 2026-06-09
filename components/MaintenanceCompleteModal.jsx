@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { computeNextDate } from "../lib/scheduleInterval.js";
+import { useForemanStore } from "../lib/store.js";
+import { consumingTaskInfo } from "../lib/supplies.js";
 import AssigneeInput from "./AssigneeInput.jsx";
 
 const CAL_DOWS_LONG   = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -94,6 +96,13 @@ export default function MaintenanceCompleteModal({ row, date, isCompleted, lastD
     if (computed) setForm(f => ({ ...f, nextDate: toISODate(computed) }));
   }, [form.completedAt, form.schedule, form.season]);
 
+  // Supplies: if this task consumes a tracked supply, offer a one-tap stock decrement
+  const supplies = useForemanStore(s => s.supplies);
+  const setSupplyState = useForemanStore(s => s.setSupplyState);
+  const supplyInfo = consumingTaskInfo(row.category, row.item, row.task, supplies);
+  const canDecrement = supplyInfo && supplyInfo.qtyOnHand != null && supplyInfo.qtyOnHand > 0;
+  const [decrementSupply, setDecrementSupply] = useState(true);
+
   const dateLabel = formatDate(date);
 
   // Build schedule select options; prepend current value if not in the standard list
@@ -116,6 +125,9 @@ export default function MaintenanceCompleteModal({ row, date, isCompleted, lastD
   function handleConfirm() {
     if (form.schedule !== (row.schedule || "")) onRowEdit?.("schedule", form.schedule);
     if (form.season !== (row.season ?? null))   onRowEdit?.("season",   form.season);
+    if (canDecrement && decrementSupply) {
+      setSupplyState(supplyInfo.taskKey, { qtyOnHand: Math.max(0, supplyInfo.qtyOnHand - 1) });
+    }
     onMarkDone(
       parseLocalDate(form.completedAt),
       form.notes,
@@ -275,6 +287,16 @@ export default function MaintenanceCompleteModal({ row, date, isCompleted, lastD
                   onBlur={e => e.currentTarget.style.borderColor = "#2b3140"}
                 />
               </div>
+
+              {/* Supplies decrement */}
+              {canDecrement && (
+                <label style={{ alignItems: "center", cursor: "pointer", display: "flex", gap: "0.5rem", marginTop: "0.1rem" }}>
+                  <input type="checkbox" checked={decrementSupply} onChange={e => setDecrementSupply(e.target.checked)} style={{ accentColor: "#c9a96e", cursor: "pointer" }} />
+                  <span style={{ color: "#a8a29c", fontFamily: "monospace", fontSize: "0.68rem" }}>
+                    Use one {supplyInfo.name} from supplies <span style={{ color: "#8b7d6b" }}>({supplyInfo.qtyOnHand} on hand)</span>
+                  </span>
+                </label>
+              )}
             </div>
 
             {/* Form actions */}

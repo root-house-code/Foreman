@@ -123,11 +123,13 @@ const TENETS = [
 ];
 
 const PAGES = [
-  ["Dashboard", "At-a-glance summary of your home's state. Shows upcoming maintenance, active projects, recent inventory additions, and overdue items. The entry point for a daily or weekly check-in."],
-  ["Calendar", "All scheduled maintenance tasks and chores laid out across time. Supports month, week, day, and year views. Use it to see what's coming, identify clusters of work, and confirm what's been completed."],
-  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Inventory items link directly to maintenance tasks."],
-  ["Maintenance", "The core of Foreman. A structured list of recurring maintenance tasks across every system in your home: HVAC, plumbing, electrical, roofing, and more. Each task has a schedule, an optional season constraint, and a completion log. Tracks what's overdue, what's due soon, and what's on schedule."],
+  ["Dashboard", "At-a-glance summary of your home's state: an overall health dial, a Triage queue of what's overdue or due this week, system and room health (now reflecting chores as well as maintenance), a T−30 to T+90 schedule timeline, columnar To Dos and Projects with inline editing, and a Lifecycle cost stat. The entry point for a daily or weekly check-in; most panels sort by clicking a column header."],
+  ["Calendar", "All scheduled maintenance tasks and chores laid out across time, with service renewal dates and inventory warranty expiries surfaced alongside them. Supports month, week, day, and year views. Use it to see what's coming, identify clusters of work, and confirm what's been completed."],
+  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Inventory items link directly to maintenance tasks, and component specs (filter sizes, battery types, salt grades) feed the Supplies tracker."],
+  ["Maintenance", "The core of Foreman. A structured list of recurring maintenance tasks across every system in your home: HVAC, plumbing, electrical, roofing, and more. Each task has a schedule, an optional season constraint, and a completion log. Tracks what's overdue, what's due soon, and what's on schedule. Logging a replace-or-refill task can decrement the matching item on the Supplies tracker."],
   ["Services", "A dedicated manager for recurring service contracts and subscriptions: pest control, lawn care, HVAC maintenance plans, home warranties, security monitoring, and more. Track provider details, costs, billing cycles, and renewal dates. Log individual service visits with technician notes. Renewal dates surface on the Calendar and monthly costs roll up to the Dashboard."],
+  ["Utilities", "Tracks recurring utility bills — electricity, natural gas, water, sewer, garbage, internet, and more. Each utility is an account under which you log every monthly bill (amount plus optional usage like kWh, therms, or gallons), building a spend and usage history. An estimated monthly total (a trailing-12-month average) surfaces on the Dashboard and folds into the Lifecycle cost of ownership."],
+  ["Supplies", "Tracks the consumables your home burns through on a cycle: furnace and water filters, softener salt, detector batteries, bulbs. Foreman derives each one from inventory items that have a replaceable part — pulling the spec from the item's fields and the replacement cadence from its maintenance schedule. Set an on-hand count and anything at or below its reorder point rolls onto a copyable Shopping List."],
   ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set frequency, and mark them done as you go. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
@@ -264,7 +266,7 @@ function ArchTab() {
 
       <ArchSection id="arch-structure" label="Architecture" heading="Application Structure" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Foreman has 12 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, services-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
+          Foreman has 15 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, lifecycle-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component.
@@ -311,8 +313,16 @@ function ArchTab() {
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-services</span> as a single object with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>services</span> (id → Service) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>visits</span> (id → ServiceVisit). A Service carries provider name, phone, category (from a fixed 15-item taxonomy with an "Other" escape hatch), cost, billing cycle, renewal date, and auto-renews flag. A ServiceVisit is a child record of a Service and records the date, technician, notes, and an optional cost override. Monthly cost is normalized from the billing cycle — annual cost divided by 12, quarterly by 3, one-time excluded — and surfaced on the Dashboard and in the Services stats bar.</p>
           </div>
           <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Utilities</div>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-utilities</span> with two sub-maps, mirroring Services: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>utilities</span> (id → Utility) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>bills</span> (id → Bill). A Utility carries type (fixed list + "Other"), provider, account number, usage unit, an optional typical monthly amount, and a due day. A Bill is a child record holding the billing period, amount, optional usage in the utility's unit, due date, and paid flag. The estimated monthly cost is a trailing-12-month average of a utility's bills (falling back to its typical amount), summed across active utilities for the Dashboard and Lifecycle.</p>
+          </div>
+          <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Expenses</div>
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-expenses</span> as a flat map keyed by id. Each expense records a date, amount, free-text description, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedItem</span> (an inventory stable key). The Lifecycle page reads these to compute a trailing-12-month repair total and, when linked, attributes the cost to an item's system or room.</p>
+          </div>
+          <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Supplies</div>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-supplies</span> with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>tracked</span> (keyed by the consuming maintenance task's key) holds the mutable on-hand count, reorder threshold, and product URL for auto-derived consumables; <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>manual</span> holds fully user-defined supplies. The supply list itself is derived at read time from a curated catalog (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/supplies.js</span>) joined to inventory specs and maintenance cadence, so it stays in sync without duplicating data.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Entity types</div>
@@ -379,7 +389,6 @@ const ROADMAP_SECTIONS = [
   { id: "road-notebook",  label: "Notebook Overhaul" },
   { id: "road-vault",     label: "Document Vault" },
   { id: "road-handoff",   label: "Handoff Export" },
-  { id: "road-utilities", label: "Utilities Tracker" },
   { id: "road-furniture", label: "Furniture Planning" },
   { id: "road-advisor",   label: "AI Advisor" },
 ];
@@ -483,9 +492,6 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="road-utilities" label="Utilities" heading="Utilities Tracker" sectionRefs={sectionRefs}>
-      </ArchSection>
-
       <ArchSection id="road-furniture" label="Furniture" heading="Furniture Planning" sectionRefs={sectionRefs}>
       </ArchSection>
 
@@ -508,6 +514,34 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
+    date: "June 8, 2026",
+    heading: "Utilities Tracker",
+    bullets: [
+      ["Accounts + monthly bills", "A new Utilities page tracks recurring bills — electricity, gas, water, sewer, garbage, internet. Each utility is an account under which you log every monthly bill, building a spend history. Mirrors the Services → Visits model."],
+      ["Cost + usage", "Bills capture the dollar amount and, for metered utilities, usage in the right unit (kWh, therms, gallons — prefilled from the type). Flat utilities like garbage just record the amount."],
+      ["Estimated monthly", "Each utility's estimated monthly cost is a trailing-12-month average of its bills (falling back to a typical amount). The summed total shows on the Dashboard and rolls into the Lifecycle cost of ownership as Annual Utilities."],
+    ],
+  },
+  {
+    date: "June 8, 2026",
+    heading: "Grouped Navigation",
+    bullets: [
+      ["Menu-bar nav", "The top navigation now collects its pages into a few dropdown menus — Overview, Property, Upkeep, and Work — instead of a long flat row of buttons. Notebook stays a direct button, and Read Me / Preferences sit apart as quieter meta links."],
+      ["Context at a glance", "The menu holding the page you're on highlights in brass, so you always know which section you're in. Menus open on hover and the active page is marked inside."],
+    ],
+  },
+  {
+    date: "June 8, 2026",
+    heading: "Supplies Tracker",
+    bullets: [
+      ["Derived consumables", "A new Supplies page lists the replaceable parts your home burns through — furnace and water filters, softener salt, detector batteries, bulbs — derived automatically from inventory items that have one. The spec to buy comes from the item's own fields; the replacement cadence and next-change date come from its maintenance schedule. Nothing new to enter."],
+      ["On-hand counts", "Set a quantity with one tap, then adjust it with −/＋ steppers. Each supply carries a reorder point (default: one) that decides when it's considered low."],
+      ["Shopping list", "Everything at or below its reorder point collects on a dedicated Shopping List tab, copyable to clipboard in one click for a store run."],
+      ["Manual supplies & tuning", "Add your own supplies that aren't tied to an inventory item (trash bags, AA batteries), and set a custom reorder point, product URL, and notes on any supply — derived or manual — from a single editor."],
+      ["Closed the loop", "The Dashboard At a Glance shows how many supplies are low or out, and completing a replace/refill maintenance task offers a one-tap “use one from supplies” that decrements your stock — so the count stays honest without extra bookkeeping."],
+    ],
+  },
+  {
     date: "June 7, 2026",
     heading: "Lifecycle: Cost of Ownership & Replacement Forecast",
     bullets: [
@@ -517,6 +551,25 @@ const UPDATES = [
       ["Warranty alerts", "Surfaces warranties expiring within 90 days (or recently lapsed) so claims get filed while they still count."],
       ["Expense log", "Log one-off repair and part costs and optionally link each to an inventory item; a trailing-12-month repairs total rolls up on the Cost of Ownership tab."],
       ["Surfaced everywhere", "The Dashboard At a Glance gains a Lifecycle stat (annual replacement reserve, or total invested before any forecast exists), and warranty-expiry dates now appear as amber chips across the Calendar's month, week, and agenda views."],
+    ],
+  },
+  {
+    date: "June 7, 2026",
+    heading: "Dashboard: Schedule Timeline, Sortable Panels & Truer Health",
+    bullets: [
+      ["Schedule timeline", "A new T−30 to T+90 panel plots maintenance, chores, to-dos, and project deadlines as dots positioned by due date and colored by type and urgency, with hover detail and month markers."],
+      ["Sortable panels", "The Systems, Rooms, To Dos, and Projects panels now sort by any column — click a header to sort, click again to reverse; the active column is marked."],
+      ["Health reflects chores", "System and room health now accounts for overdue chores, not just maintenance, and rooms that exist only as chore locations (e.g. a master bath) now appear with their own health and next-due date."],
+      ["Columnar To Dos & Projects", "Both render as compact tables with inline-editable Status, Priority, and Due; the Triage panel was retitled and gained a Chores shortcut."],
+    ],
+  },
+  {
+    date: "June 7, 2026",
+    heading: "Inventory & Notebook Refinements",
+    bullets: [
+      ["Unified Location field", "The item details panel merged the separate Room and Exterior fields into a single inclusive Location field covering all spatial categories; the underlying data splits to the correct field automatically."],
+      ["Cleaner Notebook headers", "Category headings in the Notebook sidebar and article view no longer show the redundant [subtype] bracket."],
+      ["Expanded model coverage", "Added Montigo gas fireplaces to the model library, including the 30FID and 34FID."],
     ],
   },
   {

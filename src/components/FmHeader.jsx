@@ -1,4 +1,4 @@
-import { useContext } from 'react';
+import { useState, useContext } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
 
 function buildDateStrip() {
@@ -17,31 +17,122 @@ function buildDateStrip() {
   return `${day} · ${mon} ${date} · ${year} · WEEK ${week}`;
 }
 
-const FOREMAN_PAGES = [
-  { key: 'Read Me' },
-  { key: 'Dashboard' },
-  { key: 'Calendar' },
-  { key: 'Floor Plan' },
-  { key: 'Inventory' },
-  { key: 'Maintenance' },
-  { key: 'Services' },
-  { key: 'Chores' },
-  { key: 'To Dos' },
-  { key: 'Projects' },
-  { key: 'Lifecycle' },
-  { key: 'Notebook' },
-  { key: 'Preferences' },
+// Grouped navigation. Each group becomes a dropdown menu; singles render as
+// direct buttons; meta pages sit apart on the right.
+const NAV_GROUPS = [
+  { label: 'Overview', pages: ['Dashboard', 'Calendar'] },
+  { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Lifecycle'] },
+  { label: 'Upkeep',   pages: ['Maintenance', 'Services', 'Utilities', 'Supplies', 'Chores'] },
+  { label: 'Work',     pages: ['To Dos', 'Projects'] },
 ];
+const NAV_DIRECT = ['Notebook'];
+const NAV_META   = ['Read Me', 'Preferences'];
 
 function readOnlineMode() {
   try { return JSON.parse(localStorage.getItem('foreman-online-mode') ?? 'false'); }
   catch { return false; }
 }
 
+function GearIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }} aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+const triggerStyle = (active) => ({
+  padding: '5px 10px',
+  borderRadius: 3,
+  border: `1px solid ${active ? 'var(--fm-brass)' : 'var(--fm-hairline)'}`,
+  background: active ? 'var(--fm-brass-bg)' : 'transparent',
+  color: active ? 'var(--fm-brass)' : 'var(--fm-ink-dim)',
+  fontFamily: 'var(--fm-mono)',
+  fontSize: 10.5,
+  letterSpacing: '0.10em',
+  textTransform: 'uppercase',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  transition: 'color 0.15s',
+});
+
+function NavGroup({ group, currentActive, open, setOpen, navigate }) {
+  const isOpen = open === group.label;
+  const groupActive = group.pages.includes(currentActive);
+
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onMouseEnter={() => setOpen(group.label)}
+      onMouseLeave={() => setOpen(o => (o === group.label ? null : o))}
+    >
+      <button
+        onClick={() => setOpen(isOpen ? null : group.label)}
+        style={{ ...triggerStyle(groupActive || isOpen), alignItems: 'center', display: 'inline-flex', gap: 4 }}
+      >
+        {group.label}
+        <span style={{ fontSize: 8, opacity: 0.7, transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.12s' }}>▾</span>
+      </button>
+
+      {isOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            marginTop: 0,
+            minWidth: 150,
+            background: 'var(--fm-bg-raised)',
+            border: '1px solid var(--fm-hairline2)',
+            borderRadius: 4,
+            boxShadow: '0 8px 24px #00000055',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1,
+            padding: 4,
+            zIndex: 60,
+          }}
+        >
+          {group.pages.map((page) => {
+            const isActive = page === currentActive;
+            return (
+              <button
+                key={page}
+                onClick={() => { setOpen(null); if (!isActive) navigate(page); }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 3,
+                  border: 'none',
+                  background: isActive ? 'var(--fm-brass-bg)' : 'transparent',
+                  color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-dim)',
+                  fontFamily: 'var(--fm-mono)',
+                  fontSize: 10.5,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  textAlign: 'left',
+                  cursor: isActive ? 'default' : 'pointer',
+                  whiteSpace: 'nowrap',
+                  transition: 'color 0.12s, background 0.12s',
+                }}
+                onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.color = 'var(--fm-ink)'; e.currentTarget.style.background = 'var(--fm-bg-panel)'; } }}
+                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.color = 'var(--fm-ink-dim)'; e.currentTarget.style.background = 'transparent'; } }}
+              >
+                {page}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline = 'your house, in order' }) {
   const nav = useContext(FmNavContext);
   const currentActive = active || nav.current;
   const onlineMode = readOnlineMode();
+  const [open, setOpen] = useState(null);
 
   return (
     <header
@@ -80,6 +171,7 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
           <span style={{ color: 'var(--fm-brass-dim)', fontStyle: 'italic' }}>{tagline}</span>
         </h1>
       </div>
+
       <nav style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {onlineMode && (
           <div style={{ alignItems: 'center', display: 'flex', gap: '0.3rem', marginRight: '0.5rem' }}>
@@ -87,33 +179,57 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
             <span style={{ color: 'var(--fm-green)', fontFamily: 'var(--fm-mono)', fontSize: 9.5, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Online</span>
           </div>
         )}
-        {FOREMAN_PAGES.map((p) => {
-          const isActive = p.key === currentActive;
+
+        {NAV_GROUPS.map((group) => (
+          <NavGroup key={group.label} group={group} currentActive={currentActive} open={open} setOpen={setOpen} navigate={nav.navigate} />
+        ))}
+
+        {NAV_DIRECT.map((page) => {
+          const isActive = page === currentActive;
           return (
             <button
-              key={p.key}
-              onClick={() => !isActive && nav.navigate(p.key)}
+              key={page}
+              onClick={() => !isActive && nav.navigate(page)}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink-dim)'; }}
+              style={{ ...triggerStyle(isActive), cursor: isActive ? 'default' : 'pointer' }}
+            >
+              {page}
+            </button>
+          );
+        })}
+
+        <span style={{ background: 'var(--fm-hairline)', height: 16, margin: '0 3px', width: 1 }} />
+
+        {NAV_META.map((page) => {
+          const isActive = page === currentActive;
+          const isGear = page === 'Preferences';
+          return (
+            <button
+              key={page}
+              onClick={() => !isActive && nav.navigate(page)}
+              title={page}
+              aria-label={page}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink-dim)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink-mute)'; }}
               style={{
-                padding: '5px 10px',
+                alignItems: 'center',
+                display: 'inline-flex',
+                padding: isGear ? '5px 6px' : '5px 8px',
                 borderRadius: 3,
-                border: `1px solid ${isActive ? 'var(--fm-brass)' : 'var(--fm-hairline)'}`,
+                border: `1px solid ${isActive ? 'var(--fm-brass)' : 'transparent'}`,
                 background: isActive ? 'var(--fm-brass-bg)' : 'transparent',
-                color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-dim)',
+                color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-mute)',
                 fontFamily: 'var(--fm-mono)',
-                fontSize: 10.5,
-                letterSpacing: '0.10em',
+                fontSize: 10,
+                letterSpacing: '0.08em',
                 textTransform: 'uppercase',
                 cursor: isActive ? 'default' : 'pointer',
+                whiteSpace: 'nowrap',
                 transition: 'color 0.15s',
               }}
-              onMouseEnter={(e) => {
-                if (!isActive) e.currentTarget.style.color = 'var(--fm-ink)';
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) e.currentTarget.style.color = 'var(--fm-ink-dim)';
-              }}
             >
-              {p.key}
+              {isGear ? <GearIcon /> : page}
             </button>
           );
         })}

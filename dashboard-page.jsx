@@ -2,6 +2,8 @@ import { useState, useMemo, forwardRef } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { toMonthly } from "./lib/services.js";
 import { buildRoster, computeForecast, computeReserve, computeInvested } from "./lib/lifecycleStats.js";
+import { buildSupplyRows } from "./lib/supplies.js";
+import { monthlyUtilitiesTotal } from "./lib/utilities.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -155,6 +157,10 @@ export default function DashboardPage({ navigate }) {
     return { value: "$" + Math.round(invested.total), color: "var(--fm-brass)", sub: `${invested.priced} items priced` };
   }, [itemFieldValues, inventory]);
 
+  const supplies = useForemanStore(s => s.supplies);
+  const utilData = useForemanStore(s => s.utilities);
+  const monthlyUtil = useMemo(() => monthlyUtilitiesTotal(utilData), [utilData]);
+
   // ── Mutable state ────────────────────────────────────────────────────────────
   const [nextDatesMap, setNextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
   const [completedDatesMap, setCompletedDatesMap] = useState(() => storageGet("maintenance-dates") ?? {});
@@ -167,6 +173,12 @@ export default function DashboardPage({ navigate }) {
 
   function handleTodoSort(col) { setTodoSort(s => ({ col, dir: s.col === col && s.dir === "asc" ? "desc" : "asc" })); }
   function handleProjSort(col) { setProjSort(s => ({ col, dir: s.col === col && s.dir === "asc" ? "desc" : "asc" })); }
+
+  const suppliesToBuy = useMemo(
+    () => buildSupplyRows(itemFieldValues, inventory, nextDatesMap, supplies)
+      .filter(r => r.status === "out" || r.status === "low").length,
+    [itemFieldValues, inventory, nextDatesMap, supplies]
+  );
 
   // ── Derived: maintenance ─────────────────────────────────────────────────────
   const activeRows = useMemo(() =>
@@ -453,7 +465,7 @@ export default function DashboardPage({ navigate }) {
       <div style={{ flex: 1, overflowY: "auto", padding: "var(--fm-spacing-5xl)" }}>
 
         {/* Top row: health dial · stat summary · triage · systems · rooms */}
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "180px 180px 1.2fr 1fr 1fr", marginBottom: "1rem" }}>
+        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "130px 250px 1.2fr 1fr 1fr", marginBottom: "1rem" }}>
 
           <CircleHealthDial score={healthScore} />
 
@@ -468,6 +480,8 @@ export default function DashboardPage({ navigate }) {
               { label: "Chores",   value: upcomingChores.length,color: upcomingChores.length > 0 ? "var(--fm-amber)" : "var(--fm-ink-dim)", sub: "due this week",                                                                             nav: () => navigate("chores") },
               { label: "To Dos",   value: openTodosCount,       color: "var(--fm-ink-mute)",                                              sub: `${todoStatusCounts["in-progress"]} in progress`,                                               nav: () => navigate("board") },
               { label: "Services", value: "$" + Math.round(monthlyServices), color: "var(--fm-cyan)", sub: `${activeServices.length} active /mo`, nav: () => navigate("services") },
+              { label: "Utilities", value: "$" + Math.round(monthlyUtil), color: "var(--fm-cyan)", sub: "/mo est", nav: () => navigate("utilities") },
+              { label: "Supplies", value: suppliesToBuy, color: suppliesToBuy > 0 ? "var(--fm-amber)" : "var(--fm-ink-mute)", sub: suppliesToBuy > 0 ? "to buy" : "stocked up", nav: () => navigate("supplies") },
               { label: "Lifecycle", value: lifecycleStat.value, color: lifecycleStat.color, sub: lifecycleStat.sub, nav: () => navigate("lifecycle") },
             ].map(s => (
               <button key={s.label} onClick={s.nav}
