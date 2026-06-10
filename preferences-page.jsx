@@ -574,6 +574,23 @@ function ProfileSettings() {
             </div>
           </div>
         </label>
+
+        <div style={{ marginTop: "1rem" }}>
+          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", marginBottom: "0.45rem", textTransform: "uppercase" }}>
+            Deactivated in Offline Mode
+          </div>
+          <ul style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", lineHeight: 1.6, margin: 0, paddingLeft: "1.1rem" }}>
+            <li style={{ marginBottom: "0.3rem" }}>
+              <span style={{ color: "var(--fm-ink)" }}>Discord reminders</span> — daily reminder digests sent to your webhook
+            </li>
+            <li style={{ marginBottom: "0.3rem" }}>
+              <span style={{ color: "var(--fm-ink)" }}>AI Inspection</span> — photo-based home analysis via an external AI service
+            </li>
+            <li>
+              <span style={{ color: "var(--fm-ink)" }}>All outbound network requests</span> — nothing leaves your device
+            </li>
+          </ul>
+        </div>
       </div>
 
     </div>

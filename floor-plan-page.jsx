@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import { FloorPlan } from "./inventory-page.jsx";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides, defaultData } from "./lib/data.js";
 import { loadDeletedCategories, saveDeletedCategories } from "./lib/deletedCategories.js";
@@ -22,6 +23,7 @@ export default function FloorPlanPage({ navigate }) {
   const [deletedItems, setDeletedItems] = useState(() => loadDeletedItems());
   const [categoryTypeOverrides, setCategoryTypeOverrides] = useState(() => loadCategoryTypeOverrides());
   const [entityTypeData] = useState(() => loadEntityTypes());
+  const [confirmCategory, setConfirmCategory] = useState(null);
 
   const defaultCategoryTypes = useMemo(() => {
     const map = {};
@@ -171,7 +173,12 @@ export default function FloorPlanPage({ navigate }) {
   }
 
   function handleDeleteCategory(category) {
-    if (!window.confirm(`Delete "${category}"? This cannot be undone.`)) return;
+    setConfirmCategory(category);
+  }
+
+  function performDeleteCategory() {
+    const category = confirmCategory;
+    if (!category) return;
     const isDefault = rows.some(r => r.category === category && !r._isCustom);
     if (isDefault) {
       const deleted = loadDeletedCategories();
@@ -182,6 +189,7 @@ export default function FloorPlanPage({ navigate }) {
       saveCustomData(customs.filter(r => r.category !== category));
     }
     reloadAll();
+    setConfirmCategory(null);
   }
 
   function handleFieldChange(category, item, fieldId, value) {
@@ -275,6 +283,13 @@ export default function FloorPlanPage({ navigate }) {
         onRenameLinkedItem={handleRenameLinkedItem}
         reverseItemKeyMap={reverseItemKeyMap}
         onSelectItem={handleZoneItemSelect}
+      />
+      <ConfirmDialog
+        open={!!confirmCategory}
+        title="Delete category"
+        message={`Delete "${confirmCategory}"? This cannot be undone.`}
+        onConfirm={performDeleteCategory}
+        onCancel={() => setConfirmCategory(null)}
       />
     </div>
   );

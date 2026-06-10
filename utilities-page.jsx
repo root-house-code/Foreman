@@ -400,6 +400,8 @@ export default function UtilitiesPage({ navigate }) {
   const [billUtil, setBillUtil]         = useState(null);     // utility to log a bill for (null = general)
   const [billFromHistory, setBillFromHistory] = useState(false);
   const [editBill, setEditBill]         = useState(null);     // { bill, utility }
+  const [confirmDeleteUtilId, setConfirmDeleteUtilId] = useState(null);
+  const [confirmDeleteBillId, setConfirmDeleteBillId] = useState(null);
 
   // Categories present in data
   const presentTypes = useMemo(() => {
@@ -466,9 +468,9 @@ export default function UtilitiesPage({ navigate }) {
     setEditUtil(null);
   }
   function handleDeleteUtility(id) {
-    if (!window.confirm("Delete this utility and all its bills?")) return;
-    deleteUtility(id);
+    deleteUtility(id); // lib deleteUtility also prunes all of this utility's bills
     if (expandedId === id) setExpandedId(null);
+    setConfirmDeleteUtilId(null);
   }
   function handleSaveBill(obj) {
     if (editBill) { updateBill(obj.id, obj); setEditBill(null); }
@@ -477,8 +479,8 @@ export default function UtilitiesPage({ navigate }) {
     setBillFromHistory(false);
   }
   function handleDeleteBill(id) {
-    if (!window.confirm("Delete this bill?")) return;
     deleteBill(id);
+    setConfirmDeleteBillId(null);
   }
   function openEditBill(bill) {
     const util = utilData?.utilities?.[bill.utilityId] ?? null;
@@ -595,8 +597,18 @@ export default function UtilitiesPage({ navigate }) {
                           </span>
                         </td>
                         <td style={{ ...tdCell, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
-                          <button style={{ ...btnGhost, fontSize: "0.62rem", padding: "0.2rem 0.5rem", marginRight: "0.35rem" }} onClick={() => setEditUtil(util)}>Edit</button>
-                          <button style={{ ...btnDanger, fontSize: "0.62rem", padding: "0.2rem 0.5rem" }} onClick={() => handleDeleteUtility(util.id)}>✕</button>
+                          {confirmDeleteUtilId === util.id ? (
+                            <>
+                              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginRight: "0.4rem" }}>Delete + bills?</span>
+                              <button style={{ ...btnDanger, fontSize: "0.62rem", padding: "0.2rem 0.5rem", marginRight: "0.35rem" }} onClick={() => handleDeleteUtility(util.id)}>Yes</button>
+                              <button style={{ ...btnGhost, fontSize: "0.62rem", padding: "0.2rem 0.5rem" }} onClick={() => setConfirmDeleteUtilId(null)}>No</button>
+                            </>
+                          ) : (
+                            <>
+                              <button style={{ ...btnGhost, fontSize: "0.62rem", padding: "0.2rem 0.5rem", marginRight: "0.35rem" }} onClick={() => setEditUtil(util)}>Edit</button>
+                              <button style={{ ...btnDanger, fontSize: "0.62rem", padding: "0.2rem 0.5rem" }} onClick={() => setConfirmDeleteUtilId(util.id)} title="Delete utility and all its bills">✕</button>
+                            </>
+                          )}
                         </td>
                       </tr>
 
@@ -630,8 +642,18 @@ export default function UtilitiesPage({ navigate }) {
                                       <td style={{ ...tdCell, fontSize: "0.68rem", whiteSpace: "nowrap" }}>{b.dueDate ? fmtDate(b.dueDate) : "—"}</td>
                                       <td style={{ ...tdCell, fontSize: "0.68rem" }}>{b.paid ? <span style={{ color: "var(--fm-green)" }}>✓</span> : "—"}</td>
                                       <td style={{ ...tdCell, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
-                                        <button style={{ ...btnGhost, fontSize: "0.58rem", padding: "0.15rem 0.4rem", marginRight: "0.3rem" }} onClick={() => openEditBill(b)}>Edit</button>
-                                        <button style={{ ...btnDanger, fontSize: "0.58rem", padding: "0.15rem 0.4rem" }} onClick={() => handleDeleteBill(b.id)}>✕</button>
+                                        {confirmDeleteBillId === b.id ? (
+                                          <>
+                                            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", marginRight: "0.35rem" }}>Delete?</span>
+                                            <button style={{ ...btnDanger, fontSize: "0.58rem", padding: "0.15rem 0.4rem", marginRight: "0.3rem" }} onClick={() => handleDeleteBill(b.id)}>Yes</button>
+                                            <button style={{ ...btnGhost, fontSize: "0.58rem", padding: "0.15rem 0.4rem" }} onClick={() => setConfirmDeleteBillId(null)}>No</button>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <button style={{ ...btnGhost, fontSize: "0.58rem", padding: "0.15rem 0.4rem", marginRight: "0.3rem" }} onClick={() => openEditBill(b)}>Edit</button>
+                                            <button style={{ ...btnDanger, fontSize: "0.58rem", padding: "0.15rem 0.4rem" }} onClick={() => setConfirmDeleteBillId(b.id)} title="Delete this bill">✕</button>
+                                          </>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}

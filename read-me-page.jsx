@@ -133,8 +133,8 @@ const PAGES = [
   ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set frequency, and mark them done as you go. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
-  ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and normalizes recurring service spend into an annual figure. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
-  ["Notebook", "A knowledge base for your home. Articles and notes organized by system: a place to document how something works, what product you used, lessons from a past repair, or reference material for a future project."],
+  ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and combines recurring service and utility spend with logged repairs into an annual cost of ownership. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
+  ["Notebook", "The home's record, in two tabs. The Notebook tab is a knowledge base — articles and notes organized by system: how something works, what product you used, lessons from a past repair. The Journal tab is an automatic, reverse-chronological feed of everything that has happened to the house — completed maintenance, chores, service visits, utility bills, expenses, and projects — grouped by month and filterable by type, area, and person, drawn entirely from logs you already create. Click any entry to jump to its source."],
   ["Preferences", "Configure the structure of your home: floors, rooms, entity types, and application settings. The definitions here shape how data is organized across all other pages."],
 ];
 
@@ -272,7 +272,7 @@ function ArchTab() {
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Every page uses the same two layout components as its shell: FmHeader (the top bar with navigation) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
+          Every page uses the same two layout components as its shell: FmHeader (the top bar, whose pages are organized into grouped dropdown menus — Overview, Property, Upkeep, Work — with Notebook and the meta links beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           A single Zustand store in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/store.js</span> serves as the authoritative source for all cross-page data. Pages subscribe to named slices of the store using selector functions; when a write happens in one place, every subscribed page updates automatically. Each store action persists its change to IndexedDB in the same operation — there is no separate "save" step. The store is seeded from IndexedDB at startup and can be fully reloaded after profile switches or bulk imports via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>reloadAll()</span>.
@@ -386,10 +386,12 @@ const ROADMAP_SECTIONS = [
   { id: "road-mobile",   label: "Mobile App" },
   { id: "road-ha",       label: "Home Assistant" },
   { id: "road-gcal",     label: "Google Calendar" },
-  { id: "road-notebook",  label: "Notebook Overhaul" },
+  { id: "road-notebook",  label: "Notebook Articles" },
   { id: "road-vault",     label: "Document Vault" },
   { id: "road-handoff",   label: "Handoff Export" },
   { id: "road-furniture", label: "Furniture Planning" },
+  { id: "road-household", label: "Household & Assignments" },
+  { id: "road-emergency", label: "Emergency Reference" },
   { id: "road-advisor",   label: "AI Advisor" },
 ];
 
@@ -445,7 +447,24 @@ function RoadmapTab() {
         </p>
       </ArchSection>
 
-      <ArchSection id="road-notebook" label="Notebook Overhaul" heading="Notebook Overhaul: improved article organization, updatable item details" sectionRefs={sectionRefs}>
+      <ArchSection id="road-notebook" label="Notebook Articles" heading="Notebook Overhaul: Article Refinements" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          The Journal half of this overhaul has shipped — the Notebook now carries an automatic activity timeline alongside its articles. What remains is bringing the reference half, the Articles tab, up to the same standard.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Better organization", "Group and reorder articles beyond the current system tree — by room, by recency, or by your own arrangement — so the knowledge you reach for most is easiest to find."],
+            ["Updatable item details", "Edit an item's specs and details directly from its article, keeping the reference and the inventory record in sync without bouncing between pages."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
       </ArchSection>
 
       <ArchSection id="road-vault" label="Documents" heading="Document Vault" sectionRefs={sectionRefs}>
@@ -495,6 +514,50 @@ function RoadmapTab() {
       <ArchSection id="road-furniture" label="Furniture" heading="Furniture Planning" sectionRefs={sectionRefs}>
       </ArchSection>
 
+      <ArchSection id="road-household" label="Household" heading="Household & Assignments" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman is single-user today, but a home is run by a household. Chores and maintenance already record who completed the work — this builds that latent data into a first-class people model so the load can be shared and seen.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Household roster", "Define the people in your home, then assign chores, maintenance tasks, and to-dos to them. Assignment becomes a real relationship rather than a free-text name."],
+            ["Per-person workload", "See what each member owns and has completed, so the work can be balanced rather than silently falling on one person."],
+            ["Rotations", "Round-robin schedules for shared recurring chores — whose turn it is to take out the trash or clean the bathroom, advanced automatically as each occurrence is logged."],
+            ["Accountability log", "The existing “who completed it” records on chores and maintenance roll up into a per-person history of contributions."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-emergency" label="Emergency" heading="Emergency Quick-Reference" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          When something fails — a burst pipe, a gas smell, a tripped main — you need critical information immediately, not a search. A dedicated emergency view surfaces it in one tap, drawn almost entirely from data Foreman already holds.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Shutoffs at a glance", "Water main, gas, and electrical panel locations pinned on the floor plan — shutoff valves are already inventory items, so they just need surfacing front-and-center."],
+            ["Emergency contacts", "Your plumber, electrician, and HVAC providers pulled from Services, each one tap to call when it matters."],
+            ["What-to-do guides", "Concise, calm steps for common emergencies: no power, no water, gas smell, active leak, frozen pipes."],
+            ["Critical specs", "Panel amperage, water-heater and main-valve type, fuel shutoffs — the numbers you can never find in a crisis, surfaced without digging."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
       <ArchSection id="road-advisor" label="AI" heading="AI-Powered Home Advisor" sectionRefs={sectionRefs}>
         <p style={bodyText}>
           A conversational AI advisor is planned as a dedicated page in Foreman, trained on trade knowledge across the major disciplines of residential construction and systems: HVAC, plumbing, electrical, roofing, structural, insulation, and finish work. The advisor is current on applicable building codes and standard maintenance intervals.
@@ -514,6 +577,23 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
+    date: "June 9, 2026",
+    heading: "Home Journal",
+    bullets: [
+      ["Unified activity feed", "The Notebook page gains a Journal tab — a single reverse-chronological record of everything that has happened to the house, assembled automatically from completed maintenance, chore completions, service visits, utility bills, logged expenses, and projects. No new data entry; it reads logs you already create."],
+      ["Filter, search, and jump", "Narrow the feed by type, area (system or room), or person — surfacing the previously-hidden “who did it” data — search across it, and click any entry to jump to its source page."],
+      ["The story of the house", "Grouped by month and sorted newest-first, it's the backward-looking companion to the Calendar and the backbone of the planned Handoff Export."],
+    ],
+  },
+  {
+    date: "June 9, 2026",
+    heading: "Reliable Delete Confirmations",
+    bullets: [
+      ["Fixed dead delete buttons", "Delete actions that relied on the browser's native confirmation dialog — which is disabled in the desktop and IDE app shells, so the buttons silently did nothing — now use in-app confirmation that works everywhere."],
+      ["Consistent everywhere", "Service, utility, and bill deletions confirm inline on the row (“Delete? Yes / No”), and category and room deletions use a shared confirmation dialog. Each still removes its child records — a service's visits, a utility's bills."],
+    ],
+  },
+  {
     date: "June 8, 2026",
     heading: "Utilities Tracker",
     bullets: [
@@ -526,7 +606,7 @@ const UPDATES = [
     date: "June 8, 2026",
     heading: "Grouped Navigation",
     bullets: [
-      ["Menu-bar nav", "The top navigation now collects its pages into a few dropdown menus — Overview, Property, Upkeep, and Work — instead of a long flat row of buttons. Notebook stays a direct button, and Read Me / Preferences sit apart as quieter meta links."],
+      ["Menu-bar nav", "The top navigation now collects its pages into a few dropdown menus — Overview, Property, Upkeep, and Work — instead of a long flat row of buttons. Notebook stays a direct button, Read Me / Preferences sit apart as quieter meta links, and Preferences shows as a gear icon."],
       ["Context at a glance", "The menu holding the page you're on highlights in brass, so you always know which section you're in. Menus open on hover and the active page is marked inside."],
     ],
   },

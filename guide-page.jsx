@@ -15,6 +15,10 @@ import { loadItemDetails } from "./lib/itemDetails.js";
 import { loadCategoryFieldSchemas, loadItemFieldSchemas } from "./lib/customFields.js";
 import { useForemanStore } from "./lib/store.js";
 import { loadGuideNotes, saveGuideNotes } from "./lib/guideNotes.js";
+import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
+import { loadChoreCompletionRecords } from "./lib/choreCompletions.js";
+import { buildJournal } from "./lib/journal.js";
+import JournalView from "./components/JournalView.jsx";
 
 const EDITOR_STYLES = `
 .foreman-note-editor .ProseMirror {
@@ -225,6 +229,22 @@ export default function GuidePage({ navigate }) {
   const [notes, setNotes]      = useState(() => loadGuideNotes());
   const [roomSubtypes]         = useState(() => loadRoomSubtypes());
 
+  // ── Tabs: Notebook (reference) | Journal (activity timeline) ──────────────────
+  const [tab, setTab] = useState("Notebook");
+
+  const chores    = useForemanStore(s => s.chores);
+  const services  = useForemanStore(s => s.services);
+  const utilities = useForemanStore(s => s.utilities);
+  const expenses  = useForemanStore(s => s.expenses);
+  const projects  = useForemanStore(s => s.projects);
+  const [maintenanceRecords] = useState(() => loadMaintenanceCompletionRecords());
+  const [choreRecords]       = useState(() => loadChoreCompletionRecords());
+
+  const journalEvents = useMemo(
+    () => buildJournal({ maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects }),
+    [maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects]
+  );
+
   const useDefaultData = useMemo(() => loadUseDefaultData(), []);
 
   const grouped = useMemo(() => {
@@ -324,16 +344,22 @@ export default function GuidePage({ navigate }) {
 
       <FmHeader active="Notebook" tagline="Notebook" />
       <FmSubnav
-        tabs={["Articles", "By system", "By item", "Drafts", "Guide"]}
-        active="By system"
-        stats={[
-          { value: grouped.reduce((n, g) => n + g.items.length, 0), label: "items" },
-          { value: grouped.length, label: "systems" },
-          { value: articlesWithNotes, color: "var(--fm-brass)", label: "articles" },
-        ]}
+        tabs={["Notebook", "Journal"]}
+        active={tab}
+        onTabChange={setTab}
+        stats={tab === "Journal"
+          ? [{ value: journalEvents.length, label: "entries", color: "var(--fm-brass)" }]
+          : [
+              { value: grouped.reduce((n, g) => n + g.items.length, 0), label: "items" },
+              { value: grouped.length, label: "systems" },
+              { value: articlesWithNotes, color: "var(--fm-brass)", label: "articles" },
+            ]
+        }
       />
 
-      {!useDefaultData && grouped.length === 0 && (
+      {tab === "Journal" && <JournalView events={journalEvents} navigate={navigate} />}
+
+      {tab === "Notebook" && !useDefaultData && grouped.length === 0 && (
         <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", justifyContent: "center", padding: "4rem 2rem" }}>
           <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.2em", marginBottom: "0.75rem", textTransform: "uppercase" }}>Guide</div>
           <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.1rem", marginBottom: "0.5rem" }}>Your guide is empty</div>
@@ -343,7 +369,7 @@ export default function GuidePage({ navigate }) {
         </div>
       )}
 
-      {(useDefaultData || grouped.length > 0) && (
+      {tab === "Notebook" && (useDefaultData || grouped.length > 0) && (
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
           {/* Left panel: article tree */}

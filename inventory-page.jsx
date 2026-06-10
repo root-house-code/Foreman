@@ -5,6 +5,7 @@ import DatePicker from "react-datepicker";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import Tooltip from "./components/Tooltip.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { createProject } from "./lib/projects.js";
@@ -425,6 +426,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const storeProjects = useForemanStore(s => s.projects);
   const [activeLevel, setActiveLevel] = useState(() => getFloorsInOrder()[0]?.id || "lvl-1");
   const [selected, setSelected] = useState(null);
+  const [confirmRoomId, setConfirmRoomId] = useState(null);
   const [dragging, setDragging] = useState(null);
   const [editingLevelId, setEditingLevelId] = useState(null);
   const [editingPanelName, setEditingPanelName] = useState(false);
@@ -795,8 +797,12 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   }
 
   function handleDeleteRoom(roomId) {
-    const room = rooms[roomId];
-    if (!window.confirm(`Delete "${room?.label || "this room"}"? All item assignments will be cleared.`)) return;
+    setConfirmRoomId(roomId);
+  }
+
+  function performDeleteRoom() {
+    const roomId = confirmRoomId;
+    if (!roomId) return;
     useForemanStore.getState().deleteRoom(roomId);
     const d = fpDataRef.current;
     const lvl = activeLevelRef.current;
@@ -807,6 +813,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     }
     save({ ...d, placements: { ...d.placements, [lvl]: restPlacements }, pins: nextPins });
     setSelected(null);
+    setConfirmRoomId(null);
   }
 
   function addToCanvas(cat) {
@@ -2772,6 +2779,13 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
               >Delete Room</button>
             </div>
+            <ConfirmDialog
+              open={!!confirmRoomId}
+              title="Delete room"
+              message={`Delete "${rooms[confirmRoomId]?.label || "this room"}"? All item assignments will be cleared.`}
+              onConfirm={performDeleteRoom}
+              onCancel={() => setConfirmRoomId(null)}
+            />
           </>
         ) : (
           <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>

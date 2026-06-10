@@ -387,6 +387,8 @@ export default function ServicesPage({ navigate }) {
   const [visitSvc, setVisitSvc]     = useState(null);    // service to log visit for (null = general)
   const [visitFromHistory, setVisitFromHistory] = useState(false);
   const [editVisit, setEditVisit]   = useState(null);    // { visit, service } being edited
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null); // service id pending delete confirm
+  const [confirmDeleteVisitId, setConfirmDeleteVisitId] = useState(null); // visit id pending delete confirm
 
   // ── Derived: categories present in data ──────────────────────────────────
   const presentCats = useMemo(() => {
@@ -460,9 +462,9 @@ export default function ServicesPage({ navigate }) {
   }
 
   function handleDeleteService(id) {
-    if (!window.confirm("Delete this service and all its visits?")) return;
-    deleteService(id);
+    deleteService(id); // lib deleteService also prunes all of this service's visits
     if (expandedId === id) setExpandedId(null);
+    setConfirmDeleteId(null);
   }
 
   function handleSaveVisit(visitObj) {
@@ -477,8 +479,8 @@ export default function ServicesPage({ navigate }) {
   }
 
   function handleDeleteVisit(id) {
-    if (!window.confirm("Delete this visit?")) return;
     deleteVisit(id);
+    setConfirmDeleteVisitId(null);
   }
 
   function openEditVisit(visit) {
@@ -618,14 +620,31 @@ export default function ServicesPage({ navigate }) {
                           </span>
                         </td>
                         <td style={{ ...tdCell, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
-                          <button
-                            style={{ ...btnGhost, fontSize: "0.62rem", padding: "0.2rem 0.5rem", marginRight: "0.35rem" }}
-                            onClick={() => setEditSvc(svc)}
-                          >Edit</button>
-                          <button
-                            style={{ ...btnDanger, fontSize: "0.62rem", padding: "0.2rem 0.5rem" }}
-                            onClick={() => handleDeleteService(svc.id)}
-                          >✕</button>
+                          {confirmDeleteId === svc.id ? (
+                            <>
+                              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginRight: "0.4rem" }}>Delete + visits?</span>
+                              <button
+                                style={{ ...btnDanger, fontSize: "0.62rem", padding: "0.2rem 0.5rem", marginRight: "0.35rem" }}
+                                onClick={() => handleDeleteService(svc.id)}
+                              >Yes</button>
+                              <button
+                                style={{ ...btnGhost, fontSize: "0.62rem", padding: "0.2rem 0.5rem" }}
+                                onClick={() => setConfirmDeleteId(null)}
+                              >No</button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                style={{ ...btnGhost, fontSize: "0.62rem", padding: "0.2rem 0.5rem", marginRight: "0.35rem" }}
+                                onClick={() => setEditSvc(svc)}
+                              >Edit</button>
+                              <button
+                                style={{ ...btnDanger, fontSize: "0.62rem", padding: "0.2rem 0.5rem" }}
+                                onClick={() => setConfirmDeleteId(svc.id)}
+                                title="Delete service and all its visits"
+                              >✕</button>
+                            </>
+                          )}
                         </td>
                       </tr>
 
@@ -666,14 +685,31 @@ export default function ServicesPage({ navigate }) {
                                         {v.overrideCost != null ? fmtCost(v.overrideCost) : fmtCost(svc.cost)}
                                       </td>
                                       <td style={{ ...tdCell, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
-                                        <button
-                                          style={{ ...btnGhost, fontSize: "0.58rem", padding: "0.15rem 0.4rem", marginRight: "0.3rem" }}
-                                          onClick={() => openEditVisit(v)}
-                                        >Edit</button>
-                                        <button
-                                          style={{ ...btnDanger, fontSize: "0.58rem", padding: "0.15rem 0.4rem" }}
-                                          onClick={() => handleDeleteVisit(v.id)}
-                                        >✕</button>
+                                        {confirmDeleteVisitId === v.id ? (
+                                          <>
+                                            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", marginRight: "0.35rem" }}>Delete?</span>
+                                            <button
+                                              style={{ ...btnDanger, fontSize: "0.58rem", padding: "0.15rem 0.4rem", marginRight: "0.3rem" }}
+                                              onClick={() => handleDeleteVisit(v.id)}
+                                            >Yes</button>
+                                            <button
+                                              style={{ ...btnGhost, fontSize: "0.58rem", padding: "0.15rem 0.4rem" }}
+                                              onClick={() => setConfirmDeleteVisitId(null)}
+                                            >No</button>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <button
+                                              style={{ ...btnGhost, fontSize: "0.58rem", padding: "0.15rem 0.4rem", marginRight: "0.3rem" }}
+                                              onClick={() => openEditVisit(v)}
+                                            >Edit</button>
+                                            <button
+                                              style={{ ...btnDanger, fontSize: "0.58rem", padding: "0.15rem 0.4rem" }}
+                                              onClick={() => setConfirmDeleteVisitId(v.id)}
+                                              title="Delete this visit"
+                                            >✕</button>
+                                          </>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}
