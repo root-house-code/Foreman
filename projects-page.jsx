@@ -67,7 +67,7 @@ function statusBadgeStyle(status) {
   return { background: "var(--fm-bg-raised)", border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-mute)", display: "inline-block", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.06em", padding: "0.1rem 0.35rem", textTransform: "uppercase" };
 }
 
-export default function ProjectsPage({ navigate }) {
+export default function ProjectsPage({ navigate, navState }) {
   const projects = useForemanStore(s => s.projects);
   const [todos, setTodos] = useState(() => loadTodos());
   const [selectedProjectId, setSelectedProjectId] = useState(null);
@@ -75,6 +75,11 @@ export default function ProjectsPage({ navigate }) {
   const [activeCategory, setActiveCategory] = useState("All");
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+
+  // Deep-link from the command palette: open the new-project input.
+  useEffect(() => {
+    if (navState?.openAdd) { setAddingProject(true); setNewProjectName(""); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [addingTodoToProject, setAddingTodoToProject] = useState(false);
   const [newTodoTitle, setNewTodoTitle] = useState("");
   const [expandedTodos, setExpandedTodos] = useState(() => new Set());

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { FIXED_UTILITY_TYPES, DEFAULT_UNIT, estimatedMonthly, monthlyUtilitiesTotal } from "./lib/utilities.js";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -373,7 +373,7 @@ function BillModal({ utility, initial, isEdit, onSave, onClose }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-export default function UtilitiesPage({ navigate }) {
+export default function UtilitiesPage({ navigate, navState }) {
   const utilData      = useForemanStore(s => s.utilities);
   const addUtility    = useForemanStore(s => s.addUtility);
   const updateUtility = useForemanStore(s => s.updateUtility);
@@ -391,6 +391,12 @@ export default function UtilitiesPage({ navigate }) {
   const [typeFilter, setTypeFilter]     = useState("ALL");
   const [search, setSearch]             = useState("");
   const [expandedId, setExpandedId]     = useState(null);
+
+  // Deep-link from the command palette: pre-fill search, or open the Log Bill modal.
+  useEffect(() => {
+    if (navState?.search != null) { setActiveTab("Utilities"); setStatusFilter("ALL"); setSearch(navState.search); }
+    if (navState?.openAdd) { setBillUtil(null); setBillFromHistory(true); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [histTypeFilter, setHistTypeFilter] = useState("ALL");
   const [histSearch, setHistSearch]         = useState("");

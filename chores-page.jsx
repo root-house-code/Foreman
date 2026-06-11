@@ -684,6 +684,7 @@ export default function ChoresPage({ navigate, navState }) {
   useEffect(() => {
     if (!navState) return;
     if (navState.search != null) setSearch(navState.search);
+    if (navState.openAdd) setAddChoreModalOpen(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rooms = useMemo(() => {

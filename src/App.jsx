@@ -34,6 +34,7 @@ import ServicesPage from "../services-page.jsx";
 import LifecyclePage from "../lifecycle-page.jsx";
 import SuppliesPage from "../supplies-page.jsx";
 import UtilitiesPage from "../utilities-page.jsx";
+import CommandPalette from "../components/CommandPalette.jsx";
 
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
@@ -81,13 +82,13 @@ export default function App() {
     if (page === "floorplan") return <FloorPlanPage navigate={navigate} />;
     if (page === "inventory") return <InventoryPage navigate={navigate} navState={navState} />;
     if (page === "dashboard") return <DashboardPage navigate={navigate} />;
-    if (page === "board") return <BoardPage navigate={navigate} />;
-    if (page === "projects") return <ProjectsPage navigate={navigate} />;
+    if (page === "board") return <BoardPage navigate={navigate} navState={navState} />;
+    if (page === "projects") return <ProjectsPage navigate={navigate} navState={navState} />;
     if (page === "guide") return <GuidePage navigate={navigate} />;
-    if (page === "services") return <ServicesPage navigate={navigate} />;
-    if (page === "utilities") return <UtilitiesPage navigate={navigate} />;
+    if (page === "services") return <ServicesPage navigate={navigate} navState={navState} />;
+    if (page === "utilities") return <UtilitiesPage navigate={navigate} navState={navState} />;
     if (page === "supplies") return <SuppliesPage navigate={navigate} />;
-    if (page === "lifecycle") return <LifecyclePage navigate={navigate} />;
+    if (page === "lifecycle") return <LifecyclePage navigate={navigate} navState={navState} />;
     if (page === "chores") return <ChoresPage navigate={navigate} navState={navState} />;
     if (page === "calendar") return <CalendarPage navigate={navigate} />;
     if (page === "preferences") return <PreferencesPage navigate={navigate} />;
@@ -99,6 +100,7 @@ export default function App() {
       <ErrorBoundary>
         {pageContent()}
       </ErrorBoundary>
+      <CommandPalette navigate={navigate} />
     </FmNavContext.Provider>
   );
 }

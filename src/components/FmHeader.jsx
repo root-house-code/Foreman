@@ -1,5 +1,9 @@
 import { useState, useContext } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
+import { openCommandPalette } from '../../lib/commandPalette.js';
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+const KBD_HINT = IS_MAC ? '⌘K' : 'Ctrl K';
 
 function buildDateStrip() {
   const now = new Date();
@@ -173,6 +177,17 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
       </div>
 
       <nav style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button
+          onClick={openCommandPalette}
+          title={`Search (${KBD_HINT})`}
+          style={{ alignItems: 'center', background: 'var(--fm-bg-sunk)', border: '1px solid var(--fm-hairline)', borderRadius: 3, color: 'var(--fm-ink-mute)', cursor: 'pointer', display: 'flex', fontFamily: 'var(--fm-mono)', fontSize: 10, gap: 6, marginRight: 6, padding: '5px 8px', transition: 'color 0.15s, border-color 0.15s' }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--fm-brass)'; e.currentTarget.style.color = 'var(--fm-ink-dim)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--fm-hairline)'; e.currentTarget.style.color = 'var(--fm-ink-mute)'; }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+          <span>Search</span>
+          <span style={{ background: 'var(--fm-bg-raised)', border: '1px solid var(--fm-hairline2)', borderRadius: 2, color: 'var(--fm-ink-mute)', fontSize: 8.5, letterSpacing: '0.04em', padding: '1px 4px' }}>{KBD_HINT}</span>
+        </button>
         {onlineMode && (
           <div style={{ alignItems: 'center', display: 'flex', gap: '0.3rem', marginRight: '0.5rem' }}>
             <span style={{ background: 'var(--fm-green)', borderRadius: '50%', display: 'inline-block', height: '5px', width: '5px' }} />

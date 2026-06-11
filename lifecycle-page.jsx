@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { toMonthly } from "./lib/services.js";
 import { monthlyUtilitiesTotal } from "./lib/utilities.js";
@@ -92,7 +92,7 @@ const sectionTitle = {
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
-export default function LifecyclePage({ navigate }) {
+export default function LifecyclePage({ navigate, navState }) {
   const [activeTab, setActiveTab] = useState("Cost of Ownership");
 
   const itemFieldValues = useForemanStore(s => s.itemFieldValues);
@@ -117,6 +117,11 @@ export default function LifecyclePage({ navigate }) {
     else addExpense({ id: "exp-" + Date.now(), ...payload });
     setExpenseForm(null);
   }
+
+  // Deep-link from the command palette: open the Add Expense form.
+  useEffect(() => {
+    if (navState?.openAdd) { setActiveTab("Cost of Ownership"); openAddExpense(); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Build the item roster (shared lib), then tag each with its display class ───
   const roster = useMemo(() => {

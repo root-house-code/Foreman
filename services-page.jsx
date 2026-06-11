@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { FIXED_SERVICE_CATEGORIES, toMonthly } from "./lib/services.js";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -356,7 +356,7 @@ function VisitModal({ service, initial, isEdit, onSave, onClose }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-export default function ServicesPage({ navigate }) {
+export default function ServicesPage({ navigate, navState }) {
   const svcData       = useForemanStore(s => s.services);
   const addService    = useForemanStore(s => s.addService);
   const updateService = useForemanStore(s => s.updateService);
@@ -376,6 +376,12 @@ export default function ServicesPage({ navigate }) {
   const [catFilter, setCatFilter]       = useState("ALL");
   const [search, setSearch]             = useState("");
   const [expandedId, setExpandedId]     = useState(null);
+
+  // Deep-link from the command palette: pre-fill search, or open the Add modal.
+  useEffect(() => {
+    if (navState?.search != null) { setActiveTab("Services"); setStatusFilter("ALL"); setSearch(navState.search); }
+    if (navState?.openAdd) setAddOpen(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── History tab filters ──────────────────────────────────────────────────
   const [histCatFilter, setHistCatFilter] = useState("ALL");

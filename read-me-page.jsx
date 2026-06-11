@@ -151,6 +151,9 @@ function InstructionsTab() {
         <p style={bodyText}>
           Foreman is a home management system built around the way homes actually work. It tracks the structure of your home (systems, categories, items, and tasks) and ties them together into a single, honest picture of where things stand. Whether you're logging a completed HVAC filter change, cataloging the specs of your appliances, or tracking a multi-week renovation project, Foreman keeps the record. It doesn't tell you how to run your home. It helps you see it clearly and act on what you find.
         </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          From anywhere in the app, press <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>⌘K</span> / <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Ctrl-K</span> — or click the Search box in the header — to open the command palette: a single search across every page, inventory item, maintenance task, chore, service, utility, and project, with quick actions to jump straight into common tasks.
+        </p>
       </div>
 
       <div ref={el => { sectionRefs.current["sec-pages"] = el; }} id="sec-pages" style={divider}>
@@ -269,7 +272,7 @@ function ArchTab() {
           Foreman has 15 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, lifecycle-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component.
+          Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component. A global Command Palette (⌘K / Ctrl-K, or the header search box) is mounted above the pages and indexes every page and entity for instant search and jump-to navigation.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Every page uses the same two layout components as its shell: FmHeader (the top bar, whose pages are organized into grouped dropdown menus — Overview, Property, Upkeep, Work — with Notebook and the meta links beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
@@ -392,6 +395,8 @@ const ROADMAP_SECTIONS = [
   { id: "road-furniture", label: "Furniture Planning" },
   { id: "road-household", label: "Household & Assignments" },
   { id: "road-emergency", label: "Emergency Reference" },
+  { id: "road-seasonal",  label: "Seasonal Playbooks" },
+  { id: "road-alerts",    label: "Alerts Inbox" },
   { id: "road-advisor",   label: "AI Advisor" },
 ];
 
@@ -558,6 +563,50 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
+      <ArchSection id="road-seasonal" label="Seasonal" heading="Seasonal Playbooks" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Homes run on seasons, and maintenance tasks already carry an optional season constraint — but nothing bundles seasonal work or reacts to actual conditions. Seasonal Playbooks bring the calendar of the seasons into the app, turning “I should probably winterize soon” into a scheduled, checked-off list.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Open / close checklists", "Curated spring and fall playbooks — gutter cleaning, hose-bib shutoff, HVAC changeover, detector battery checks, irrigation blow-out — scheduled as a set with a single tap rather than one task at a time."],
+            ["Weather-aware triggers", "In Online Mode, the local forecast surfaces time-sensitive work: shut off exterior water before the first freeze, service the AC before the first heat wave, clear gutters once the leaves have dropped."],
+            ["Regional timing", "Playbooks adapt to your climate — first and last frost dates, season lengths — so the prompts arrive at the right moment for where you actually live."],
+            ["Built on what's here", "Reuses the season field already on maintenance tasks and the existing Online Mode gate for the network calls, so the foundation is already in place."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-alerts" label="Alerts" heading="Alerts Inbox" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman already generates many signals — overdue tasks, warranties expiring, supplies running low, bills due, contract renewals — but they're scattered across Dashboard cards and individual pages. The Alerts Inbox gathers them into one prioritized place. It can stand on its own as a dedicated surface and, at the same time, extend and revamp the Dashboard's Triage panel rather than living entirely apart from it.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["One inbox, every signal", "Overdue maintenance and chores, warranties expiring, low or out-of-stock supplies, upcoming bill due dates, and service renewals — all in a single prioritized, filterable list instead of six separate corners of the app."],
+            ["Standalone, and a Triage revamp", "Lives as its own surface while the Dashboard Triage panel becomes the inbox's at-a-glance preview — the two share one engine rather than computing overlapping lists independently."],
+            ["Triage and dismiss", "Snooze, dismiss, or act on each alert inline — log it, reorder, pay — and carry an unread count in the header so nothing quietly slips."],
+            ["Built from existing derivations", "Reuses the overdue, warranty, low-supply, and renewal logic already computed across the Dashboard, Lifecycle, Supplies, Services, and Utilities pages — consolidation, not new calculation."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
       <ArchSection id="road-advisor" label="AI" heading="AI-Powered Home Advisor" sectionRefs={sectionRefs}>
         <p style={bodyText}>
           A conversational AI advisor is planned as a dedicated page in Foreman, trained on trade knowledge across the major disciplines of residential construction and systems: HVAC, plumbing, electrical, roofing, structural, insulation, and finish work. The advisor is current on applicable building codes and standard maintenance intervals.
@@ -576,6 +625,15 @@ function RoadmapTab() {
 // ─── Updates tab ──────────────────────────────────────────────────────────────
 
 const UPDATES = [
+  {
+    date: "June 10, 2026",
+    heading: "Command Palette & Global Search",
+    bullets: [
+      ["Jump to anything", "Press ⌘K / Ctrl-K — or click the new Search box in the header — to open a palette that searches across pages, inventory items, maintenance tasks, chores, services, utilities, and projects all at once, from anywhere in the app. Selecting a maintenance task, chore, service, or utility lands you on its page already filtered to it."],
+      ["Search and act", "Fuzzy matching (type “wh” for Water Heater), keyboard navigation (↑↓ to move, ↵ to open, esc to close), quick actions that land on the right page with its Add form already open (log a bill, add a chore, new project, log an expense, add a service, new to-do), and recently-used entries surfaced first."],
+      ["Built on what's there", "Reuses every page's existing data and the app's navigation — no new storage, and the header box advertises the keyboard shortcut so it's actually discoverable."],
+    ],
+  },
   {
     date: "June 9, 2026",
     heading: "Home Journal",

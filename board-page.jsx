@@ -243,12 +243,17 @@ function MaintenanceCompletionModal({ todo, rowDataByKey, onConfirm, onClose }) 
   );
 }
 
-export default function BoardPage({ navigate }) {
+export default function BoardPage({ navigate, navState }) {
   const [todos, setTodos] = useState(() => loadTodos());
   const projects = useForemanStore(s => s.projects);
   const chores   = useForemanStore(s => s.chores);
   const [modalState, setModalState] = useState(null);
   const [maintenanceCompletionTodo, setMaintenanceCompletionTodo] = useState(null);
+
+  // Deep-link from the command palette: open the new-to-do composer.
+  useEffect(() => {
+    if (navState?.openAdd) setModalState("new");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [dragging, setDragging] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
