@@ -3,7 +3,7 @@ import { useForemanStore } from "./lib/store.js";
 import { FIXED_UTILITY_TYPES, DEFAULT_UNIT, estimatedMonthly, monthlyUtilitiesTotal } from "./lib/utilities.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
-import { FilterPill } from "./components/FilterPill.jsx";
+import { FilterDropdown } from "./components/FilterPill.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -519,8 +519,11 @@ export default function UtilitiesPage({ navigate, navState }) {
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem", alignItems: "center" }}>
             <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "0.25rem", width: 44, flexShrink: 0 }}>Status</span>
-            <FilterPill active={statusFilter === "ACTIVE"} onClick={() => setStatusFilter("ACTIVE")}>Active</FilterPill>
-            <FilterPill active={statusFilter === "ALL"}    onClick={() => setStatusFilter("ALL")}>All</FilterPill>
+            <FilterDropdown
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={[{ value: "ACTIVE", label: "Active" }, { value: "ALL", label: "All" }]}
+            />
             <div style={{ flex: 1 }} />
             <button style={btnPrimary} onClick={() => setAddOpen(true)}>+ Add Utility</button>
           </div>
@@ -528,10 +531,11 @@ export default function UtilitiesPage({ navigate, navState }) {
           {presentTypes.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem", alignItems: "center" }}>
               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "0.25rem", width: 44, flexShrink: 0 }}>Type</span>
-              <FilterPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</FilterPill>
-              {presentTypes.map(t => (
-                <FilterPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{t}</FilterPill>
-              ))}
+              <FilterDropdown
+                value={typeFilter}
+                onChange={setTypeFilter}
+                options={[{ value: "ALL", label: "All" }, ...presentTypes.map(t => ({ value: t, label: t }))]}
+              />
             </div>
           )}
 
@@ -683,12 +687,11 @@ export default function UtilitiesPage({ navigate, navState }) {
         <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl)" }}>
 
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <FilterPill active={histTypeFilter === "ALL"} onClick={() => setHistTypeFilter("ALL")}>All</FilterPill>
-              {presentTypes.map(t => (
-                <FilterPill key={t} active={histTypeFilter === t} onClick={() => setHistTypeFilter(t)}>{t}</FilterPill>
-              ))}
-            </div>
+            <FilterDropdown
+              value={histTypeFilter}
+              onChange={setHistTypeFilter}
+              options={[{ value: "ALL", label: "All" }, ...presentTypes.map(t => ({ value: t, label: t }))]}
+            />
             <div style={{ flex: 1 }} />
             <button style={btnPrimary} onClick={() => { setBillUtil(null); setBillFromHistory(true); }}>+ Log Bill</button>
             <input

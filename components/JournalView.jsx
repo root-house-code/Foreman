@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { JOURNAL_TYPES } from "../lib/journal.js";
-import { FilterPill } from "./FilterPill.jsx";
+import { FilterDropdown } from "./FilterPill.jsx";
 
 const TYPE_META = {
   maintenance: { label: "Maintenance", color: "var(--fm-brass)" },
@@ -9,6 +9,7 @@ const TYPE_META = {
   utility:     { label: "Utility",     color: "var(--fm-cyan)" },
   expense:     { label: "Expense",     color: "var(--fm-amber)" },
   project:     { label: "Project",     color: "var(--fm-amber)" },
+  session:     { label: "Session",     color: "var(--fm-brass)" },
 };
 
 // Where clicking an event navigates (expenses live on the Lifecycle page).
@@ -19,6 +20,12 @@ const TYPE_TARGET = {
   utility:     "utilities",
   expense:     "lifecycle",
   project:     "projects",
+  session:     "workbench",
+};
+
+// Extra navigation state per type (sessions land on the Workbench History tab).
+const TYPE_NAV_STATE = {
+  session: { tab: "History" },
 };
 
 function fmtMoney(n) {
@@ -73,7 +80,7 @@ function JournalRow({ e, onNavigate }) {
   const target = onNavigate ? TYPE_TARGET[e.type] : null;
   return (
     <div
-      onClick={target ? () => onNavigate(target) : undefined}
+      onClick={target ? () => onNavigate(target, TYPE_NAV_STATE[e.type]) : undefined}
       title={target ? `Open ${meta.label}` : undefined}
       style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: target ? "pointer" : "default", display: "flex", gap: "0.85rem", padding: "0.5rem 0.4rem", transition: "background 0.12s" }}
       onMouseEnter={target ? e2 => { e2.currentTarget.style.background = "var(--fm-bg-raised)"; } : undefined}
@@ -146,20 +153,22 @@ export default function JournalView({ events = [], navigate }) {
       {/* Type filter */}
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem" }}>
         <span style={labelStyle}>Type</span>
-        <FilterPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</FilterPill>
-        {JOURNAL_TYPES.map(t => (
-          <FilterPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{TYPE_META[t].label}</FilterPill>
-        ))}
+        <FilterDropdown
+          value={typeFilter}
+          onChange={setTypeFilter}
+          options={[{ value: "ALL", label: "All" }, ...JOURNAL_TYPES.map(t => ({ value: t, label: TYPE_META[t].label }))]}
+        />
       </div>
 
       {/* Area filter (system ∪ room) */}
       {areas.length > 0 && (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem" }}>
           <span style={labelStyle}>Area</span>
-          <FilterPill active={areaFilter === "ALL"} onClick={() => setAreaFilter("ALL")}>All</FilterPill>
-          {areas.map(a => (
-            <FilterPill key={a} active={areaFilter === a} onClick={() => setAreaFilter(a)}>{a}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={areaFilter}
+            onChange={setAreaFilter}
+            options={[{ value: "ALL", label: "All" }, ...areas.map(a => ({ value: a, label: a }))]}
+          />
         </div>
       )}
 
@@ -167,10 +176,11 @@ export default function JournalView({ events = [], navigate }) {
       {persons.length > 0 && (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem" }}>
           <span style={labelStyle}>Person</span>
-          <FilterPill active={personFilter === "ALL"} onClick={() => setPersonFilter("ALL")}>All</FilterPill>
-          {persons.map(p => (
-            <FilterPill key={p} active={personFilter === p} onClick={() => setPersonFilter(p)}>{p}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={personFilter}
+            onChange={setPersonFilter}
+            options={[{ value: "ALL", label: "All" }, ...persons.map(p => ({ value: p, label: p }))]}
+          />
         </div>
       )}
 

@@ -3,7 +3,7 @@ import { useForemanStore } from "./lib/store.js";
 import { FIXED_SERVICE_CATEGORIES, toMonthly } from "./lib/services.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
-import { FilterPill } from "./components/FilterPill.jsx";
+import { FilterDropdown } from "./components/FilterPill.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -530,8 +530,11 @@ export default function ServicesPage({ navigate, navState }) {
           {/* Filter bar */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem", alignItems: "center" }}>
             <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "0.25rem", width: 44, flexShrink: 0 }}>Status</span>
-            <FilterPill active={statusFilter === "ACTIVE"} onClick={() => setStatusFilter("ACTIVE")}>Active</FilterPill>
-            <FilterPill active={statusFilter === "ALL"}    onClick={() => setStatusFilter("ALL")}>All</FilterPill>
+            <FilterDropdown
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={[{ value: "ACTIVE", label: "Active" }, { value: "ALL", label: "All" }]}
+            />
             <div style={{ flex: 1 }} />
             <button style={btnPrimary} onClick={() => setAddOpen(true)}>+ Add Service</button>
           </div>
@@ -539,10 +542,11 @@ export default function ServicesPage({ navigate, navState }) {
           {presentCats.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "0.6rem", alignItems: "center" }}>
               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: "0.25rem", width: 44, flexShrink: 0 }}>Category</span>
-              <FilterPill active={catFilter === "ALL"} onClick={() => setCatFilter("ALL")}>All</FilterPill>
-              {presentCats.map(c => (
-                <FilterPill key={c} active={catFilter === c} onClick={() => setCatFilter(c)}>{c}</FilterPill>
-              ))}
+              <FilterDropdown
+                value={catFilter}
+                onChange={setCatFilter}
+                options={[{ value: "ALL", label: "All" }, ...presentCats.map(c => ({ value: c, label: c }))]}
+              />
             </div>
           )}
 
@@ -739,12 +743,11 @@ export default function ServicesPage({ navigate, navState }) {
         <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl)" }}>
 
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <FilterPill active={histCatFilter === "ALL"} onClick={() => setHistCatFilter("ALL")}>All</FilterPill>
-              {presentCats.map(cat => (
-                <FilterPill key={cat} active={histCatFilter === cat} onClick={() => setHistCatFilter(cat)}>{cat}</FilterPill>
-              ))}
-            </div>
+            <FilterDropdown
+              value={histCatFilter}
+              onChange={setHistCatFilter}
+              options={[{ value: "ALL", label: "All" }, ...presentCats.map(cat => ({ value: cat, label: cat }))]}
+            />
             <div style={{ flex: 1 }} />
             <button style={btnPrimary} onClick={() => { setVisitSvc(null); setVisitFromHistory(true); }}>+ Log Visit</button>
             <input

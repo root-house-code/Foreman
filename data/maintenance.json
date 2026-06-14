@@ -828,21 +828,21 @@
   },
   {
     "category": "Basement & Crawl Space",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Basement Walls",
     "task": "Inspect for water intrusion or efflorescence",
     "schedule": "Annually"
   },
   {
     "category": "Basement & Crawl Space",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Crawl Space",
     "task": "Inspect vapor barrier and insulation",
     "schedule": "Annually"
   },
   {
     "category": "Basement & Crawl Space",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Dehumidifier",
     "itemType": "appliance",
     "task": "Empty reservoir; clean filter",
@@ -850,56 +850,56 @@
   },
   {
     "category": "Basement & Crawl Space",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Floor Drain",
     "task": "Pour water to maintain trap seal",
     "schedule": "Every 3 months"
   },
   {
     "category": "Basement & Crawl Space",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Water Proofing System",
     "task": "Inspect drains and pump",
     "schedule": "Annually"
   },
   {
     "category": "Attic",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Insulation",
     "task": "Inspect depth and condition",
     "schedule": "Every 5 years"
   },
   {
     "category": "Attic",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Ventilation",
     "task": "Inspect soffit and ridge vents for blockages",
     "schedule": "Annually"
   },
   {
     "category": "Attic",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Ventilation",
     "task": "Check for moisture, condensation or mold",
     "schedule": "Annually"
   },
   {
     "category": "Attic",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Structural Framing",
     "task": "Inspect rafters and sheathing for damage or rot",
     "schedule": "Every 5 years"
   },
   {
     "category": "Garage",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Garage Floor",
     "task": "Seal concrete or touch up epoxy",
     "schedule": "Every 3–5 years"
   },
   {
     "category": "Garage",
-    "categoryType": "room",
+    "categoryType": "exterior",
     "item": "Garage Ventilation",
     "task": "Clear vents of obstructions",
     "schedule": "Annually"

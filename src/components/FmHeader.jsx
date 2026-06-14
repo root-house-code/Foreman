@@ -27,7 +27,7 @@ const NAV_GROUPS = [
   { label: 'Overview', pages: ['Dashboard', 'Calendar'] },
   { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Lifecycle'] },
   { label: 'Upkeep',   pages: ['Maintenance', 'Services', 'Utilities', 'Supplies', 'Chores'] },
-  { label: 'Work',     pages: ['To Dos', 'Projects'] },
+  { label: 'Work',     pages: ['Workbench', 'To Dos', 'Projects'] },
 ];
 const NAV_DIRECT = ['Notebook'];
 const NAV_META   = ['Read Me', 'Preferences'];

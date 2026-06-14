@@ -25,7 +25,7 @@ import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
   saveChoreCompletionRecord, loadChoreCompletionRecords,
 } from "./lib/choreCompletions.js";
-import { FilterPill } from "./components/FilterPill.jsx";
+import { FilterDropdown } from "./components/FilterPill.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import { useForemanStore } from "./lib/store.js";
 import {
@@ -1226,12 +1226,11 @@ export default function ChoresPage({ navigate, navState }) {
           <div>
             {/* Filter bar */}
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-                <FilterPill active={historyRoomFilter === "ALL"} onClick={() => setHistoryRoomFilter("ALL")}>All</FilterPill>
-                {historyRooms.map(room => (
-                  <FilterPill key={room} active={historyRoomFilter === room} onClick={() => setHistoryRoomFilter(room)}>{room}</FilterPill>
-                ))}
-              </div>
+              <FilterDropdown
+                value={historyRoomFilter}
+                onChange={setHistoryRoomFilter}
+                options={[{ value: "ALL", label: "All" }, ...historyRooms.map(room => ({ value: room, label: room }))]}
+              />
               <div style={{ flex: 1 }} />
               <input
                 value={historySearch}

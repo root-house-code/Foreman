@@ -35,6 +35,7 @@ import LifecyclePage from "../lifecycle-page.jsx";
 import SuppliesPage from "../supplies-page.jsx";
 import UtilitiesPage from "../utilities-page.jsx";
 import CommandPalette from "../components/CommandPalette.jsx";
+import WorkbenchPage from "../workbench-page.jsx";
 
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
@@ -51,6 +52,7 @@ const PAGE_KEYS = {
   utilities: "Utilities",
   supplies: "Supplies",
   chores: "Chores",
+  workbench: "Workbench",
   board: "To Dos",
   projects: "Projects",
   lifecycle: "Lifecycle",
@@ -82,6 +84,7 @@ export default function App() {
     if (page === "floorplan") return <FloorPlanPage navigate={navigate} />;
     if (page === "inventory") return <InventoryPage navigate={navigate} navState={navState} />;
     if (page === "dashboard") return <DashboardPage navigate={navigate} />;
+    if (page === "workbench") return <WorkbenchPage navigate={navigate} navState={navState} />;
     if (page === "board") return <BoardPage navigate={navigate} navState={navState} />;
     if (page === "projects") return <ProjectsPage navigate={navigate} navState={navState} />;
     if (page === "guide") return <GuidePage navigate={navigate} />;

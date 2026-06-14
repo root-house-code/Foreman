@@ -125,12 +125,13 @@ const TENETS = [
 const PAGES = [
   ["Dashboard", "At-a-glance summary of your home's state: an overall health dial, a Triage queue of what's overdue or due this week, system and room health (now reflecting chores as well as maintenance), a T−30 to T+90 schedule timeline, columnar To Dos and Projects with inline editing, and a Lifecycle cost stat. The entry point for a daily or weekly check-in; most panels sort by clicking a column header."],
   ["Calendar", "All scheduled maintenance tasks and chores laid out across time, with service renewal dates and inventory warranty expiries surfaced alongside them. Supports month, week, day, and year views. Use it to see what's coming, identify clusters of work, and confirm what's been completed."],
-  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Inventory items link directly to maintenance tasks, and component specs (filter sizes, battery types, salt grades) feed the Supplies tracker."],
+  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Inventory items link directly to maintenance tasks, and component specs (filter sizes, battery types, salt grades) feed the Supplies tracker. A built-in floor plan lets you draw each level — floors, basement, attic, roof, and yard — place items spatially, and tag every zone by its real-estate room type (bedroom, full / ¾ / half bath, kitchen, and more). When no zone is selected, a Property Details panel summarizes the home the way a listing does: bedroom and bathroom counts and finished living area, with exteriors like garages, basements, and attics excluded."],
   ["Maintenance", "The core of Foreman. A structured list of recurring maintenance tasks across every system in your home: HVAC, plumbing, electrical, roofing, and more. Each task has a schedule, an optional season constraint, and a completion log. Tracks what's overdue, what's due soon, and what's on schedule. Logging a replace-or-refill task can decrement the matching item on the Supplies tracker."],
   ["Services", "A dedicated manager for recurring service contracts and subscriptions: pest control, lawn care, HVAC maintenance plans, home warranties, security monitoring, and more. Track provider details, costs, billing cycles, and renewal dates. Log individual service visits with technician notes. Renewal dates surface on the Calendar and monthly costs roll up to the Dashboard."],
   ["Utilities", "Tracks recurring utility bills — electricity, natural gas, water, sewer, garbage, internet, and more. Each utility is an account under which you log every monthly bill (amount plus optional usage like kWh, therms, or gallons), building a spend and usage history. An estimated monthly total (a trailing-12-month average) surfaces on the Dashboard and folds into the Lifecycle cost of ownership."],
   ["Supplies", "Tracks the consumables your home burns through on a cycle: furnace and water filters, softener salt, detector batteries, bulbs. Foreman derives each one from inventory items that have a replaceable part — pulling the spec from the item's fields and the replacement cadence from its maintenance schedule. Set an on-hand count and anything at or below its reorder point rolls onto a copyable Shopping List."],
   ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set frequency, and mark them done as you go. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
+  ["Workbench", "The doing half of Foreman. Plan a focused work session from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or time window, with effort estimates summed against a time budget. Then run it as a one-card-at-a-time punch list, grouped room by room: Done writes the full completion record (and decrements supplies) on the spot, Skip leaves the item due, and Can't spawns a linked blocker to-do. Every session is kept in a durable History, and completed sessions appear in the Journal."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
   ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and combines recurring service and utility spend with logged repairs into an annual cost of ownership. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
@@ -269,7 +270,7 @@ function ArchTab() {
 
       <ArchSection id="arch-structure" label="Architecture" heading="Application Structure" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Foreman has 15 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, lifecycle-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
+          Foreman has 16 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, workbench-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component. A global Command Palette (⌘K / Ctrl-K, or the header search box) is mounted above the pages and indexes every page and entity for instant search and jump-to navigation.
@@ -308,6 +309,10 @@ function ArchTab() {
             <p style={{ ...bodyText, marginTop: "0.6rem" }}>Associated data is split across two stores keyed by stable key. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Spatial assignments</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-spatial-assignments</span>) record which room or exterior zone each item is placed in — this is what the Floor Plan and Outline read to group items by location. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Item field values</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-item-field-values</span>) record detail fields like manufacturer, model number, serial number, warranty expiry, install date, and item type. Both are slices in the global store, so writes on any page propagate everywhere automatically.</p>
           </div>
           <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Floor plan</div>
+            <p style={bodyText}>The home's spatial structure spans three stores. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Levels</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-floors</span>) are an ordered list, each with a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>kind</span> — floor, basement, attic, roof, or yard — that sets its sort position and uniqueness (only one basement, attic, roof, or yard; floors are numbered and repeatable). <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Rooms</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-rooms</span>) are the zones placed on those levels — each carries a label, its level, the items inside it, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>use</span> (room type: bedroom, full / ¾ / half bath, kitchen, …) that drives the bed/bath and finished-area rollups in the Property Details panel. The drawn zone polygons and on-canvas item markers persist under the historical <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data</span> key. Only zones whose category resolves to the spatial room class count toward finished living area; exteriors — garages, basements, attics, and yards — are tracked but excluded.</p>
+          </div>
+          <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Chores</div>
             <p style={bodyText}>Stored as objects with a unique ID. Schedules use a human-readable string format ("every 1 weeks", "every 3 months"). Next occurrence dates and per-occurrence completion records (who completed it, when, any notes) are stored in separate localStorage keys and linked by chore ID. Unlike maintenance, chores track every occurrence, not just the most recent.</p>
           </div>
@@ -326,6 +331,10 @@ function ArchTab() {
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Supplies</div>
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-supplies</span> with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>tracked</span> (keyed by the consuming maintenance task's key) holds the mutable on-hand count, reorder threshold, and product URL for auto-derived consumables; <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>manual</span> holds fully user-defined supplies. The supply list itself is derived at read time from a curated catalog (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/supplies.js</span>) joined to inventory specs and maintenance cadence, so it stays in sync without duplicating data.</p>
+          </div>
+          <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Work sessions</div>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-sessions</span> as a map keyed by id. A Session carries a title, assignee, status (active / done / abandoned), timestamps, and an array of SessionItems — each referencing its source task (a maintenance composite key, chore id, or to-do id) alongside a snapshot of its label and room so History still renders if the source is later renamed or deleted. Items record a per-item result (done / skipped / blocked), notes, and any spawned blocker to-do. Completions made during a session write the same records as completing the task from its home page — the session itself is purely additive bookkeeping.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Entity types</div>
@@ -392,7 +401,9 @@ const ROADMAP_SECTIONS = [
   { id: "road-notebook",  label: "Notebook Articles" },
   { id: "road-vault",     label: "Document Vault" },
   { id: "road-handoff",   label: "Handoff Export" },
+  { id: "road-snapshots", label: "Snapshots & Undo" },
   { id: "road-furniture", label: "Furniture Planning" },
+  { id: "road-gla",       label: "GLA Measurements" },
   { id: "road-household", label: "Household & Assignments" },
   { id: "road-emergency", label: "Emergency Reference" },
   { id: "road-seasonal",  label: "Seasonal Playbooks" },
@@ -516,7 +527,51 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
+      <ArchSection id="road-snapshots" label="Durability" heading="Automatic Local Snapshots & Undo" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          The Data Storage section above is honest about the tradeoff of being local-first: clearing your browser's site data clears Foreman's data with it, and today a permanent delete is exactly that — permanent. There is no auto-backup, no trash, and no undo; writes are fire-and-forget. For a system whose tenets are <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>durable — built for decades</span> and <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>earns trust</span>, rolling local snapshots with restore points are the cheapest insurance against the worst-case data-loss moment — and the one gap that contradicts a stated tenet outright.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Rolling snapshots", "Periodic point-in-time copies of your IndexedDB data, kept on a rolling window (hourly / daily / weekly), so you can roll back to how things were yesterday, last week, or before a bad import — entirely on-device."],
+            ["Restore points", "Name and pin a snapshot before a big change — a bulk import, a profile reset, a major reorganization — and return to it with one click if it goes sideways."],
+            ["Undo for destructive actions", "Deletes (a service and its visits, a room, a category) drop into a recoverable trash buffer for a window instead of vanishing, turning the new in-app confirmations into a true safety net rather than a speed bump."],
+            ["Durability by default", "Makes “built for decades” and “earns trust” true rather than aspirational: the registry survives a mistaken click, a bad import, or a cleared cache, with no cloud account required."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
       <ArchSection id="road-furniture" label="Furniture" heading="Furniture Planning" sectionRefs={sectionRefs}>
+      </ArchSection>
+
+      <ArchSection id="road-gla" label="GLA" heading="GLA Measurement Mode" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman's spatial model already separates areas that contribute to square footage (Rooms) from those that don't (Exteriors — garages, basements, attics, and outdoor areas), and surfaces the total as the “Finished area” in the floor plan's Property Details panel. That figure is an honest approximation, not an appraisal-grade measurement. This adds an opt-in mode, for advanced users, that brings the calculation in line with the real estate industry's Gross Living Area (GLA) standard — the same basis an appraiser or listing agent uses.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Opt-in toggle", "GLA mode is off by default. A single switch in Preferences turns on the stricter measurement and display system, so the everyday experience stays simple while advanced users get appraisal-grade rigor when they want it."],
+            ["ANSI Z765 rules", "Finished, heated, above-grade living space counts toward GLA; below-grade space (basements), garages, and unfinished areas (most attics) are measured and reported separately rather than folded into the headline number — matching how living area is defined for appraisals and listings."],
+            ["Measured to standard", "Area is computed from exterior wall dimensions with ceiling-height minimums applied, and finished vs. unfinished status tracked per space, so the total is defensible against a real appraisal."],
+            ["Honest display", "When enabled, the floor plan reports Gross Living Area alongside separate above-grade, below-grade, and garage subtotals, instead of a single summed figure — the breakdown a buyer or appraiser expects to see."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
       </ArchSection>
 
       <ArchSection id="road-household" label="Household" heading="Household & Assignments" sectionRefs={sectionRefs}>
@@ -625,6 +680,16 @@ function RoadmapTab() {
 // ─── Updates tab ──────────────────────────────────────────────────────────────
 
 const UPDATES = [
+  {
+    date: "June 12, 2026",
+    heading: "Work Sessions (Workbench)",
+    bullets: [
+      ["Plan a session", "A new Workbench page turns the triage list into a plan: pick from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or window, with effort estimates summed against an optional time budget. One tap from the Dashboard Triage panel seeds it with everything overdue or due this week."],
+      ["Run the punch list", "Items run one card at a time, grouped room by room, with a progress rail and elapsed timer. Done writes the complete record immediately — completion log, next-due date, supply decrement — exactly as if you'd logged it from its home page. Skip leaves the item honestly due; Can't captures what's blocking and spawns a linked to-do."],
+      ["Durable history", "Every session is kept with per-item results and notes — a record that outlives the latest-completion-only maintenance log — and each completed session appears in the Journal. Reload mid-session and Foreman offers to resume right where you left off."],
+      ["Profile export fix", "Services, utilities, supplies, expenses, and completion records are now included in profile snapshots and exports — previously they leaked across profile switches."],
+    ],
+  },
   {
     date: "June 10, 2026",
     heading: "Command Palette & Global Search",

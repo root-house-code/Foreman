@@ -501,6 +501,7 @@ export default function DashboardPage({ navigate }) {
             <div style={{ ...sectionHeader, flexShrink: 0 }}>
               <span style={sectionTitle}>Triage</span>
               <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button style={{ ...navLink, color: "var(--fm-brass)" }} onClick={() => navigate("workbench", { seed: "triage" })}>Start session &rarr;</button>
                 <button style={navLink} onClick={() => navigate("chores")}>&rarr; Chores</button>
                 <button style={navLink} onClick={() => navigate("maintenance")}>&rarr; Maintenance</button>
               </div>

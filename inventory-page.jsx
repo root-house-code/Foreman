@@ -6,7 +6,9 @@ import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import Tooltip from "./components/Tooltip.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
-import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
+import PropertyDetailsPanel from "./components/PropertyDetailsPanel.jsx";
+import { ROOM_USES, computeBedBath, formatBaths } from "./lib/propertyDetails.js";
+import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { createProject } from "./lib/projects.js";
 import { CATEGORY_TIPS, ITEM_TIPS } from "./lib/tooltips.js";
@@ -429,6 +431,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const [confirmRoomId, setConfirmRoomId] = useState(null);
   const [dragging, setDragging] = useState(null);
   const [editingLevelId, setEditingLevelId] = useState(null);
+  const [kindMenuLevelId, setKindMenuLevelId] = useState(null);
   const [editingPanelName, setEditingPanelName] = useState(false);
   const [editingPanelType, setEditingPanelType] = useState(false);
   const [selectedPin, setSelectedPin] = useState(null);
@@ -1358,7 +1361,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
   function addLevelOfType(type) {
     setShowLevelPicker(false);
-    const kindMap = { "Floor": "floor", "Basement": "basement", "Attic": "attic", "Yard / Exterior": "yard" };
+    const kindMap = { "Floor": "floor", "Basement": "basement", "Attic": "attic", "Roof": "roof", "Yard / Exterior": "yard" };
     const kind = kindMap[type] || "floor";
     let newFloorId;
     try {
@@ -1391,6 +1394,44 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     if (!trimmed) return;
     const allFloors = loadFloors();
     saveFloors(allFloors.map(f => f.id === id ? { ...f, label: trimmed } : f));
+    setFloors(getFloorsInOrder());
+  }
+
+  // The level kinds a user can assign to an existing level — the same set offered
+  // when adding one. `unique` kinds (everything but floor) may exist only once.
+  const LEVEL_KIND_OPTIONS = [
+    { kind: "floor",    label: "Floor",    unique: false },
+    { kind: "basement", label: "Basement", unique: true },
+    { kind: "attic",    label: "Attic",    unique: true },
+    { kind: "roof",     label: "Roof",     unique: true },
+  ];
+  const kindLabel = (kind) => ({ floor: "Floor", basement: "Basement", attic: "Attic", roof: "Roof", yard: "Yard" }[kind] || kind);
+  const defaultLevelLabel = (kind, number) => kind === "floor" ? `Floor ${number}` : kindLabel(kind);
+
+  function changeLevelKind(id, newKind) {
+    setKindMenuLevelId(null);
+    const allFloors = loadFloors();
+    const target = allFloors.find(f => f.id === id);
+    if (!target || target.kind === newKind) return;
+    // A unique kind can't be assigned if another level already holds it.
+    if (newKind !== "floor" && allFloors.some(f => f.kind === newKind && f.id !== id)) return;
+    // Preserve a user-customized label; regenerate only auto-default labels.
+    const wasDefaultLabel = target.label === defaultLevelLabel(target.kind, target.number);
+    const updated = allFloors.map(f => {
+      if (f.id !== id) return f;
+      const next = { ...f, kind: newKind };
+      if (newKind === "floor") {
+        const maxNum = Math.max(0, ...allFloors.filter(x => x.kind === "floor" && x.id !== id).map(x => x.number || 0));
+        next.number = maxNum + 1;
+        next.glyph = String(next.number);
+      } else {
+        next.number = null;
+        next.glyph = newKind.charAt(0).toUpperCase();
+      }
+      if (wasDefaultLabel) next.label = defaultLevelLabel(newKind, next.number);
+      return next;
+    });
+    saveFloors(updated);
     setFloors(getFloorsInOrder());
   }
 
@@ -1475,6 +1516,13 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const selectedRoom = selected ? rooms[selected] : null;
   const selType = selectedRoom ? (categoryTypes[selectedRoom.label] || "system") : null;
   const selRoom = selected ? currentPlaced[selected] : null;
+  // Room-use (bedroom/bath) tagging applies only to interior room zones, not exteriors.
+  const selUseEligible = selectedRoom
+    ? (() => {
+        const tid = resolveTypeId(selectedRoom.label, categoryTypes[selectedRoom.label] || "system");
+        return isSpatial(tid, entityTypeData) && !isExteriorTypeUtil(tid, entityTypeData);
+      })()
+    : false;
 
   const placedOnAnyLevel = useMemo(() => {
     const set = new Set();
@@ -1666,7 +1714,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   onDragLeave={() => setLevelDragOverIdx(null)}
                   onDrop={e => { e.preventDefault(); handleLevelReorder(levelDragIdx, idx); setLevelDragIdx(null); setLevelDragOverIdx(null); }}
                   onDragEnd={() => { setLevelDragIdx(null); setLevelDragOverIdx(null); }}
-                  onClick={() => { setActiveLevel(level.id); setSelected(null); }}
+                  onClick={() => { setActiveLevel(level.id); setSelected(null); setKindMenuLevelId(null); }}
                   onMouseEnter={() => setHoveredLevelId(level.id)}
                   onMouseLeave={() => setHoveredLevelId(null)}
                   style={{ background: isActive ? "var(--fm-bg-panel)" : "transparent", borderLeft: isActive ? "2px solid var(--fm-brass)" : "2px solid transparent", borderTop: isDragOver ? "2px solid var(--fm-brass)" : "2px solid transparent", cursor: "pointer", padding: "0.4rem 0.5rem 0.35rem 0.65rem", transition: "background 0.1s" }}
@@ -1712,9 +1760,33 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                       </>
                     )}
                   </div>
-                  <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.05em", marginLeft: "1rem", marginTop: "0.1rem", textTransform: "uppercase" }}>
-                    {zoneCount} zone · {itemCount} items
+                  <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", marginLeft: "1rem", marginTop: "0.15rem" }}>
+                    <button
+                      onClick={e => { e.stopPropagation(); setKindMenuLevelId(prev => prev === level.id ? null : level.id); }}
+                      title="Change level type"
+                      style={{ background: kindMenuLevelId === level.id ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${kindMenuLevelId === level.id ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 2, color: kindMenuLevelId === level.id ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.08em", lineHeight: 1, padding: "0.12rem 0.3rem", textTransform: "uppercase" }}
+                    >{kindLabel(level.kind)} ▾</button>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                      {zoneCount} zone · {itemCount} items
+                    </span>
                   </div>
+                  {kindMenuLevelId === level.id && (
+                    <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginLeft: "1rem", marginTop: "0.3rem" }}>
+                      {LEVEL_KIND_OPTIONS.map(opt => {
+                        const isCurrent = level.kind === opt.kind;
+                        const taken = opt.unique && floors.some(f => f.kind === opt.kind && f.id !== level.id);
+                        return (
+                          <button
+                            key={opt.kind}
+                            disabled={taken && !isCurrent}
+                            onClick={e => { e.stopPropagation(); isCurrent ? setKindMenuLevelId(null) : changeLevelKind(level.id, opt.kind); }}
+                            title={taken && !isCurrent ? `A ${opt.label.toLowerCase()} level already exists` : undefined}
+                            style={{ background: isCurrent ? "var(--fm-brass-bg)" : "var(--fm-bg-sunk)", border: `1px solid ${isCurrent ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: (taken && !isCurrent) ? "var(--fm-ink-mute)" : isCurrent ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: (taken && !isCurrent) ? "not-allowed" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.06em", opacity: (taken && !isCurrent) ? 0.45 : 1, padding: "0.14rem 0.4rem", textTransform: "uppercase" }}
+                          >{opt.label}</button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1891,20 +1963,14 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               return false;
             };
             const totalSqFt = Object.entries(currentPlaced).reduce((sum, [rid, zone]) => isRoomZone(rid) ? sum + polygonArea(zone.points) / (FP_GRID * FP_GRID) : sum, 0);
-            const houseSqFt = Object.values(fpData.placements).reduce((sum, lvl) => sum + Object.entries(lvl).reduce((s, [rid, zone]) => isRoomZone(rid) ? s + polygonArea(zone.points) / (FP_GRID * FP_GRID) : s, 0), 0);
-            if (houseSqFt === 0) return null;
+            if (totalSqFt === 0) return null;
             const floorName = floors.find(f => f.id === activeLevel)?.label ?? "floor";
             const floorLabel = `${floorName}${floorName.endsWith("s") ? "'" : "'s"} room sq ft:`;
             return (
               <div style={{ alignItems: "center", display: "flex", gap: "1.25rem", marginLeft: "auto" }}>
                 <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>
-                  {"House's room sq ft:"} {Math.round(houseSqFt).toLocaleString()}
+                  {floorLabel} {Math.round(totalSqFt).toLocaleString()}
                 </span>
-                {totalSqFt > 0 && (
-                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>
-                    {floorLabel} {Math.round(totalSqFt).toLocaleString()}
-                  </span>
-                )}
               </div>
             );
           })()}
@@ -2614,6 +2680,24 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             </div>
             <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
 
+            {/* Room use (real-estate classification) — interior rooms only */}
+            {selUseEligible && (
+              <>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.55rem 1rem" }}>
+                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>Room Type</span>
+                  <select
+                    value={selectedRoom?.use ?? ""}
+                    onChange={e => useForemanStore.getState().setRoomUse(selected, e.target.value || null)}
+                    style={{ background: "var(--fm-bg-sunk)", border: `1px solid ${selectedRoom?.use ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: selectedRoom?.use ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.04em", outline: "none", padding: "0.15rem 0.3rem" }}
+                  >
+                    <option value="">— type —</option>
+                    {ROOM_USES.map(u => <option key={u.id} value={u.id} title={u.desc}>{u.label}</option>)}
+                  </select>
+                </div>
+                <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+              </>
+            )}
+
             {/* Items section — scrollable */}
             <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto" }}>
               {/* Section header */}
@@ -2789,6 +2873,28 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           </>
         ) : (
           <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
+            {(() => {
+              const legacySubtypes = loadRoomSubtypes();
+              const { beds, baths } = computeBedBath(rooms, legacySubtypes);
+              // Interior room zone = spatial type that isn't an exterior (matches the sq-ft rollup).
+              const isRoomClass = (lbl) => {
+                const tid = resolveTypeId(lbl || "", categoryTypes[lbl] || "system");
+                return isSpatial(tid, entityTypeData) && !isExteriorTypeUtil(tid, entityTypeData);
+              };
+              const houseSqFt = Object.values(fpData.placements).reduce((sum, lvl) =>
+                sum + Object.entries(lvl).reduce((s, [rid, zone]) =>
+                  isRoomClass(rooms[rid]?.label) ? s + polygonArea(zone.points) / (FP_GRID * FP_GRID) : s, 0), 0);
+              const floorCount = floors.filter(f => f.kind === "floor").length;
+              const basementCount = floors.filter(f => f.kind === "basement").length;
+              const atticCount = floors.filter(f => f.kind === "attic").length;
+              const attributes = [
+                { label: "Finished area", value: `${Math.round(houseSqFt).toLocaleString()} sq ft`, tip: "The summed floor area of every space tagged as a Room, across all levels. Exteriors — garages, basements, attics, and outdoor areas — are excluded, so this approximates the home's finished living space. It's an estimate, not an appraisal-grade GLA measurement." },
+                { label: "Floors", value: floorCount },
+                ...(basementCount > 0 ? [{ label: "Basement", value: basementCount }] : []),
+                ...(atticCount > 0 ? [{ label: "Attic", value: atticCount }] : []),
+              ];
+              return <PropertyDetailsPanel beds={beds} baths={formatBaths(baths)} attributes={attributes} />;
+            })()}
             <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", fontStyle: "italic", padding: "0.85rem 1rem 0.6rem", textAlign: "center" }}>
               Click a zone to view details
             </div>
@@ -3838,7 +3944,7 @@ function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseI
           </thead>
           <tbody>
             {renderSection("Rooms", rooms)}
-            {renderSection("Exterior", exteriors)}
+            {renderSection("Exteriors", exteriors)}
           </tbody>
         </table>
       </div>
@@ -4187,38 +4293,44 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
       {/* Filter pills */}
       <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.6rem" }}>
         <FilterRow label="Status">
-          {[
-            { key: "ALL",     label: "All" },
-            { key: "ACTIVE",  label: "Active",  color: "var(--fm-green)" },
-            { key: "PARTIAL", label: "Partial", color: "var(--fm-amber)" },
-            { key: "EMPTY",   label: "Empty" },
-          ].map(({ key, label, color }) => (
-            <FilterPill key={key} active={statusFilter === key} color={color} onClick={() => setStatusFilter(key)}>{label}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={statusFilter}
+            onChange={setStatusFilter}
+            options={[
+              { value: "ALL",     label: "All" },
+              { value: "ACTIVE",  label: "Active",  color: "var(--fm-green)" },
+              { value: "PARTIAL", label: "Partial", color: "var(--fm-amber)" },
+              { value: "EMPTY",   label: "Empty" },
+            ]}
+          />
         </FilterRow>
         <FilterRow label="Systems">
-          <FilterPill active={systemFilter === "ALL"} onClick={() => setSystemFilter("ALL")}>All</FilterPill>
-          {systemCats.map(cat => (
-            <FilterPill key={cat} active={systemFilter === cat} onClick={() => setSystemFilter(cat)}>{cat}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={systemFilter}
+            onChange={setSystemFilter}
+            options={[{ value: "ALL", label: "All" }, ...systemCats.map(cat => ({ value: cat, label: cat }))]}
+          />
         </FilterRow>
         <FilterRow label="Location" hidden={locationCats.length === 0}>
-          <FilterPill active={locationFilter === "ALL"} onClick={() => setLocationFilter("ALL")}>All</FilterPill>
-          {locationCats.map(cat => (
-            <FilterPill key={cat} active={locationFilter === cat} onClick={() => setLocationFilter(cat)}>{cat}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={locationFilter}
+            onChange={setLocationFilter}
+            options={[{ value: "ALL", label: "All" }, ...locationCats.map(cat => ({ value: cat, label: cat }))]}
+          />
         </FilterRow>
         <FilterRow label="Level">
-          <FilterPill active={levelFilter === "ALL"} onClick={() => setLevelFilter("ALL")}>All</FilterPill>
-          {invFloors.map(lvl => (
-            <FilterPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.label}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={levelFilter}
+            onChange={setLevelFilter}
+            options={[{ value: "ALL", label: "All" }, ...invFloors.map(lvl => ({ value: lvl.id, label: lvl.label }))]}
+          />
         </FilterRow>
         <FilterRow label="Type">
-          <FilterPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</FilterPill>
-          {[...new Set(allRows.map(r => customFieldValues?.[r.key]?.item_type).filter(Boolean))].sort().map(t => (
-            <FilterPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{t}</FilterPill>
-          ))}
+          <FilterDropdown
+            value={typeFilter}
+            onChange={setTypeFilter}
+            options={[{ value: "ALL", label: "All" }, ...[...new Set(allRows.map(r => customFieldValues?.[r.key]?.item_type).filter(Boolean))].sort().map(t => ({ value: t, label: t }))]}
+          />
         </FilterRow>
       </div>
 
@@ -4406,13 +4518,13 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                           style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", padding: "0.15rem 0.45rem", textTransform: "uppercase" }}
                           onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
                           onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-                        >Room</button>
+                        >Rooms</button>
                         <button
                           onClick={() => { onFieldChange?.(cat, item, "exteriorLabel", pendingLocation.value); setPendingLocation(null); }}
                           style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", padding: "0.15rem 0.45rem", textTransform: "uppercase" }}
                           onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
                           onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-                        >Exterior</button>
+                        >Exteriors</button>
                         <button
                           onClick={() => setPendingLocation(null)}
                           style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "0 0.1rem" }}

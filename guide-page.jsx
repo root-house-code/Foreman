@@ -237,12 +237,13 @@ export default function GuidePage({ navigate }) {
   const utilities = useForemanStore(s => s.utilities);
   const expenses  = useForemanStore(s => s.expenses);
   const projects  = useForemanStore(s => s.projects);
+  const sessions  = useForemanStore(s => s.sessions);
   const [maintenanceRecords] = useState(() => loadMaintenanceCompletionRecords());
   const [choreRecords]       = useState(() => loadChoreCompletionRecords());
 
   const journalEvents = useMemo(
-    () => buildJournal({ maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects }),
-    [maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects]
+    () => buildJournal({ maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects, sessions }),
+    [maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects, sessions]
   );
 
   const useDefaultData = useMemo(() => loadUseDefaultData(), []);

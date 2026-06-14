@@ -20,7 +20,7 @@ import { useForemanStore } from "./lib/store.js";
 import { getItemStableKey } from "./lib/itemKeys.js";
 import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
-import { FilterPill, FilterRow } from "./components/FilterPill.jsx";
+import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
 
 const DEFAULT_CAT_SET = new Set(defaultData.map(d => d.category));
 const DEFAULT_CAT_ORDER = Array.from(new Set(defaultData.map(r => r.category)));
@@ -572,12 +572,11 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
           {/* Filter bar */}
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-              <FilterPill active={historyCatFilter === "ALL"} onClick={() => setHistoryCatFilter("ALL")}>All</FilterPill>
-              {historyCats.map(cat => (
-                <FilterPill key={cat} active={historyCatFilter === cat} onClick={() => setHistoryCatFilter(cat)}>{cat}</FilterPill>
-              ))}
-            </div>
+            <FilterDropdown
+              value={historyCatFilter}
+              onChange={setHistoryCatFilter}
+              options={[{ value: "ALL", label: "All" }, ...historyCats.map(cat => ({ value: cat, label: cat }))]}
+            />
             <div style={{ flex: 1 }} />
             <input
               value={historySearch}
@@ -673,33 +672,38 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
         {/* Filter pills — Status / System / Room */}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.6rem" }}>
           <FilterRow label="Status" labelWidth="54px">
-            {[
-              { key: "ALL",     label: "All" },
-              { key: "OVERDUE", label: "Overdue", color: "var(--fm-red)"   },
-              { key: "SOON",    label: "Soon",    color: "var(--fm-amber)" },
-              { key: "SCHED",   label: "Sched" },
-              { key: "OK",      label: "OK",      color: "var(--fm-green)" },
-            ].map(({ key, label, color }) => (
-              <FilterPill key={key} active={activeStatus === key} color={color} onClick={() => setActiveStatus(key)}>{label}</FilterPill>
-            ))}
+            <FilterDropdown
+              value={activeStatus}
+              onChange={setActiveStatus}
+              options={[
+                { value: "ALL",     label: "All" },
+                { value: "OVERDUE", label: "Overdue", color: "var(--fm-red)"   },
+                { value: "SOON",    label: "Soon",    color: "var(--fm-amber)" },
+                { value: "SCHED",   label: "Sched" },
+                { value: "OK",      label: "OK",      color: "var(--fm-green)" },
+              ]}
+            />
           </FilterRow>
           <FilterRow label="Location" labelWidth="54px" hidden={locationCats.length === 0}>
-            <FilterPill active={locationFilter === "ALL"} onClick={() => setLocationFilter("ALL")}>All</FilterPill>
-            {locationCats.map(cat => (
-              <FilterPill key={cat} active={locationFilter === cat} onClick={() => setLocationFilter(cat)}>{cat}</FilterPill>
-            ))}
+            <FilterDropdown
+              value={locationFilter}
+              onChange={setLocationFilter}
+              options={[{ value: "ALL", label: "All" }, ...locationCats.map(cat => ({ value: cat, label: cat }))]}
+            />
           </FilterRow>
           <FilterRow label="Level" labelWidth="54px" hidden={invFloors.length === 0}>
-            <FilterPill active={levelFilter === "ALL"} onClick={() => setLevelFilter("ALL")}>All</FilterPill>
-            {invFloors.map(lvl => (
-              <FilterPill key={lvl.id} active={levelFilter === lvl.id} onClick={() => setLevelFilter(lvl.id)}>{lvl.label}</FilterPill>
-            ))}
+            <FilterDropdown
+              value={levelFilter}
+              onChange={setLevelFilter}
+              options={[{ value: "ALL", label: "All" }, ...invFloors.map(lvl => ({ value: lvl.id, label: lvl.label }))]}
+            />
           </FilterRow>
           <FilterRow label="Type" labelWidth="54px" hidden={typeOptions.length === 0}>
-            <FilterPill active={typeFilter === "ALL"} onClick={() => setTypeFilter("ALL")}>All</FilterPill>
-            {typeOptions.map(t => (
-              <FilterPill key={t} active={typeFilter === t} onClick={() => setTypeFilter(t)}>{t}</FilterPill>
-            ))}
+            <FilterDropdown
+              value={typeFilter}
+              onChange={setTypeFilter}
+              options={[{ value: "ALL", label: "All" }, ...typeOptions.map(t => ({ value: t, label: t }))]}
+            />
           </FilterRow>
         </div>
 
