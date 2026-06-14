@@ -1,7 +1,8 @@
 import { useState, useMemo, forwardRef } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { toMonthly } from "./lib/services.js";
-import { buildRoster, computeForecast, computeReserve, computeInvested } from "./lib/lifecycleStats.js";
+import { buildRoster, computeForecast, computeReserve, computeInvested, computeRepairs12mo } from "./lib/lifecycleStats.js";
+import { buildForecast, summarize } from "./lib/budgetForecast.js";
 import { buildSupplyRows } from "./lib/supplies.js";
 import { monthlyUtilitiesTotal } from "./lib/utilities.js";
 import { storageGet, storageSet } from "./lib/storage.js";
@@ -160,6 +161,22 @@ export default function DashboardPage({ navigate }) {
   const supplies = useForemanStore(s => s.supplies);
   const utilData = useForemanStore(s => s.utilities);
   const monthlyUtil = useMemo(() => monthlyUtilitiesTotal(utilData), [utilData]);
+
+  // Forward 12-month run-rate — mirrors the Lifecycle → Budget tab.
+  const expensesMap = useForemanStore(s => s.expenses);
+  const budget      = useForemanStore(s => s.budget);
+  const runCost = useMemo(() => {
+    const roster  = buildRoster(itemFieldValues, inventory);
+    const reserve = computeReserve(computeForecast(roster));
+    const months  = buildForecast({
+      svcData, utilData,
+      reserveAnnual: reserve.annual,
+      repairs12mo: computeRepairs12mo(expensesMap),
+      planned: budget.planned,
+      opts: { includeReserve: budget.includeReserve, includeRepairsBaseline: budget.includeRepairsBaseline },
+    });
+    return summarize(months).avgMonthly;
+  }, [itemFieldValues, inventory, svcData, utilData, expensesMap, budget]);
 
   // ── Mutable state ────────────────────────────────────────────────────────────
   const [nextDatesMap, setNextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
@@ -482,6 +499,7 @@ export default function DashboardPage({ navigate }) {
               { label: "Services", value: "$" + Math.round(monthlyServices), color: "var(--fm-cyan)", sub: `${activeServices.length} active /mo`, nav: () => navigate("services") },
               { label: "Utilities", value: "$" + Math.round(monthlyUtil), color: "var(--fm-cyan)", sub: "/mo est", nav: () => navigate("utilities") },
               { label: "Supplies", value: suppliesToBuy, color: suppliesToBuy > 0 ? "var(--fm-amber)" : "var(--fm-ink-mute)", sub: suppliesToBuy > 0 ? "to buy" : "stocked up", nav: () => navigate("supplies") },
+              { label: "Run cost", value: runCost > 0 ? "$" + Math.round(runCost) : "—", color: "var(--fm-brass)", sub: "/mo to operate", nav: () => navigate("lifecycle", { tab: "Budget" }) },
               { label: "Lifecycle", value: lifecycleStat.value, color: lifecycleStat.color, sub: lifecycleStat.sub, nav: () => navigate("lifecycle") },
             ].map(s => (
               <button key={s.label} onClick={s.nav}

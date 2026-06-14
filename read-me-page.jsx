@@ -134,7 +134,7 @@ const PAGES = [
   ["Workbench", "The doing half of Foreman. Plan a focused work session from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or time window, with effort estimates summed against a time budget. Then run it as a one-card-at-a-time punch list, grouped room by room: Done writes the full completion record (and decrements supplies) on the spot, Skip leaves the item due, and Can't spawns a linked blocker to-do. Every session is kept in a durable History, and completed sessions appear in the Journal."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
-  ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and combines recurring service and utility spend with logged repairs into an annual cost of ownership. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
+  ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and combines recurring service and utility spend with logged repairs into an annual cost of ownership. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. The Budget tab projects a forward twelve-month run-rate — services, seasonal utilities, reserve, and a repairs baseline — month by month, with a target to measure against and planned one-offs you can pin, plus a mortgage line (a default payment with per-month corrections and an escrow split) that adds a total-monthly-outlay figure on top of the cost to operate. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
   ["Notebook", "The home's record, in two tabs. The Notebook tab is a knowledge base — articles and notes organized by system: how something works, what product you used, lessons from a past repair. The Journal tab is an automatic, reverse-chronological feed of everything that has happened to the house — completed maintenance, chores, service visits, utility bills, expenses, and projects — grouped by month and filterable by type, area, and person, drawn entirely from logs you already create. Click any entry to jump to its source."],
   ["Preferences", "Configure the structure of your home: floors, rooms, entity types, and application settings. The definitions here shape how data is organized across all other pages."],
 ];
@@ -329,6 +329,11 @@ function ArchTab() {
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-expenses</span> as a flat map keyed by id. Each expense records a date, amount, free-text description, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedItem</span> (an inventory stable key). The Lifecycle page reads these to compute a trailing-12-month repair total and, when linked, attributes the cost to an item's system or room.</p>
           </div>
           <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Budget &amp; cash-flow forecast</div>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-budget</span>, which holds only what the user sets — the forward projection itself is derived at read time (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/budgetForecast.js</span>) from the services, utilities, expenses, and replacement-reserve data that already exist. The settings are a monthly <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>target</span>, two toggles (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>includeReserve</span>, <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>includeRepairsBaseline</span>) that fold the replacement set-aside and a trailing-12 repairs baseline into the run-rate, and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>planned</span> one-off line items keyed by month (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>YYYY-MM</span>).</p>
+            <p style={{ ...bodyText, marginTop: "0.6rem" }}>The forecast builds one bucket per month over a 12-month horizon: services projected from each contract's billing cycle and renewal anchor, a seasonal per-calendar-month average of logged utility bills, the reserve and repairs baselines spread evenly, and any planned items — with warranty expiries riding along as non-dollar risk markers. The <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>mortgage</span> is modelled like a recurring bill rather than a fixed fact: a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>defaultMonthly</span> payment that fills any un-overridden month, a per-month <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>overrides</span> map for retroactive corrections and known future changes, and an <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>escrowMonthly</span> sub-amount that splits each payment into principal &amp; interest versus taxes &amp; insurance. The mortgage is kept out of the operating run-rate — it's financing, not upkeep — and surfaces separately as a total-monthly-outlay figure.</p>
+          </div>
+          <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Supplies</div>
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-supplies</span> with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>tracked</span> (keyed by the consuming maintenance task's key) holds the mutable on-hand count, reorder threshold, and product URL for auto-derived consumables; <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>manual</span> holds fully user-defined supplies. The supply list itself is derived at read time from a curated catalog (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/supplies.js</span>) joined to inventory specs and maintenance cadence, so it stays in sync without duplicating data.</p>
           </div>
@@ -396,6 +401,8 @@ function ArchTab() {
 
 const ROADMAP_SECTIONS = [
   { id: "road-mobile",   label: "Mobile App" },
+  { id: "road-setup",    label: "Home Setup Wizard" },
+  { id: "road-qr",       label: "QR Labels" },
   { id: "road-ha",       label: "Home Assistant" },
   { id: "road-gcal",     label: "Google Calendar" },
   { id: "road-notebook",  label: "Notebook Articles" },
@@ -427,6 +434,50 @@ function RoadmapTab() {
             ["Photo to project / to do", "Point your camera at something that needs attention, take a photo, and Foreman creates a draft project or to-do with the image attached. Add a note and you're done in under a minute."],
             ["AI-powered inspection mode", "Grant Foreman temporary access to your camera. Walk through your home as if doing a routine walk-through. Foreman captures images, analyzes them with an AI model, and returns a structured report of potential issues and maintenance recommendations. Projects and to-dos are auto-generated from the findings. Camera access is session-scoped and not stored between sessions."],
             ["Floorplan generation mode", "Grant Foreman temporary access to your camera and location. Walk each room and Foreman builds your floorplan and inventory as you go, using spatial estimation and image recognition. Camera and location data are used only during the active session to initialize your home's structure in Foreman."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-setup" label="Onboarding" heading="Home Setup Wizard" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman ships with 421 default maintenance tasks, a ~90-type expected-lifespan table, and a deep category tree — but a new home starts empty, and populating inventory, the floor plan, and the right schedule is the steepest cliff in the app. The Setup Wizard turns that cold start into a guided ten-minute pass, drawing on the defaults already in the codebase rather than asking you to build from scratch.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Profile your home", "A short guided flow captures the essentials — home type, year built, square footage, stories, and the systems you actually have (gas vs. electric, well vs. municipal water, septic vs. sewer, central air vs. none) — the answers that decide which of the built-in tasks are relevant to you."],
+            ["Prune, don't dump", "Rather than dropping every default task on you at once, the wizard includes only what fits your answers and hides the rest — no tankless flush if you don't have one, no well-pump service on municipal water — so the maintenance list starts honest and uncluttered, true to the calm tenet."],
+            ["Seed the structure", "Generates your floors, the common rooms for your home type, and a starter inventory of the systems every home has — HVAC, water heater, electrical panel, detectors — each ready to fill in with a model number and install date as you find them."],
+            ["Resumable and re-runnable", "Every step is optional and the flow is resumable: lay the bones in ten minutes and come back for specifics. Existing users can re-run it to fold in a newly finished basement or a system they didn't have before, without disturbing what's already entered."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-qr" label="Inventory" heading="QR Labels for Inventory" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Every inventory item already carries the record you want when you're standing in front of it — model number, install date, warranty status, manual, and full maintenance history. QR labels close the last few feet between the physical thing and its data, so the answer is a phone-camera scan away instead of a search.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Print a label per item", "Generate a compact QR sticker for any inventory item — the water heater, the furnace, the panel — sized for a label printer or a sheet of address labels, with the item name printed alongside the code so it's legible without scanning."],
+            ["Scan to the record", "Point any phone camera at the sticker to open that item straight to its Foreman page — specs, manual, warranty, and maintenance log — with no searching or menu diving. This depends on the deep-link routing also introduced for the mobile app, since the app runs at a single URL today."],
+            ["Log from the thing", "The deep link lands with the item's actions in reach — log a completed task, add an expense, attach a photo — so the record gets updated at the moment and place the work actually happens, not later from memory at a desk."],
+            ["Built on the catalog", "Reuses each item's existing stable key as the link target and the specs already on file for the printed label — a thin physical bridge over data that's already there, generated locally with no external service."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
@@ -680,6 +731,17 @@ function RoadmapTab() {
 // ─── Updates tab ──────────────────────────────────────────────────────────────
 
 const UPDATES = [
+  {
+    date: "June 13, 2026",
+    heading: "Operating Budget & Cash-Flow Forecast",
+    bullets: [
+      ["Forward run-rate", "Lifecycle gains a Budget tab that projects what the home costs to run over the next twelve months — a single “cost to run / mo” figure built from your recurring services, a seasonal average of logged utility bills, the replacement reserve, and a trailing repairs baseline. No new data entry; it reads what the other pages already hold."],
+      ["Month-by-month, not just an average", "A stacked bar chart and an expandable table break each month into its categories, so a heavy quarter (an annual service renewal, a warranty lapsing) is visible before it lands. Each month opens to show the service charges driving it, warranties expiring that month, and this month's logged-so-far actuals against the projection."],
+      ["A target and one-offs", "Set a monthly target to see whether the run-rate is over or under it, toggle whether the replacement reserve and repairs baseline count toward the figure, and pin planned one-off costs (property tax, a known big repair) to the month they're due."],
+      ["Mortgage & total outlay", "Add your mortgage as a recurring line — a default monthly payment that projects forward, with an escrow sub-amount that splits each payment into principal & interest versus taxes & insurance. Because real payments drift (an escrow re-analysis, an extra-principal month), any individual month can be corrected in a payment ledger and the rest fall back to the default. The mortgage stays separate from the operating run-rate — it's financing, not upkeep — and surfaces as a second “total monthly outlay” figure alongside the cost to operate."],
+      ["Surfaced on the Dashboard", "The Dashboard At a Glance gains a Run cost stat — the projected monthly operating figure — that jumps straight to the Budget tab, and the command palette can open it directly (“View operating budget”)."],
+    ],
+  },
   {
     date: "June 12, 2026",
     heading: "Work Sessions (Workbench)",
