@@ -72,6 +72,7 @@ import FollowButton from "./components/FollowButton.jsx";
 import SchedulePicker from "./components/SchedulePicker.jsx";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import ComboInput from "./components/ComboInput.jsx";
+import ModelComboField from "./components/ModelComboField.jsx";
 import TodoModal from "./components/TodoModal.jsx";
 
 const PRIORITY_COLORS = {
@@ -268,18 +269,6 @@ function InlineComboInput({ placeholder = "", onCommit, onCancel, options = [] }
         document.body
       )}
     </div>
-  );
-}
-
-function ModelComboField({ value = "", models = [], fieldStyle, onChange }) {
-  return (
-    <ComboInput
-      value={value}
-      onChange={onChange}
-      options={models}
-      placeholder="—"
-      style={fieldStyle}
-    />
   );
 }
 
@@ -1463,35 +1452,68 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
   const spatialCrossRefItems = useMemo(() => {
     const map = {};
+    const seen = {}; // room → Set of "cat|item"; an item maps to one display entity
+    // Dedupe by category+name: distinct stable keys (a default row and a custom
+    // row, or two custom rows) can resolve to the same {cat, item}, which would
+    // otherwise list/count the item more than once for the same zone. Inventory
+    // keys off the canonical (category, name), so the floor plan must too.
+    const add = (room, cat, item) => {
+      const k = `${cat}|${item}`;
+      if (!seen[room]) seen[room] = new Set();
+      if (seen[room].has(k)) return;
+      seen[room].add(k);
+      if (!map[room]) map[room] = [];
+      map[room].push({ cat, item });
+    };
     Object.entries(customFieldValues || {}).forEach(([key, vals]) => {
       const ref = reverseItemKeyMap?.[key];
       if (!ref) return;
       const { category: cat, item } = ref;
       const typeId = resolveTypeId(cat, categoryTypes[cat] || "system");
       if (isSpatial(typeId, entityTypeData)) return;
-      const room = vals?.roomLabel;
-      if (room) { if (!map[room]) map[room] = []; map[room].push({ cat, item }); }
-      const ext = vals?.exteriorLabel;
-      if (ext) { if (!map[ext]) map[ext] = []; map[ext].push({ cat, item }); }
+      if (vals?.roomLabel) add(vals.roomLabel, cat, item);
+      if (vals?.exteriorLabel) add(vals.exteriorLabel, cat, item);
     });
     return map;
   }, [customFieldValues, categoryTypes, entityTypeData, reverseItemKeyMap]);
 
   const searchResults = useMemo(() => {
     const q = zoneSearch.trim().toLowerCase();
+    // Only items with NO location yet can be added to a zone. An item is already
+    // located if it carries an explicit room/exterior assignment, or its own
+    // category is spatial (the category itself is the location) — mirrors the
+    // inventory table's resolvedLocation. Located items are managed from their
+    // current zone (the zone item list above), not re-added here, so once an item
+    // is assigned it drops off this list automatically.
+    const unlocated = allInventoryItems.filter(({ cat, item }) => {
+      const key = itemToKeyMap[`${cat}|${item}`] || `${cat}|${item}`;
+      const vals = customFieldValues?.[key] || {};
+      if (vals.roomLabel || vals.exteriorLabel || vals.room) return false;
+      return !isSpatial(resolveTypeId(cat, categoryTypes[cat] || "system"), entityTypeData);
+    });
     const pool = q
-      ? allInventoryItems.filter(({ cat, item }) =>
+      ? unlocated.filter(({ cat, item }) =>
           item.toLowerCase().includes(q) || cat.toLowerCase().includes(q))
-      : allInventoryItems.slice(0, 60);
+      : unlocated.slice(0, 60);
     return pool;
-  }, [allInventoryItems, zoneSearch]);
+  }, [allInventoryItems, zoneSearch, itemToKeyMap, customFieldValues, categoryTypes, entityTypeData]);
 
   const selZoneItems = useMemo(() => {
     if (!selected) return [];
     const zoneRoom = rooms[selected];
     if (!zoneRoom?.label) return [];
     const storeKeys = (selectZoneItems({ spatialAssignments: customFieldValues }) || {})[zoneRoom.label] || [];
-    return storeKeys.map(k => reverseItemKeyMap?.[k]).filter(Boolean).map(r => ({ cat: r.category, item: r.item }));
+    // Dedupe by category+name (see spatialCrossRefItems): two stable keys can
+    // point at the same display item, which must not list twice in a zone.
+    const seen = new Set();
+    const out = [];
+    storeKeys.map(k => reverseItemKeyMap?.[k]).filter(Boolean).forEach(r => {
+      const key = `${r.category}|${r.item}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ cat: r.category, item: r.item });
+    });
+    return out;
   }, [customFieldValues, selected, rooms, reverseItemKeyMap]);
 
   function toggleZoneItem(cat, item) {
@@ -1510,6 +1532,22 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     } else {
       useForemanStore.getState().assignItemToZone(stableKey, zoneRoom.label, isExt);
     }
+  }
+
+  // Create a brand-new item that belongs to the selected zone: native to the
+  // zone's own category, with its location field (roomLabel / exteriorLabel)
+  // stamped to the zone so the item's Location reads it without hand-entry.
+  // Mirrors toggleZoneItem's room-vs-exterior routing.
+  function createZoneItem(name) {
+    const trimmed = (name || "").trim();
+    const zoneRoom = rooms[selected];
+    if (!trimmed || !zoneRoom?.label || !onAddItem) return;
+    const catName = zoneRoom.categoryName || zoneRoom.label;
+    const isExt = isExteriorTypeUtil(resolveTypeId(catName, categoryTypes?.[catName] || "system"), entityTypeData);
+    const stableKey = onAddItem(zoneRoom.label, trimmed); // handleAddItemNamed → new custom item's stable key
+    if (stableKey) useForemanStore.getState().assignItemToZone(stableKey, zoneRoom.label, isExt);
+    setZoneSearch("");
+    setAddedItemsExpanded(true);
   }
 
   const activeLevelName = floors.find(f => f.id === activeLevel)?.label || "";
@@ -2793,7 +2831,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 <input
                   value={zoneSearch}
                   onChange={e => setZoneSearch(e.target.value)}
-                  placeholder="Search items to add…"
+                  placeholder="Search or add a new item…"
                   style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", outline: "none", padding: "0.35rem 0.6rem", width: "100%" }}
                   onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
                   onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
@@ -2830,7 +2868,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   if (alreadyExists || !cat || !onAddItem) return null;
                   return (
                     <div
-                      onClick={() => { onAddItem(cat, q); setZoneSearch(""); }}
+                      onClick={() => createZoneItem(q)}
                       style={{ alignItems: "center", borderTop: searchResults.length > 0 ? "1px solid var(--fm-hairline)" : "none", cursor: "pointer", display: "flex", gap: "0.4rem", padding: "0.35rem 0.75rem", transition: "background 0.1s" }}
                       onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
@@ -4389,8 +4427,12 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
             const systemListId = `isys-${key}`;
             const noteColor = hasDetail ? "var(--fm-brass)" : "var(--fm-ink-mute)";
             const isHov = hoveredRow === key;
+            // Single-click the row opens the item detail panel; inline-editor
+            // cells and the action buttons stopPropagation so they keep working.
             return (
-              <tr key={key} style={{ borderBottom: "1px solid var(--fm-hairline)" }}
+              <tr key={key} style={{ borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer" }}
+                onClick={() => onSelectItem?.({ category: cat, item })}
+                title="Click to view item details"
                 onMouseEnter={() => setHoveredRow(key)}
                 onMouseLeave={() => setHoveredRow(null)}
               >
@@ -4400,7 +4442,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     <span style={{ color, fontFamily: "var(--fm-mono)", fontSize: "0.67rem", letterSpacing: "0.06em" }}>{label}</span>
                   </div>
                 </td>
-                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
+                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   {catIsFunctional ? (
                     <span style={{
                       background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)",
@@ -4435,7 +4477,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     >{resolvedSystem ? getInvSysTag(resolvedSystem) : "—"}</span>
                   )}
                 </td>
-                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
+                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   {editingTypeRow === key ? (
                     <ComboInput
                       autoFocus
@@ -4459,7 +4501,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     </span>
                   )}
                 </td>
-                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
+                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   {editingSubtypeRow === key ? (
                     <ComboInput
                       autoFocus
@@ -4483,7 +4525,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     </span>
                   )}
                 </td>
-                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }}>
+                <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   {editingLocationRow === key ? (
                     <ComboInput
                       autoFocus
@@ -4571,7 +4613,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     {customFieldValues?.[key]?.model || ""}
                   </span>
                 </td>
-                <td style={{ padding: "0.45rem 0.5rem", textAlign: "center", verticalAlign: "middle" }}>
+                <td style={{ padding: "0.45rem 0.5rem", textAlign: "center", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   <button
                     onClick={() => onSelectItem?.({ category: cat, item })}
                     title={hasDetail ? "View item details" : "Add item details"}
@@ -4588,7 +4630,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     </svg>
                   </button>
                 </td>
-                <td style={{ padding: "0.45rem 0.25rem", textAlign: "center", verticalAlign: "middle" }}>
+                <td style={{ padding: "0.45rem 0.25rem", textAlign: "center", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   {isHov && (
                     <button
                       onClick={() => onDeleteItem?.(cat, item)}

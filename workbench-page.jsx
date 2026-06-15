@@ -1,11 +1,11 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import AssigneeInput from "./components/AssigneeInput.jsx";
 import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
 import { useForemanStore } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
-import { buildSessionCandidates, orderByRoom, createSession, createSessionItem } from "./lib/sessions.js";
+import { buildSessionCandidates, orderByRoom, createSession, createSessionItem, candidateKey, loadEstimateOverrides, setEstimateOverride, clearEstimateOverride } from "./lib/sessions.js";
 import { saveMaintenanceCompletionRecord, loadMaintenanceCompletionRecords, maintenanceKey } from "./lib/maintenance.js";
 import { computeNextDate } from "./lib/scheduleInterval.js";
 import { toggleChoreCompletion, saveChoreCompletions, loadChoreCompletions, saveChoreCompletionRecord } from "./lib/choreCompletions.js";
@@ -22,7 +22,7 @@ const KIND_META = {
   todo:        { label: "TODO",  color: "var(--fm-cyan)" },
 };
 
-function candKey(c) { return `${c.kind}:${c.ref}:${c.choreDate || ""}`; }
+const candKey = candidateKey;
 
 function dueLabel(dueDate, today) {
   const days = Math.round((dueDate - today) / 86400000);
@@ -104,6 +104,29 @@ const fieldInput = {
   width: "100%",
 };
 
+const estLabel = {
+  borderRadius: "var(--fm-radius)",
+  cursor: "pointer",
+  flexShrink: 0,
+  fontFamily: "var(--fm-mono)",
+  fontSize: "0.6rem",
+  padding: "0.05rem 0.2rem",
+};
+
+const estInput = {
+  background: "var(--fm-bg-sunk)",
+  border: "1px solid var(--fm-brass)",
+  borderRadius: "var(--fm-radius)",
+  color: "var(--fm-ink)",
+  flexShrink: 0,
+  fontFamily: "var(--fm-mono)",
+  fontSize: "0.6rem",
+  outline: "none",
+  padding: "0.05rem 0.15rem",
+  textAlign: "right",
+  width: 42,
+};
+
 const kindTag = (kind) => ({
   background: "var(--fm-bg-sunk)",
   border: `1px solid ${KIND_META[kind].color}`,
@@ -163,10 +186,60 @@ export default function WorkbenchPage({ navigate, navState }) {
   const [budget, setBudget] = useState(null); // minutes | null
   const [selected, setSelected] = useState(() => new Set());
 
-  const candidates = useMemo(
+  // Per-task estimate overrides (double-click a row's estimate to set one).
+  const [estOverrides, setEstOverrides] = useState(() => loadEstimateOverrides());
+  const [editingEstKey, setEditingEstKey] = useState(null);
+  const [editEstVal, setEditEstVal] = useState("");
+  const estBlurSkip = useRef(false);
+
+  const rawCandidates = useMemo(
     () => buildSessionCandidates({ chores, inventory, spatialAssignments, now: today, todoWindowDays: 30 }),
     [chores, inventory, spatialAssignments, today]
   );
+
+  // Layer manual estimates on top so every consumer — selection total, budget
+  // readout, and the started session — sees the user's number, not the heuristic.
+  // Chores own their duration on the chore record (shared with the Chores page);
+  // it already flows into estMinutes via buildSessionCandidates, so we only flag
+  // it as set. Maintenance/to-dos use the separate per-session override map.
+  const candidates = useMemo(
+    () => rawCandidates.map(c => {
+      if (c.kind === "chore") {
+        return c.chore?.duration != null ? { ...c, estOverridden: true } : c;
+      }
+      const ov = estOverrides[candKey(c)];
+      return ov != null ? { ...c, estMinutes: ov, estOverridden: true } : c;
+    }),
+    [rawCandidates, estOverrides]
+  );
+
+  function startEditEst(c) {
+    estBlurSkip.current = false;
+    setEditEstVal(String(c.estMinutes ?? ""));
+    setEditingEstKey(candKey(c));
+  }
+  function commitEstEdit(c) {
+    if (estBlurSkip.current) { estBlurSkip.current = false; setEditingEstKey(null); return; }
+    const trimmed = editEstVal.trim();
+    const n = trimmed ? Math.round(Number(trimmed)) : NaN;
+    const valid = !isNaN(n) && n > 0;
+    if (c.kind === "chore") {
+      // Persist on the chore so the Chores page sees the same number; empty or
+      // invalid clears it → reverts to the heuristic.
+      const duration = valid ? n : null;
+      useForemanStore.getState().setChores(chores.map(x => x.id === c.ref ? { ...x, duration } : x));
+    } else {
+      const key = candKey(c);
+      if (!trimmed) setEstOverrides(clearEstimateOverride(key)); // empty → revert to the heuristic
+      else if (valid) setEstOverrides(setEstimateOverride(key, n));
+    }
+    estBlurSkip.current = true; // swallow the blur fired by unmounting the input
+    setEditingEstKey(null);
+  }
+  function cancelEstEdit() {
+    estBlurSkip.current = true;
+    setEditingEstKey(null);
+  }
 
   const windowEnd = useMemo(() => {
     const d = new Date(today);
@@ -520,7 +593,27 @@ export default function WorkbenchPage({ navigate, navState }) {
                             {sup && sup.qtyOnHand === 0 && <span style={{ color: "var(--fm-red)" }}> · {sup.name} · out — on Shopping List</span>}
                           </div>
                         </div>
-                        <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{fmtMinutes(c.estMinutes)}</span>
+                        {editingEstKey === candKey(c) ? (
+                          <input
+                            type="number" min="1" autoFocus
+                            value={editEstVal}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => setEditEstVal(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") commitEstEdit(c);
+                              else if (e.key === "Escape") cancelEstEdit();
+                            }}
+                            onBlur={() => commitEstEdit(c)}
+                            style={estInput}
+                          />
+                        ) : (
+                          <span
+                            title="Double-click to edit estimate (clear to reset)"
+                            onClick={e => e.stopPropagation()}
+                            onDoubleClick={e => { e.stopPropagation(); startEditEst(c); }}
+                            style={{ ...estLabel, color: c.estOverridden ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
+                          >{fmtMinutes(c.estMinutes)}{c.estOverridden ? "*" : ""}</span>
+                        )}
                         <span style={{ color: due.color, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", minWidth: 52, textAlign: "right" }}>{due.text}</span>
                       </div>
                     );

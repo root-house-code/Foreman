@@ -16,6 +16,7 @@ import {
   loadChoreNotes, saveChoreNotes,
   computeChoreNextDate, computeNextOccurrenceFromStart,
 } from "./lib/chores.js";
+import { estimateMinutes } from "./lib/sessions.js";
 import { loadData, loadCustomData, saveCustomData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
@@ -212,15 +213,18 @@ function TitleCell({ value, onChange, placeholder = "Chore name", suggestions = 
   if (!editing) {
     return (
       <span
-        onClick={startEdit}
-        style={{ color: "var(--fm-ink-dim)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", minHeight: "1.2em" }}
+        onClick={e => { e.stopPropagation(); startEdit(); }}
+        title="Click to rename"
+        style={{ borderRadius: "var(--fm-radius)", color: "var(--fm-ink-dim)", cursor: "text", display: "inline-block", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", margin: "-0.15rem -0.35rem", maxWidth: "100%", minHeight: "1.2em", overflow: "hidden", padding: "0.15rem 0.35rem", textOverflow: "ellipsis", transition: "background 0.12s", verticalAlign: "middle", whiteSpace: "nowrap" }}
+        onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"}
+        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
       >
         {value || <span style={{ color: "var(--fm-ink-mute)" }}>{placeholder}</span>}
       </span>
     );
   }
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
       <input
         autoFocus
         value={draft}
@@ -285,18 +289,20 @@ function DeleteConfirmModal({ chore, onConfirm, onClose }) {
   );
 }
 
-function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInventory, onSave, onClose }) {
+function CreateChoreModal({ date, chore, roomOptions, roomItemsMap = {}, onAddItemToInventory, onSave, onClose }) {
+  const isEdit = !!chore;
   const [form, setForm] = useState({
-    title:     "",
-    room:      roomOptions[0]?.value ?? "Whole House",
-    item:      "",
-    schedule:  "every 1 weeks",
-    dayOfWeek: date ? date.getDay() : null,
-    timeOfDay: null,
-    assignee:  "",
-    notes:     "",
+    title:     chore?.title    ?? "",
+    room:      chore?.room     ?? (roomOptions[0]?.value ?? "Whole House"),
+    item:      chore?.item     ?? "",
+    schedule:  chore?.schedule ?? "every 1 weeks",
+    dayOfWeek: isEdit ? (chore.dayOfWeek ?? null) : (date ? date.getDay() : null),
+    timeOfDay: chore?.timeOfDay ?? null,
+    assignee:  chore?.assignee ?? "",
+    notes:     chore?.notes    ?? "",
+    duration:  chore?.duration ?? null,
   });
-  const [itemInput, setItemInput]               = useState("");
+  const [itemInput, setItemInput]               = useState(chore?.item ?? "");
   const [itemDropdownOpen, setItemDropdownOpen] = useState(false);
   const [addToInventoryPrompt, setAddToInventoryPrompt] = useState(null);
 
@@ -353,7 +359,7 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
     >
       <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 480, padding: "1.75rem 2rem", width: "90%" }}>
         <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: dateLabel ? "0.2rem" : "1.5rem", textTransform: "uppercase" }}>
-          New Chore
+          {isEdit ? "Edit Chore" : "New Chore"}
         </div>
         {dateLabel && (
           <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", marginBottom: "1.5rem" }}>
@@ -434,7 +440,7 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
           </select>
         </div>
 
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1rem" }}>
+        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr 1fr", marginBottom: "1rem" }}>
           <div>
             <label style={labelStyle}>Day</label>
             <select value={form.dayOfWeek ?? ""} onChange={e => set("dayOfWeek", e.target.value === "" ? null : parseInt(e.target.value))} style={selectStyle}>
@@ -448,6 +454,19 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
               <option value="">Any time</option>
               {TIME_OPTIONS.filter(t => t.value !== null).map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
             </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Duration <span style={{ color: "var(--fm-ink-mute)", textTransform: "none", letterSpacing: 0 }}>(min)</span></label>
+            <input
+              type="number"
+              min="1"
+              value={form.duration ?? ""}
+              onChange={e => { const v = e.target.value; set("duration", v === "" ? null : (parseInt(v, 10) > 0 ? parseInt(v, 10) : null)); }}
+              placeholder={String(estimateMinutes("chore", form.title))}
+              style={inputStyle}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
+            />
           </div>
         </div>
 
@@ -476,7 +495,7 @@ function CreateChoreModal({ date, roomOptions, roomItemsMap = {}, onAddItemToInv
             onClick={() => canSave && onSave(form, date)}
             disabled={!canSave}
             style={{ background: canSave ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${canSave ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: "var(--fm-radius)", color: canSave ? "var(--fm-brass)" : "var(--fm-ink-mute)", cursor: canSave ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.08em", padding: "0.4rem 1rem", transition: "all 0.15s" }}
-          >Add Chore</button>
+          >{isEdit ? "Save Changes" : "Add Chore"}</button>
         </div>
       </div>
     </div>
@@ -674,6 +693,7 @@ export default function ChoresPage({ navigate, navState }) {
   const [confirmChore, setConfirmChore]   = useState(null);
   const [addChoreModalOpen, setAddChoreModalOpen] = useState(false);
   const [createChoreDate, setCreateChoreDate]     = useState(null);
+  const [editChore, setEditChore]                 = useState(null);
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [choreNextDates, setChoreNextDates] = useState(() => loadChoreNextDates());
   const [detailEvent, setDetailEvent]     = useState(null); // { chore, date }
@@ -749,6 +769,15 @@ export default function ChoresPage({ navigate, navState }) {
       case "title":    return (chore.title || "").toLowerCase();
       case "schedule": return parseMonths(chore.schedule) ?? 999;
       case "next":     return choreNextDates[chore.id] || "9999-99-99";
+      case "status": {
+        // Sort by urgency, mirroring choreStatus: days until next (negative =
+        // overdue first), today = 0, upcoming positive; no date → last.
+        const d = choreNextDates[chore.id];
+        if (!d) return null;
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const nd = new Date(d);  nd.setHours(0, 0, 0, 0);
+        return Math.round((nd - today) / 86400000);
+      }
       default:         return "";
     }
   }
@@ -760,7 +789,7 @@ export default function ChoresPage({ navigate, navState }) {
     if (aEmpty) return 1;
     if (bEmpty) return -1;
     let raw;
-    if (col === "schedule") raw = av - bv;
+    if (col === "schedule" || col === "status") raw = av - bv;
     else raw = String(av).localeCompare(String(bv));
     return dir === "asc" ? raw : -raw;
   }
@@ -832,6 +861,28 @@ export default function ChoresPage({ navigate, navState }) {
       setChoreNextDates(updatedNext);
     }
     setAddChoreModalOpen(false);
+  }
+
+  function handleEditChoreSave(form) {
+    const target = chores.find(c => c.id === editChore.id);
+    const updated = chores.map(c => c.id === editChore.id ? { ...c, ...form } : c);
+    useForemanStore.getState().setChores(updated);
+
+    // Only recompute the next due date when the cadence actually changed —
+    // editing the name/assignee/notes must not reset a completion-advanced date.
+    const cadenceChanged = target && (
+      target.schedule !== form.schedule ||
+      (target.dayOfWeek ?? null) !== (form.dayOfWeek ?? null) ||
+      (target.timeOfDay ?? null) !== (form.timeOfDay ?? null)
+    );
+    if (cadenceChanged && form.schedule) {
+      const startBase = target?.startDate ? new Date(target.startDate) : new Date();
+      const next = computeNextOccurrenceFromStart(startBase, form.schedule, form.dayOfWeek, form.timeOfDay);
+      const updatedNext = { ...choreNextDates, [editChore.id]: next.toISOString() };
+      saveChoreNextDates(updatedNext);
+      setChoreNextDates(updatedNext);
+    }
+    setEditChore(null);
   }
 
   function handleAddItemToInventory(room, item) {
@@ -928,6 +979,7 @@ export default function ChoresPage({ navigate, navState }) {
     { key: "room",     label: "Location" },
     { key: "schedule", label: "Cadence" },
     { key: "next",     label: "Next"    },
+    { key: "status",   label: "Status", width: "80px" },
   ];
 
   return (
@@ -941,14 +993,15 @@ export default function ChoresPage({ navigate, navState }) {
         />
       )}
 
-      {addChoreModalOpen && (
+      {(addChoreModalOpen || editChore) && (
         <CreateChoreModal
-          date={createChoreDate}
+          date={editChore ? null : createChoreDate}
+          chore={editChore}
           roomOptions={roomOptions}
           roomItemsMap={roomItemsMap}
           onAddItemToInventory={handleAddItemToInventory}
-          onSave={handleAddChoreModalSave}
-          onClose={() => { setAddChoreModalOpen(false); setCreateChoreDate(null); }}
+          onSave={editChore ? handleEditChoreSave : handleAddChoreModalSave}
+          onClose={() => { setAddChoreModalOpen(false); setCreateChoreDate(null); setEditChore(null); }}
         />
       )}
 
@@ -1101,20 +1154,19 @@ export default function ChoresPage({ navigate, navState }) {
             <thead>
               <tr style={{ borderBottom: "1px solid var(--fm-hairline2)" }}>
                 <th style={{ ...TH, width: "20px" }} />
-                {SORT_COLS.map(({ key, label }) => {
+                {SORT_COLS.map(({ key, label, width }) => {
                   const sort = sortCols.find(s => s.col === key);
                   const isPrimary = sort && sortCols[0]?.col === key;
                   return (
                     <th
                       key={key}
                       onClick={e => handleHeaderClick(key, e.shiftKey)}
-                      style={{ ...TH, color: sort ? (isPrimary ? "var(--fm-brass)" : "var(--fm-ink-dim)") : "var(--fm-brass-dim)", cursor: "pointer" }}
+                      style={{ ...TH, ...(width ? { width } : {}), color: sort ? (isPrimary ? "var(--fm-brass)" : "var(--fm-ink-dim)") : "var(--fm-brass-dim)", cursor: "pointer" }}
                     >
                       {label}{sort ? (sort.dir === "asc" ? " ↑" : " ↓") : ""}
                     </th>
                   );
                 })}
-                <th style={{ ...TH, width: "80px" }}>Status</th>
                 <th style={{ ...TH, width: "120px" }} />
               </tr>
             </thead>
@@ -1137,7 +1189,9 @@ export default function ChoresPage({ navigate, navState }) {
                 return (
                   <tr
                     key={chore.id}
-                    style={{ background: rowBg, borderBottom: "1px solid var(--fm-hairline)", transition: "background 0.1s" }}
+                    onClick={() => setEditChore(chore)}
+                    title="Click to edit chore details"
+                    style={{ background: rowBg, borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", transition: "background 0.1s" }}
                     onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-sunk)"}
                     onMouseLeave={e => e.currentTarget.style.background = rowBg}
                   >
@@ -1152,7 +1206,7 @@ export default function ChoresPage({ navigate, navState }) {
                     </td>
 
                     {/* Room */}
-                    <td style={{ ...TD, width: "120px" }}>
+                    <td style={{ ...TD, width: "120px" }} onClick={e => e.stopPropagation()}>
                       <SelectCell
                         value={chore.room}
                         options={roomOptions}
@@ -1162,7 +1216,7 @@ export default function ChoresPage({ navigate, navState }) {
                     </td>
 
                     {/* Cadence */}
-                    <td style={{ ...TD, width: "140px" }}>
+                    <td style={{ ...TD, width: "140px" }} onClick={e => e.stopPropagation()}>
                       <SchedulePicker
                         value={chore.schedule || null}
                         onChange={v => handleChoreEdit(chore.id, "schedule", v || "")}
@@ -1180,7 +1234,7 @@ export default function ChoresPage({ navigate, navState }) {
                     </td>
 
                     {/* Actions */}
-                    <td style={{ ...TD, width: "120px" }}>
+                    <td style={{ ...TD, width: "120px" }} onClick={e => e.stopPropagation()}>
                       <div style={{ alignItems: "center", display: "flex", gap: "0.35rem" }}>
                         <ReminderButton
                           schedule={chore.schedule}

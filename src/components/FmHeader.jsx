@@ -24,7 +24,7 @@ function buildDateStrip() {
 // Grouped navigation. Each group becomes a dropdown menu; singles render as
 // direct buttons; meta pages sit apart on the right.
 const NAV_GROUPS = [
-  { label: 'Overview', pages: ['Dashboard', 'Calendar'] },
+  { label: 'Overview', pages: ['Dashboard', 'Calendar', 'Timeline'] },
   { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Lifecycle'] },
   { label: 'Upkeep',   pages: ['Maintenance', 'Services', 'Utilities', 'Supplies', 'Chores'] },
   { label: 'Work',     pages: ['Workbench', 'To Dos', 'Projects'] },

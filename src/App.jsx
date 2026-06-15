@@ -25,6 +25,7 @@ import BoardPage from "../board-page.jsx";
 import ProjectsPage from "../projects-page.jsx";
 import DashboardPage from "../dashboard-page.jsx";
 import GuidePage from "../guide-page.jsx";
+import TimelinePage from "../timeline-page.jsx";
 import ChoresPage from "../chores-page.jsx";
 import CalendarPage from "../calendar-page.jsx";
 import PreferencesPage from "../preferences-page.jsx";
@@ -57,6 +58,7 @@ const PAGE_KEYS = {
   projects: "Projects",
   lifecycle: "Lifecycle",
   guide: "Notebook",
+  timeline: "Timeline",
   preferences: "Preferences",
 };
 
@@ -88,6 +90,7 @@ export default function App() {
     if (page === "board") return <BoardPage navigate={navigate} navState={navState} />;
     if (page === "projects") return <ProjectsPage navigate={navigate} navState={navState} />;
     if (page === "guide") return <GuidePage navigate={navigate} />;
+    if (page === "timeline") return <TimelinePage navigate={navigate} />;
     if (page === "services") return <ServicesPage navigate={navigate} navState={navState} />;
     if (page === "utilities") return <UtilitiesPage navigate={navigate} navState={navState} />;
     if (page === "supplies") return <SuppliesPage navigate={navigate} />;

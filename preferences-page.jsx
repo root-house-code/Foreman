@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { storageGet, storageSet, storageDel } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -28,6 +28,8 @@ import {
   BUILT_IN_TYPES,
 } from "./lib/entityTypes.js";
 import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
+import { MANUFACTURERS_BY_ITEM } from "./lib/manufacturers.js";
+import { getModels } from "./lib/models.js";
 import InspectionReview from "./components/InspectionReview.jsx";
 import {
   getWebhookUrl, setWebhookUrl,
@@ -48,6 +50,7 @@ const NAV_ITEMS = [
   { key: "integrations",   label: "Integrations",       available: true  },
   { key: "display",        label: "Display",            available: true  },
   { key: "importexport",   label: "Import / Export",    available: true  },
+  { key: "info",           label: "Info",               available: true  },
 ];
 
 const INSPECTION_META_KEY   = "foreman-inspection-meta";
@@ -2329,6 +2332,44 @@ function DisplaySettings() {
 
 // ─── PreferencesPage ──────────────────────────────────────────────────────────
 
+// ─── InfoSettings ─────────────────────────────────────────────────────────────
+
+function InfoSettings() {
+  const coverageItems = useMemo(() => Object.keys(MANUFACTURERS_BY_ITEM).sort(), []);
+
+  return (
+    <div style={{ maxWidth: "760px" }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Model Coverage</h2>
+      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1.6, margin: "0 0 2rem" }}>
+        {coverageItems.length} appliance types · 1,420 models across 140 manufacturer pairings. These power the manufacturer and model suggestions when you fill in an item's details.
+      </p>
+      {coverageItems.map(item => {
+        const manufacturers = MANUFACTURERS_BY_ITEM[item];
+        return (
+          <div key={item} style={{ marginBottom: "1.5rem" }}>
+            <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-serif)", fontSize: "0.88rem", marginBottom: "0.35rem" }}>{item}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", paddingLeft: "1rem" }}>
+              {manufacturers.map(mfr => {
+                const models = getModels(mfr, item);
+                return (
+                  <div key={mfr}>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem" }}>{mfr}</span>
+                    {models.length > 0 && (
+                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", lineHeight: 1.6, marginTop: "0.05rem" }}>
+                        {models.join("  ·  ")}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function PreferencesPage({ navigate }) {
   const [activeSection, setActiveSection] = useState("profile");
 
@@ -2361,6 +2402,7 @@ export default function PreferencesPage({ navigate }) {
         {activeSection === "integrations"   && <IntegrationsSettings />}
         {activeSection === "display"        && <DisplaySettings />}
         {activeSection === "importexport"   && <ImportExportSettings />}
+        {activeSection === "info"           && <InfoSettings />}
       </div>
 
     </div>

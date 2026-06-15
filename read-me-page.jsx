@@ -125,18 +125,19 @@ const TENETS = [
 const PAGES = [
   ["Dashboard", "At-a-glance summary of your home's state: an overall health dial, a Triage queue of what's overdue or due this week, system and room health (now reflecting chores as well as maintenance), a T−30 to T+90 schedule timeline, columnar To Dos and Projects with inline editing, and a Lifecycle cost stat. The entry point for a daily or weekly check-in; most panels sort by clicking a column header."],
   ["Calendar", "All scheduled maintenance tasks and chores laid out across time, with service renewal dates and inventory warranty expiries surfaced alongside them. Supports month, week, day, and year views. Use it to see what's coming, identify clusters of work, and confirm what's been completed."],
-  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Inventory items link directly to maintenance tasks, and component specs (filter sizes, battery types, salt grades) feed the Supplies tracker. A built-in floor plan lets you draw each level — floors, basement, attic, roof, and yard — place items spatially, and tag every zone by its real-estate room type (bedroom, full / ¾ / half bath, kitchen, and more). When no zone is selected, a Property Details panel summarizes the home the way a listing does: bedroom and bathroom counts and finished living area, with exteriors like garages, basements, and attics excluded."],
+  ["Timeline", "The backward-looking companion to the Calendar: an automatic, reverse-chronological feed of everything that has happened to the house — completed maintenance, chores, service visits, utility bills, expenses, and projects — grouped by month and filterable by type, area, and person. No new data entry; it reads logs you already create. Click any entry to jump to its source."],
+  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Single-click an item to open its full details — specs, linked tasks, and notes — in the side panel. Inventory items link directly to maintenance tasks, and component specs (filter sizes, battery types, salt grades) feed the Supplies tracker. A built-in floor plan lets you draw each level — floors, basement, attic, roof, and yard — place items spatially, and tag every zone by its real-estate room type (bedroom, full / ¾ / half bath, kitchen, and more). When no zone is selected, a Property Details panel summarizes the home the way a listing does: bedroom and bathroom counts and finished living area, with exteriors like garages, basements, and attics excluded."],
   ["Maintenance", "The core of Foreman. A structured list of recurring maintenance tasks across every system in your home: HVAC, plumbing, electrical, roofing, and more. Each task has a schedule, an optional season constraint, and a completion log. Tracks what's overdue, what's due soon, and what's on schedule. Logging a replace-or-refill task can decrement the matching item on the Supplies tracker."],
   ["Services", "A dedicated manager for recurring service contracts and subscriptions: pest control, lawn care, HVAC maintenance plans, home warranties, security monitoring, and more. Track provider details, costs, billing cycles, and renewal dates. Log individual service visits with technician notes. Renewal dates surface on the Calendar and monthly costs roll up to the Dashboard."],
   ["Utilities", "Tracks recurring utility bills — electricity, natural gas, water, sewer, garbage, internet, and more. Each utility is an account under which you log every monthly bill (amount plus optional usage like kWh, therms, or gallons), building a spend and usage history. An estimated monthly total (a trailing-12-month average) surfaces on the Dashboard and folds into the Lifecycle cost of ownership."],
   ["Supplies", "Tracks the consumables your home burns through on a cycle: furnace and water filters, softener salt, detector batteries, bulbs. Foreman derives each one from inventory items that have a replaceable part — pulling the spec from the item's fields and the replacement cadence from its maintenance schedule. Set an on-hand count and anything at or below its reorder point rolls onto a copyable Shopping List."],
-  ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set frequency, and mark them done as you go. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
-  ["Workbench", "The doing half of Foreman. Plan a focused work session from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or time window, with effort estimates summed against a time budget. Then run it as a one-card-at-a-time punch list, grouped room by room: Done writes the full completion record (and decrements supplies) on the spot, Skip leaves the item due, and Can't spawns a linked blocker to-do. Every session is kept in a durable History, and completed sessions appear in the Journal."],
+  ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set a frequency and an optional duration estimate, and mark them done as you go. Single-click a chore to reopen its full details for editing, or click its name to rename in place; sort the list by any column, including status (ordered by urgency). A chore's duration is shared with the Workbench's effort planning. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
+  ["Workbench", "The doing half of Foreman. Plan a focused work session from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or time window, with effort estimates summed against a time budget. Then run it as a one-card-at-a-time punch list, grouped room by room: Done writes the full completion record (and decrements supplies) on the spot, Skip leaves the item due, and Can't spawns a linked blocker to-do. Every session is kept in a durable History, and completed sessions appear in the Timeline."],
   ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
   ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
   ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and combines recurring service and utility spend with logged repairs into an annual cost of ownership. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. The Budget tab projects a forward twelve-month run-rate — services, seasonal utilities, reserve, and a repairs baseline — month by month, with a target to measure against and planned one-offs you can pin, plus a mortgage line (a default payment with per-month corrections and an escrow split) that adds a total-monthly-outlay figure on top of the cost to operate. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
-  ["Notebook", "The home's record, in two tabs. The Notebook tab is a knowledge base — articles and notes organized by system: how something works, what product you used, lessons from a past repair. The Journal tab is an automatic, reverse-chronological feed of everything that has happened to the house — completed maintenance, chores, service visits, utility bills, expenses, and projects — grouped by month and filterable by type, area, and person, drawn entirely from logs you already create. Click any entry to jump to its source."],
-  ["Preferences", "Configure the structure of your home: floors, rooms, entity types, and application settings. The definitions here shape how data is organized across all other pages."],
+  ["Notebook", "The home's knowledge base — an article for every inventory item where you can write freely (how something works, what product you used, lessons from a past repair) and edit the item's specs inline, kept in sync with Inventory. Double-click an article — in the sidebar or anywhere in its body — to jump straight into edit mode. Group the article list by system, room, or recency — or arrange it yourself by dragging — and search across note bodies and spec values, not just item names. Beyond the auto-created per-item articles, you can write your own standalone articles and classify any article by the item, location, system, project, or maintenance task it's about. (The Model Coverage reference now lives under Preferences → Info; the home's automatic activity feed lives on its own Timeline page under the Overview menu.)"],
+  ["Preferences", "Configure the structure of your home: floors, rooms, entity types, and application settings. The definitions here shape how data is organized across all other pages. An Info section lists the built-in Model Coverage — the manufacturer and model suggestions used across item details."],
 ];
 
 function InstructionsTab() {
@@ -309,12 +310,16 @@ function ArchTab() {
             <p style={{ ...bodyText, marginTop: "0.6rem" }}>Associated data is split across two stores keyed by stable key. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Spatial assignments</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-spatial-assignments</span>) record which room or exterior zone each item is placed in — this is what the Floor Plan and Outline read to group items by location. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Item field values</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-item-field-values</span>) record detail fields like manufacturer, model number, serial number, warranty expiry, install date, and item type. Both are slices in the global store, so writes on any page propagate everywhere automatically.</p>
           </div>
           <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Notebook articles</div>
+            <p style={bodyText}>Each inventory item has one free-form article. The note body is stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-guide-notes</span>, keyed by the item's <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>category|item</span> reference. Beyond the auto-created per-item articles, user-created standalone articles are stored in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-standalone-articles</span>, with their bodies in the same notes store under a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>standalone:&lt;id&gt;</span> key. Each article's classification — the item, location, system, project, and task it's about — lives in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-article-associations</span>; derived associations (an item article's own location and system) are read live from the item rather than copied. The specs shown on an article are <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>not</span> stored with the note — editing them writes through the same <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>setCustomField</span> store action and the same stable-key stores Inventory uses (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-item-field-values</span> and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-spatial-assignments</span>), so a spec changed on either page appears on the other automatically. The sidebar's organization is its own small state: the chosen grouping mode (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-notebook-grouping</span> — system, room, recent, or custom) and, in custom mode, the user's drag order (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-notebook-order</span>).</p>
+          </div>
+          <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Floor plan</div>
             <p style={bodyText}>The home's spatial structure spans three stores. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Levels</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-floors</span>) are an ordered list, each with a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>kind</span> — floor, basement, attic, roof, or yard — that sets its sort position and uniqueness (only one basement, attic, roof, or yard; floors are numbered and repeatable). <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Rooms</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-rooms</span>) are the zones placed on those levels — each carries a label, its level, the items inside it, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>use</span> (room type: bedroom, full / ¾ / half bath, kitchen, …) that drives the bed/bath and finished-area rollups in the Property Details panel. The drawn zone polygons and on-canvas item markers persist under the historical <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data</span> key. Only zones whose category resolves to the spatial room class count toward finished living area; exteriors — garages, basements, attics, and yards — are tracked but excluded.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Chores</div>
-            <p style={bodyText}>Stored as objects with a unique ID. Schedules use a human-readable string format ("every 1 weeks", "every 3 months"). Next occurrence dates and per-occurrence completion records (who completed it, when, any notes) are stored in separate localStorage keys and linked by chore ID. Unlike maintenance, chores track every occurrence, not just the most recent.</p>
+            <p style={bodyText}>Stored as objects with a unique ID. Schedules use a human-readable string format ("every 1 weeks", "every 3 months"), and each chore carries an optional duration estimate (in minutes) that the Workbench reads and writes as a single shared value. Next occurrence dates and per-occurrence completion records (who completed it, when, any notes) are stored in separate localStorage keys and linked by chore ID. Unlike maintenance, chores track every occurrence, not just the most recent.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Services</div>
@@ -405,7 +410,6 @@ const ROADMAP_SECTIONS = [
   { id: "road-qr",       label: "QR Labels" },
   { id: "road-ha",       label: "Home Assistant" },
   { id: "road-gcal",     label: "Google Calendar" },
-  { id: "road-notebook",  label: "Notebook Articles" },
   { id: "road-vault",     label: "Document Vault" },
   { id: "road-handoff",   label: "Handoff Export" },
   { id: "road-snapshots", label: "Snapshots & Undo" },
@@ -512,26 +516,6 @@ function RoadmapTab() {
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Events will carry enough context to be actionable: the category, item name, and task description, not just a bare "Maintenance Due" notification. The goal is that Foreman fits inside the tools your household already checks, rather than becoming another app to remember to open.
         </p>
-      </ArchSection>
-
-      <ArchSection id="road-notebook" label="Notebook Articles" heading="Notebook Overhaul: Article Refinements" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          The Journal half of this overhaul has shipped — the Notebook now carries an automatic activity timeline alongside its articles. What remains is bringing the reference half, the Articles tab, up to the same standard.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["Better organization", "Group and reorder articles beyond the current system tree — by room, by recency, or by your own arrangement — so the knowledge you reach for most is easiest to find."],
-            ["Updatable item details", "Edit an item's specs and details directly from its article, keeping the reference and the inventory record in sync without bouncing between pages."],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
       </ArchSection>
 
       <ArchSection id="road-vault" label="Documents" heading="Document Vault" sectionRefs={sectionRefs}>
@@ -732,6 +716,52 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
+    date: "June 14, 2026",
+    heading: "Chores: Details, Duration & Sorting",
+    bullets: [
+      ["Reopen a chore's details", "Single-click a chore to reopen the full detail window and update any field — room, item, cadence, day and time, assignee, or notes — long after you first created it. The name label stays a one-click inline rename, so renaming and editing details no longer compete for the same click."],
+      ["Duration estimate", "Chores now carry a Duration in minutes, editable both from the chore details window and from the Workbench's task table — one shared value, so a change in either place shows up in the other. The Workbench keyword heuristic only seeds the first guess."],
+      ["Sort by status", "The Chores table's Status column is now sortable like every other column — click it to order by urgency (most overdue first), click again to reverse, shift-click to add it as a tiebreaker."],
+    ],
+  },
+  {
+    date: "June 14, 2026",
+    heading: "Faster Item & Article Editing",
+    bullets: [
+      ["Open an item in one click", "On the Inventory page, single-click anywhere on an item's row to open its details in the side panel — no more hunting for the document icon. The inline field editors (system, type, location, rename) and the row's delete action still work exactly as before."],
+      ["Double-click to edit an article", "In the Notebook, double-click an article — in the sidebar list or anywhere in its body — to drop straight into edit mode, instead of reaching for the Edit button."],
+      ["Wider Notebook sidebar", "The article sidebar is a little wider so filter labels like “Exclude Blanks” read in full."],
+      ["Floor-plan duplicate fix", "A room on the floor plan no longer lists or counts the same item twice. Items are now de-duplicated by category and name — the way Inventory identifies them — so a single furnace shows once, not twice."],
+    ],
+  },
+  {
+    date: "June 14, 2026",
+    heading: "Notebook: Write Your Own Articles",
+    bullets: [
+      ["Create standalone articles", "The Notebook is no longer limited to one article per inventory item. Hit + New Article to write a free-standing note — a how-to, a vendor list, a seasonal checklist — that lives in the same sidebar, search, grouping, and drag-reorder as every other article, and rename or delete it from the article itself."],
+      ["Classify any article", "Every article now carries association fields for what it's about — the item, location, system, project, and maintenance task. Item articles inherit their item's location and system and add Project and Task; standalone articles set all five. Populated associations show as chips when reading and persist across reloads."],
+      ["Model Coverage moved", "The manufacturer and model coverage reference that used to live in the Notebook now sits under Preferences → Info, keeping the Notebook focused on your writing."],
+    ],
+  },
+  {
+    date: "June 13, 2026",
+    heading: "Notebook Articles: Organize & Edit",
+    bullets: [
+      ["Organize the article list", "The Notebook sidebar gains a Group by control — keep the system tree, or regroup by Room, by Recent (last-edited first), or a Custom drag-to-reorder arrangement that's yours to set. The chosen mode and your custom order both persist across reloads."],
+      ["Editable item details", "An item's specs are now editable straight from its article. Hit Edit and change the manufacturer, model, serial, purchase date, location, or any custom field — written through the same store Inventory uses, so the two stay in sync automatically. You can add fields, from the library or your own, without leaving the article."],
+      ["Specs now match Inventory", "Fixed a storage-key mismatch that left article specs reading from the wrong place — a default item's details entered in Inventory now actually show on its article."],
+      ["Search notes and specs", "The sidebar search now matches note bodies and spec values too, not just item names, and a Documented toggle filters to the articles you've actually written in. Each article also links straight to its Inventory record."],
+    ],
+  },
+  {
+    date: "June 13, 2026",
+    heading: "Timeline & Editable Effort Estimates",
+    bullets: [
+      ["Timeline is its own page", "The activity feed that used to live as the Notebook's Journal tab is now a first-class page named Timeline, reachable from the Overview menu in the header. Same automatic record of everything that's happened to the house — completed maintenance, chores, service visits, utility bills, expenses, and projects — now one click closer. The Notebook returns to being a focused knowledge base of articles."],
+      ["Tune a task's estimate", "On the Workbench, double-click any task's time estimate to type your own — the keyword heuristic is only a starting guess. Your number persists, flows into the session's time budget, and clearing the field reverts to the automatic estimate."],
+    ],
+  },
+  {
     date: "June 13, 2026",
     heading: "Operating Budget & Cash-Flow Forecast",
     bullets: [
@@ -748,7 +778,7 @@ const UPDATES = [
     bullets: [
       ["Plan a session", "A new Workbench page turns the triage list into a plan: pick from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or window, with effort estimates summed against an optional time budget. One tap from the Dashboard Triage panel seeds it with everything overdue or due this week."],
       ["Run the punch list", "Items run one card at a time, grouped room by room, with a progress rail and elapsed timer. Done writes the complete record immediately — completion log, next-due date, supply decrement — exactly as if you'd logged it from its home page. Skip leaves the item honestly due; Can't captures what's blocking and spawns a linked to-do."],
-      ["Durable history", "Every session is kept with per-item results and notes — a record that outlives the latest-completion-only maintenance log — and each completed session appears in the Journal. Reload mid-session and Foreman offers to resume right where you left off."],
+      ["Durable history", "Every session is kept with per-item results and notes — a record that outlives the latest-completion-only maintenance log — and each completed session appears in the Timeline. Reload mid-session and Foreman offers to resume right where you left off."],
       ["Profile export fix", "Services, utilities, supplies, expenses, and completion records are now included in profile snapshots and exports — previously they leaked across profile switches."],
     ],
   },
