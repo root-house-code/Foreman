@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { storageGet, storageSet, storageDel } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -30,6 +30,7 @@ import {
 import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
 import { MANUFACTURERS_BY_ITEM } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
+import { expectedYears, EXPECTED_LIFESPAN } from "./lib/lifespans.js";
 import InspectionReview from "./components/InspectionReview.jsx";
 import {
   getWebhookUrl, setWebhookUrl,
@@ -50,7 +51,7 @@ const NAV_ITEMS = [
   { key: "integrations",   label: "Integrations",       available: true  },
   { key: "display",        label: "Display",            available: true  },
   { key: "importexport",   label: "Import / Export",    available: true  },
-  { key: "info",           label: "Info",               available: true  },
+  { key: "info",           label: "Default Values",     available: true  },
 ];
 
 const INSPECTION_META_KEY   = "foreman-inspection-meta";
@@ -2332,40 +2333,124 @@ function DisplaySettings() {
 
 // ─── PreferencesPage ──────────────────────────────────────────────────────────
 
-// ─── InfoSettings ─────────────────────────────────────────────────────────────
+// ─── DefaultValuesSettings ────────────────────────────────────────────────────
 
-function InfoSettings() {
-  const coverageItems = useMemo(() => Object.keys(MANUFACTURERS_BY_ITEM).sort(), []);
+// Editable expected-lifespan cell, keyed by item name. Writes through the store so
+// the same value is editable from the Replacement Forecast tab. Empty clears the
+// override back to the curated default.
+function LifespanInput({ item }) {
+  const overrides = useForemanStore(s => s.lifespanOverrides);
+  const setOverride = useForemanStore(s => s.setLifespanOverride);
+  const effective = expectedYears(item, overrides); // override ?? curated ?? null
+  const overridden = overrides[item] != null;
+  const [val, setVal] = useState(effective == null ? "" : String(effective));
+  useEffect(() => { setVal(effective == null ? "" : String(effective)); }, [effective]);
 
   return (
-    <div style={{ maxWidth: "760px" }}>
-      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1.25rem", paddingBottom: "0.6rem" }}>Model Coverage</h2>
-      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1.6, margin: "0 0 2rem" }}>
-        {coverageItems.length} appliance types · 1,420 models across 140 manufacturer pairings. These power the manufacturer and model suggestions when you fill in an item's details.
+    <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+      <input
+        type="number" min="0" step="1"
+        value={val}
+        placeholder="—"
+        onChange={e => setVal(e.target.value)}
+        onBlur={() => setOverride(item, val.trim() === "" ? null : parseFloat(val))}
+        onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+        title="Expected service life in years — blank to reset to the curated default"
+        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: overridden ? "var(--fm-brass)" : "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", outline: "none", padding: "0.2rem 0.4rem", textAlign: "right", width: 56 }}
+      />
+      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>yr</span>
+    </div>
+  );
+}
+
+function DefaultValuesSettings() {
+  // Union of model-coverage items and curated-lifespan items, so every forecastable
+  // type's default lifespan is editable here even without model coverage.
+  const items = useMemo(
+    () => [...new Set([...Object.keys(MANUFACTURERS_BY_ITEM), ...Object.keys(EXPECTED_LIFESPAN)])].sort(),
+    []
+  );
+  const [query, setQuery] = useState("");
+  const th = { borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 1.25rem 0.55rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" };
+  const td = { borderBottom: "1px solid var(--fm-hairline)", padding: "0.7rem 1.25rem 0.7rem 0", verticalAlign: "top" };
+
+  // Match against the item name, its manufacturers, and their models so a brand or
+  // model number finds its row too.
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!q) return items;
+    return items.filter(item => {
+      if (item.toLowerCase().includes(q)) return true;
+      return (MANUFACTURERS_BY_ITEM[item] || []).some(mfr =>
+        mfr.toLowerCase().includes(q) || getModels(mfr, item).some(m => m.toLowerCase().includes(q))
+      );
+    });
+  }, [items, q]);
+
+  return (
+    <div style={{ maxWidth: "900px" }}>
+      <h2 style={{ color: "var(--fm-ink)", borderBottom: "var(--fm-border)", fontFamily: "var(--fm-serif)", fontSize: "1.25rem", fontWeight: 400, margin: "0 0 1rem", paddingBottom: "0.6rem" }}>Default Values</h2>
+      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1.6, margin: "0 0 1.25rem" }}>
+        Defaults that power Foreman. The estimated lifespan here is the default applied to a new item of that type when it's created — change a specific item's value from its details or the Replacement Forecast and that item keeps its own. Model coverage powers the manufacturer and model suggestions when you fill in an item's details. {items.length} item types.
       </p>
-      {coverageItems.map(item => {
-        const manufacturers = MANUFACTURERS_BY_ITEM[item];
-        return (
-          <div key={item} style={{ marginBottom: "1.5rem" }}>
-            <div style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-serif)", fontSize: "0.88rem", marginBottom: "0.35rem" }}>{item}</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", paddingLeft: "1rem" }}>
-              {manufacturers.map(mfr => {
-                const models = getModels(mfr, item);
-                return (
-                  <div key={mfr}>
-                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem" }}>{mfr}</span>
-                    {models.length > 0 && (
-                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", lineHeight: 1.6, marginTop: "0.05rem" }}>
-                        {models.join("  ·  ")}
+      <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1.5rem" }}>
+        <input
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search items, manufacturers, or models…"
+          style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", maxWidth: 360, outline: "none", padding: "0.4rem 0.6rem", width: "100%" }}
+        />
+        {q && (
+          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", whiteSpace: "nowrap" }}>
+            {filtered.length} of {items.length}
+          </span>
+        )}
+      </div>
+      {filtered.length === 0 ? (
+        <p style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", padding: "0.5rem 0" }}>
+          No items match “{query.trim()}”.
+        </p>
+      ) : (
+      <table style={{ borderCollapse: "collapse", width: "100%" }}>
+        <thead>
+          <tr>
+            <th style={th}>Item</th>
+            <th style={th}>Estimated Lifespan</th>
+            <th style={{ ...th, paddingRight: 0 }}>Model Coverage</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filtered.map(item => (
+            <tr key={item}>
+              <td style={{ ...td, color: "var(--fm-brass)", fontFamily: "var(--fm-serif)", fontSize: "0.88rem", whiteSpace: "nowrap" }}>{item}</td>
+              <td style={{ ...td, whiteSpace: "nowrap" }}><LifespanInput item={item} /></td>
+              <td style={{ ...td, paddingRight: 0 }}>
+                {(MANUFACTURERS_BY_ITEM[item] || []).length === 0 ? (
+                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>—</span>
+                ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                  {MANUFACTURERS_BY_ITEM[item].map(mfr => {
+                    const models = getModels(mfr, item);
+                    return (
+                      <div key={mfr}>
+                        <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem" }}>{mfr}</span>
+                        {models.length > 0 && (
+                          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", lineHeight: 1.6, marginTop: "0.05rem" }}>
+                            {models.join("  ·  ")}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+                    );
+                  })}
+                </div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      )}
     </div>
   );
 }
@@ -2402,7 +2487,7 @@ export default function PreferencesPage({ navigate }) {
         {activeSection === "integrations"   && <IntegrationsSettings />}
         {activeSection === "display"        && <DisplaySettings />}
         {activeSection === "importexport"   && <ImportExportSettings />}
-        {activeSection === "info"           && <InfoSettings />}
+        {activeSection === "info"           && <DefaultValuesSettings />}
       </div>
 
     </div>

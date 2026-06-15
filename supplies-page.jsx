@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { storageGet } from "./lib/storage.js";
 import { buildSupplyRows } from "./lib/supplies.js";
@@ -186,6 +186,8 @@ export default function SuppliesPage({ navigate }) {
   const addManualSupply    = useForemanStore(s => s.addManualSupply);
   const updateManualSupply = useForemanStore(s => s.updateManualSupply);
   const deleteManualSupply = useForemanStore(s => s.deleteManualSupply);
+  const addExpense         = useForemanStore(s => s.addExpense);
+  const [restock, setRestock] = useState(null); // { key, qty, cost } — inline restock-with-cost
 
   const [editing, setEditing] = useState(null); // null | supply row | { source:"manual", __new:true }
   const [nextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
@@ -209,6 +211,18 @@ export default function SuppliesPage({ navigate }) {
     const next = Math.max(0, qty);
     if (row.source === "manual") updateManualSupply(row.id, { qtyOnHand: next });
     else setSupplyState(row.taskKey, { qtyOnHand: next });
+  }
+
+  // Restock: add to on-hand and, if a cost is given, log it to the Ledger as an
+  // expense linked to the supply's inventory item.
+  function logRestock(row) {
+    const qty = Math.max(0, parseInt(restock.qty) || 0);
+    const cost = parseFloat(restock.cost);
+    if (qty > 0) setQty(row, (row.qtyOnHand || 0) + qty);
+    if (!isNaN(cost) && cost > 0) {
+      addExpense({ id: "exp-" + Date.now(), date: new Date().toISOString().slice(0, 10), amount: cost, label: `Restock: ${row.item}${row.name ? " — " + row.name : ""}`, linkedItem: row.stableKey || null, linkedWork: null });
+    }
+    setRestock(null);
   }
 
   function copyShoppingList() {
@@ -266,7 +280,8 @@ export default function SuppliesPage({ navigate }) {
                     {rows.map(r => {
                       const meta = STATUS_META[r.status];
                       return (
-                        <tr key={r.key}>
+                        <Fragment key={r.key}>
+                        <tr>
                           <td style={{ ...tdCell, color: "var(--fm-ink)" }}>{r.item}{r.source === "manual" && <span style={{ color: "var(--fm-ink-mute)", fontSize: "0.55rem", marginLeft: "0.4rem" }}>·manual</span>}</td>
                           <td style={tdCell}>{r.name || "—"}</td>
                           <td style={{ ...tdCell, color: "var(--fm-ink-mute)" }}>{r.spec || "—"}</td>
@@ -287,9 +302,25 @@ export default function SuppliesPage({ navigate }) {
                             <span style={{ color: meta.color, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textTransform: "uppercase" }}>{meta.label}</span>
                           </td>
                           <td style={{ ...tdCell, paddingRight: 0, textAlign: "right", whiteSpace: "nowrap" }}>
+                            <button style={rowBtn} onClick={() => setRestock(restock?.key === r.key ? null : { key: r.key, qty: "1", cost: "" })}>buy</button>
                             <button style={rowBtn} onClick={() => setEditing(r)}>edit</button>
                           </td>
                         </tr>
+                        {restock?.key === r.key && (
+                          <tr>
+                            <td colSpan={8} style={{ ...tdCell, background: "var(--fm-bg-sunk)" }}>
+                              <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>Restock {r.item}{r.name ? " — " + r.name : ""}:</span>
+                                <input type="number" min="1" value={restock.qty} onChange={e => setRestock(s => ({ ...s, qty: e.target.value }))} placeholder="qty" style={{ ...inputStyle, width: 70 }} />
+                                <input type="number" min="0" step="0.01" value={restock.cost} onChange={e => setRestock(s => ({ ...s, cost: e.target.value }))} placeholder="cost $ (optional)" style={{ ...inputStyle, width: 150 }} />
+                                <button style={pillBtn} onClick={() => logRestock(r)}>Save</button>
+                                <button style={rowBtn} onClick={() => setRestock(null)}>Cancel</button>
+                                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem" }}>adds to on-hand · a cost logs to the Ledger</span>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       );
                     })}
                   </tbody>

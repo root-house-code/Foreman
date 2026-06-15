@@ -32,7 +32,7 @@ import PreferencesPage from "../preferences-page.jsx";
 import ReadMePage from "../read-me-page.jsx";
 import FloorPlanPage from "../floor-plan-page.jsx";
 import ServicesPage from "../services-page.jsx";
-import LifecyclePage from "../lifecycle-page.jsx";
+import { LedgerPage, ForecastPage, MortgagePage } from "../lifecycle-page.jsx";
 import SuppliesPage from "../supplies-page.jsx";
 import UtilitiesPage from "../utilities-page.jsx";
 import CommandPalette from "../components/CommandPalette.jsx";
@@ -56,7 +56,9 @@ const PAGE_KEYS = {
   workbench: "Workbench",
   board: "To Dos",
   projects: "Projects",
-  lifecycle: "Lifecycle",
+  ledger: "Ledger",
+  forecast: "Forecast",
+  mortgage: "Mortgage",
   guide: "Notebook",
   timeline: "Timeline",
   preferences: "Preferences",
@@ -94,7 +96,9 @@ export default function App() {
     if (page === "services") return <ServicesPage navigate={navigate} navState={navState} />;
     if (page === "utilities") return <UtilitiesPage navigate={navigate} navState={navState} />;
     if (page === "supplies") return <SuppliesPage navigate={navigate} />;
-    if (page === "lifecycle") return <LifecyclePage navigate={navigate} navState={navState} />;
+    if (page === "ledger") return <LedgerPage navigate={navigate} navState={navState} />;
+    if (page === "forecast") return <ForecastPage navigate={navigate} navState={navState} />;
+    if (page === "mortgage") return <MortgagePage navigate={navigate} navState={navState} />;
     if (page === "chores") return <ChoresPage navigate={navigate} navState={navState} />;
     if (page === "calendar") return <CalendarPage navigate={navigate} />;
     if (page === "preferences") return <PreferencesPage navigate={navigate} />;

@@ -144,6 +144,7 @@ const EMPTY_SERVICE = {
   cost: "",
   billingCycle: "annual",
   renewalDate: "",
+  startDate: "",
   autoRenews: false,
   linkedRooms: [],
   linkedExterior: [],
@@ -236,6 +237,15 @@ function ServiceModal({ initial, isEdit, onSave, onClose }) {
               <option value="annual">Annual</option>
               <option value="one-time">One-time</option>
             </select>
+          </div>
+        </div>
+
+        {/* Paying since (history start) */}
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <div style={{ flex: 1 }}>
+            <label style={fieldLabel}>Paying Since</label>
+            <input style={fieldInput} type="date" value={form.startDate} onChange={e => set("startDate", e.target.value)} />
+            <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", marginTop: "0.2rem" }}>seeds the Ledger history (blank = last 12 months)</div>
           </div>
         </div>
 

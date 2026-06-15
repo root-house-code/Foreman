@@ -1,6 +1,7 @@
 import { useState, useContext } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
 import { openCommandPalette } from '../../lib/commandPalette.js';
+import PageInfoButton from '../../components/PageInfoButton.jsx';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 const KBD_HINT = IS_MAC ? '⌘K' : 'Ctrl K';
@@ -25,9 +26,9 @@ function buildDateStrip() {
 // direct buttons; meta pages sit apart on the right.
 const NAV_GROUPS = [
   { label: 'Overview', pages: ['Dashboard', 'Calendar', 'Timeline'] },
-  { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Lifecycle'] },
-  { label: 'Upkeep',   pages: ['Maintenance', 'Services', 'Utilities', 'Supplies', 'Chores'] },
-  { label: 'Work',     pages: ['Workbench', 'To Dos', 'Projects'] },
+  { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Supplies'] },
+  { label: 'Finances', pages: ['Ledger', 'Forecast', 'Services', 'Utilities', 'Mortgage'] },
+  { label: 'Work',     pages: ['Maintenance', 'Chores', 'Workbench', 'To Dos', 'Projects'] },
 ];
 const NAV_DIRECT = ['Notebook'];
 const NAV_META   = ['Read Me', 'Preferences'];
@@ -177,6 +178,7 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
       </div>
 
       <nav style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <PageInfoButton title={currentActive} navigate={nav.navigate} />
         <button
           onClick={openCommandPalette}
           title={`Search (${KBD_HINT})`}

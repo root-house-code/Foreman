@@ -12,13 +12,13 @@ const TYPE_META = {
   session:     { label: "Session",     color: "var(--fm-brass)" },
 };
 
-// Where clicking an event navigates (expenses live on the Lifecycle page).
+// Where clicking an event navigates (expenses live on the Finances → Ledger page).
 const TYPE_TARGET = {
   maintenance: "maintenance",
   chore:       "chores",
   service:     "services",
   utility:     "utilities",
-  expense:     "lifecycle",
+  expense:     "ledger",
   project:     "projects",
   session:     "workbench",
 };

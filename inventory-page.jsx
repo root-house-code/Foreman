@@ -30,6 +30,8 @@ import {
   loadItemFieldValues, saveItemFieldValues,
 } from "./lib/customFields.js";
 import { UNIVERSAL_FIELDS, ITEM_FIELDS, TYPE_FIELDS } from "./lib/fieldLibrary.js";
+import { expectedYears } from "./lib/lifespans.js";
+import { ReplacementForecast } from "./lifecycle-page.jsx";
 import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
 import { ITEM_SUBTYPES } from "./lib/itemSubtypes.js";
 import {
@@ -3050,34 +3052,6 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 // ── Item Inventory View ────────────────────────────────────────────────────────
 
 
-function InvNoteCell({ value, onChange }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={() => { setEditing(false); onChange(draft); }}
-        onKeyDown={e => {
-          if (e.key === "Enter") { e.preventDefault(); setEditing(false); onChange(draft); }
-          if (e.key === "Escape") setEditing(false);
-        }}
-        style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", outline: "none", padding: "0.2rem 0.4rem", width: "100%" }}
-      />
-    );
-  }
-  return (
-    <span
-      onClick={() => { setDraft(value || ""); setEditing(true); }}
-      style={{ color: value ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "text", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", fontStyle: value ? "normal" : "italic", minHeight: "1.2em" }}
-    >
-      {value || "Add note…"}
-    </span>
-  );
-}
-
 const INV_STATUS_META = {
   active:  { color: "var(--fm-green)",   label: "Active"  },
   partial: { color: "var(--fm-amber)",   label: "Partial" },
@@ -4385,7 +4359,6 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
               { label: "Item",         col: "item",         width: "200px" },
               { label: "Manufacturer", col: "manufacturer", width: "160px" },
               { label: "Model",        col: "model",        width: "160px" },
-              { label: "Note",         col: null,           width: "48px"  },
               { label: "",             col: null,           width: "30px"  },
             ].map(({ label, col, width }) => (
               <th
@@ -4405,7 +4378,6 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
           {filtered.map(({ cat, item, key }) => {
             const status = getInvItemStatus(itemDetails, cat, item, key);
             const { color, label } = INV_STATUS_META[status];
-            const hasDetail = !!(itemDetails?.[key]);
             const existingTypes = [...new Set(Object.values(customFieldValues || {}).map(v => v?.item_type).filter(Boolean))].sort();
             const typeListId = `itypes-${key}`;
             // Determine behavioral class for this item's own category
@@ -4425,7 +4397,6 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
               : (customFieldValues?.[key]?.systemCategory || customFieldValues?.[key]?.system || "");
             const systemOptions = systemCats; // Functional categories
             const systemListId = `isys-${key}`;
-            const noteColor = hasDetail ? "var(--fm-brass)" : "var(--fm-ink-mute)";
             const isHov = hoveredRow === key;
             // Single-click the row opens the item detail panel; inline-editor
             // cells and the action buttons stopPropagation so they keep working.
@@ -4613,23 +4584,6 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
                     {customFieldValues?.[key]?.model || ""}
                   </span>
                 </td>
-                <td style={{ padding: "0.45rem 0.5rem", textAlign: "center", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
-                  <button
-                    onClick={() => onSelectItem?.({ category: cat, item })}
-                    title={hasDetail ? "View item details" : "Add item details"}
-                    style={{ alignItems: "center", background: "transparent", border: "none", color: noteColor, cursor: "pointer", display: "flex", justifyContent: "center", padding: "0.15rem", transition: "color 0.12s" }}
-                    onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
-                    onMouseLeave={e => e.currentTarget.style.color = noteColor}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                      <polyline points="14 2 14 8 20 8"/>
-                      <line x1="16" y1="13" x2="8" y2="13"/>
-                      <line x1="16" y1="17" x2="8" y2="17"/>
-                      <polyline points="10 9 9 9 8 9"/>
-                    </svg>
-                  </button>
-                </td>
                 <td style={{ padding: "0.45rem 0.25rem", textAlign: "center", verticalAlign: "middle" }} onClick={e => e.stopPropagation()}>
                   {isHov && (
                     <button
@@ -4727,6 +4681,9 @@ export default function InventoryPage({ navigate, navState }) {
 
   const [categoryTypeOverrides, setCategoryTypeOverridesState] = useState(() => loadCategoryTypeOverrides());
   const [activeTab, setActiveTab] = useState("Item List");
+  // Internal tab keys (kept stable for the logic below) mapped to display labels.
+  const INV_TAB_KEYS = ["Item List", "Overview", "Outline", "Replacement Forecast"];
+  const INV_TAB_LABEL = { "Item List": "List View", "Overview": "Table View", "Outline": "Outline View", "Replacement Forecast": "Lifespans" };
   const [customGroupTypes, setCustomGroupTypes] = useState(() => loadCustomGroupTypes());
   const [groupLabelOverrides, setGroupLabelOverrides] = useState(() => loadGroupLabelOverrides());
   const [groupFilter, setGroupFilter] = useState("all");
@@ -4844,6 +4801,7 @@ export default function InventoryPage({ navigate, navState }) {
   const [newField, setNewField] = useState({ name: "", type: "text", options: "" });
   const [roomSubtypes, setRoomSubtypes] = useState(() => loadRoomSubtypes());
   const entityTypeData = useForemanStore(s => s.entityTypes);
+  const lifespanOverrides = useForemanStore(s => s.lifespanOverrides); // type-level default lifespans
   function refreshEntityTypes() { useForemanStore.getState().setEntityTypes(loadEntityTypes()); }
 
   // Wrapper around setSelectedItem that enriches the selection with a stable key
@@ -5726,6 +5684,12 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       category, item: trimmed, task: "", schedule: "", season: null,
     }]);
     reload();
+    // Snapshot the item type's current default lifespan onto the new item, so later
+    // changes to the default don't retroactively alter this item. Editing the item's
+    // lifespan (details or forecast) overrides this snapshot; clearing it falls back
+    // to the type default again.
+    const def = expectedYears(trimmed, useForemanStore.getState().lifespanOverrides);
+    if (def != null) useForemanStore.getState().setCustomField(newId, "estimated_lifespan", String(def));
     return newId; // stable key for custom items is their _id
   }
 
@@ -6482,9 +6446,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <FmHeader active="Inventory" tagline="Inventory" />
       <FmSubnav
-        tabs={["Item List", "Outline", "Overview"]}
-        active={activeTab}
-        onTabChange={tab => { setActiveTab(tab); setGroupFilter("all"); }}
+        tabs={INV_TAB_KEYS.map(k => INV_TAB_LABEL[k])}
+        active={INV_TAB_LABEL[activeTab]}
+        onTabChange={label => { const key = INV_TAB_KEYS.find(k => INV_TAB_LABEL[k] === label); if (key) { setActiveTab(key); setGroupFilter("all"); } }}
         stats={[
           { value: totalItems, label: "items" },
           { value: systemCatCount, label: "systems" },
@@ -6494,7 +6458,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
-        <div style={(activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={activeTab === "Replacement Forecast" ? { flex: 1, minWidth: 0, overflowY: "auto", paddingBottom: "4rem" } : (activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (
           <ItemInventoryView
@@ -6542,9 +6506,13 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           />
         )}
 
+        {activeTab === "Replacement Forecast" && (
+          <ReplacementForecast />
+        )}
+
         </div>
 
-        {(activeTab !== "Overview" || selectedItem) && <div style={{
+        {activeTab !== "Replacement Forecast" && (activeTab !== "Overview" || selectedItem) && <div style={{
           display: "flex",
           flex: 1,
           flexDirection: "column",
@@ -6735,6 +6703,28 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                         <span style={labelStyle}>Location</span>
                       </div>
                       {renderFieldInput({ id: "location", name: "Location", type: "text" })}
+                    </div>
+                    <div style={{ marginBottom: "0.45rem" }}>
+                      <div style={{ marginBottom: "0.2rem" }}>
+                        <span style={labelStyle}>Estimated Lifespan</span>
+                      </div>
+                      {(() => {
+                        const typeDefault = expectedYears(selectedItem.item, lifespanOverrides);
+                        return (
+                          <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+                            <input
+                              type="number" min="0" step="1"
+                              value={vals.estimated_lifespan ?? ""}
+                              placeholder={typeDefault != null ? `${typeDefault} (default)` : "—"}
+                              onChange={e => handleCustomFieldValueChange(selectedItem.category, selectedItem.item, "estimated_lifespan", e.target.value, selectedItem.stableKey)}
+                              style={{ ...fieldStyle, width: 110 }}
+                              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+                              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-ink-dim)"}
+                            />
+                            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>yr</span>
+                          </div>
+                        );
+                      })()}
                     </div>
                     {inheritedFields.length > 0 && (
                       <>

@@ -499,8 +499,8 @@ export default function DashboardPage({ navigate }) {
               { label: "Services", value: "$" + Math.round(monthlyServices), color: "var(--fm-cyan)", sub: `${activeServices.length} active /mo`, nav: () => navigate("services") },
               { label: "Utilities", value: "$" + Math.round(monthlyUtil), color: "var(--fm-cyan)", sub: "/mo est", nav: () => navigate("utilities") },
               { label: "Supplies", value: suppliesToBuy, color: suppliesToBuy > 0 ? "var(--fm-amber)" : "var(--fm-ink-mute)", sub: suppliesToBuy > 0 ? "to buy" : "stocked up", nav: () => navigate("supplies") },
-              { label: "Run cost", value: runCost > 0 ? "$" + Math.round(runCost) : "—", color: "var(--fm-brass)", sub: "/mo to operate", nav: () => navigate("lifecycle", { tab: "Budget" }) },
-              { label: "Lifecycle", value: lifecycleStat.value, color: lifecycleStat.color, sub: lifecycleStat.sub, nav: () => navigate("lifecycle") },
+              { label: "Run cost", value: runCost > 0 ? "$" + Math.round(runCost) : "—", color: "var(--fm-brass)", sub: "/mo to operate", nav: () => navigate("forecast") },
+              { label: "Finances", value: lifecycleStat.value, color: lifecycleStat.color, sub: lifecycleStat.sub, nav: () => navigate("ledger") },
             ].map(s => (
               <button key={s.label} onClick={s.nav}
                 style={{ alignItems: "baseline", background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: "0.5rem", padding: 0, textAlign: "left", width: "100%" }}

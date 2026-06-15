@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useForemanStore } from "./lib/store.js";
-import { FIXED_UTILITY_TYPES, DEFAULT_UNIT, estimatedMonthly, monthlyUtilitiesTotal } from "./lib/utilities.js";
+import { FIXED_UTILITY_TYPES, DEFAULT_UNIT, estimatedMonthly, monthlyUtilitiesTotal, UTILITY_BILLING_CYCLES, utilityCycleLabel } from "./lib/utilities.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
@@ -153,6 +153,7 @@ const EMPTY_UTILITY = {
   accountNumber: "",
   unitLabel: DEFAULT_UNIT["Electricity"] ?? "",
   typicalAmount: "",
+  billingCycle: "monthly",
   dueDayOfMonth: "",
   autopay: false,
   notes: "",
@@ -239,6 +240,15 @@ function UtilityModal({ initial, isEdit, onSave, onClose }) {
           <div style={{ flex: 1 }}>
             <label style={fieldLabel}>Typical Monthly ($)</label>
             <input style={fieldInput} type="number" min="0" step="0.01" value={form.typicalAmount} onChange={e => set("typicalAmount", e.target.value)} placeholder="estimate" />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <div style={{ flex: 1 }}>
+            <label style={fieldLabel}>Payment Cycle</label>
+            <select style={fieldSelect} value={form.billingCycle} onChange={e => set("billingCycle", e.target.value)}>
+              {UTILITY_BILLING_CYCLES.map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
+            </select>
           </div>
         </div>
 
@@ -566,6 +576,7 @@ export default function UtilitiesPage({ navigate, navState }) {
                   <th style={thCell}>Provider</th>
                   <th style={thCell}>Latest Bill</th>
                   <th style={thCell}>Est. /mo</th>
+                  <th style={thCell}>Cycle</th>
                   <th style={thCell}>Due</th>
                   <th style={thCell}>Status</th>
                   <th style={{ ...thCell, width: 80 }} />
@@ -590,6 +601,7 @@ export default function UtilitiesPage({ navigate, navState }) {
                         <td style={tdCell}>{util.providerName || "—"}</td>
                         <td style={tdCell}>{latest ? fmtCost(latest.amount) : "—"}</td>
                         <td style={{ ...tdCell, color: "var(--fm-cyan)" }}>{est ? fmtCost(est) : "—"}</td>
+                        <td style={tdCell}>{utilityCycleLabel(util.billingCycle)}</td>
                         <td style={tdCell}>{util.dueDayOfMonth ? `Day ${util.dueDayOfMonth}` : "—"}</td>
                         <td style={tdCell}>
                           <span style={{
@@ -624,7 +636,7 @@ export default function UtilitiesPage({ navigate, navState }) {
 
                       {isExpanded && (
                         <tr key={util.id + "-exp"}>
-                          <td colSpan={9} style={{ background: "var(--fm-bg-sunk)", borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 0.75rem 0.75rem 2.5rem" }}>
+                          <td colSpan={10} style={{ background: "var(--fm-bg-sunk)", borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 0.75rem 0.75rem 2.5rem" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.6rem" }}>
                               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
                                 Bills ({uBills.length})

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import { PAGE_INFO, pageTitle } from "./lib/pageInfo.js";
 
 const sectionLabel = {
   color: "var(--fm-brass-dim)",
@@ -122,23 +123,8 @@ const TENETS = [
   ["Foreman earns trust.", "Every interaction that works as expected makes the next one easier to trust."],
 ];
 
-const PAGES = [
-  ["Dashboard", "At-a-glance summary of your home's state: an overall health dial, a Triage queue of what's overdue or due this week, system and room health (now reflecting chores as well as maintenance), a T−30 to T+90 schedule timeline, columnar To Dos and Projects with inline editing, and a Lifecycle cost stat. The entry point for a daily or weekly check-in; most panels sort by clicking a column header."],
-  ["Calendar", "All scheduled maintenance tasks and chores laid out across time, with service renewal dates and inventory warranty expiries surfaced alongside them. Supports month, week, day, and year views. Use it to see what's coming, identify clusters of work, and confirm what's been completed."],
-  ["Timeline", "The backward-looking companion to the Calendar: an automatic, reverse-chronological feed of everything that has happened to the house — completed maintenance, chores, service visits, utility bills, expenses, and projects — grouped by month and filterable by type, area, and person. No new data entry; it reads logs you already create. Click any entry to jump to its source."],
-  ["Inventory", "A catalog of everything in your home: appliances, fixtures, systems, materials, and finishes. Organized by system and room, with custom fields for install dates, model numbers, warranties, and finish specs. Single-click an item to open its full details — specs, linked tasks, and notes — in the side panel. Inventory items link directly to maintenance tasks, and component specs (filter sizes, battery types, salt grades) feed the Supplies tracker. A built-in floor plan lets you draw each level — floors, basement, attic, roof, and yard — place items spatially, and tag every zone by its real-estate room type (bedroom, full / ¾ / half bath, kitchen, and more). When no zone is selected, a Property Details panel summarizes the home the way a listing does: bedroom and bathroom counts and finished living area, with exteriors like garages, basements, and attics excluded."],
-  ["Maintenance", "The core of Foreman. A structured list of recurring maintenance tasks across every system in your home: HVAC, plumbing, electrical, roofing, and more. Each task has a schedule, an optional season constraint, and a completion log. Tracks what's overdue, what's due soon, and what's on schedule. Logging a replace-or-refill task can decrement the matching item on the Supplies tracker."],
-  ["Services", "A dedicated manager for recurring service contracts and subscriptions: pest control, lawn care, HVAC maintenance plans, home warranties, security monitoring, and more. Track provider details, costs, billing cycles, and renewal dates. Log individual service visits with technician notes. Renewal dates surface on the Calendar and monthly costs roll up to the Dashboard."],
-  ["Utilities", "Tracks recurring utility bills — electricity, natural gas, water, sewer, garbage, internet, and more. Each utility is an account under which you log every monthly bill (amount plus optional usage like kWh, therms, or gallons), building a spend and usage history. An estimated monthly total (a trailing-12-month average) surfaces on the Dashboard and folds into the Lifecycle cost of ownership."],
-  ["Supplies", "Tracks the consumables your home burns through on a cycle: furnace and water filters, softener salt, detector batteries, bulbs. Foreman derives each one from inventory items that have a replaceable part — pulling the spec from the item's fields and the replacement cadence from its maintenance schedule. Set an on-hand count and anything at or below its reorder point rolls onto a copyable Shopping List."],
-  ["Chores", "Regular household tasks with repeating schedules. Assign chores to rooms, set a frequency and an optional duration estimate, and mark them done as you go. Single-click a chore to reopen its full details for editing, or click its name to rename in place; sort the list by any column, including status (ordered by urgency). A chore's duration is shared with the Workbench's effort planning. Chores are ongoing upkeep, distinct from maintenance tasks, which are system-specific inspection or service events."],
-  ["Workbench", "The doing half of Foreman. Plan a focused work session from everything due or overdue — maintenance, chores, dated to-dos — filtered by room, system, or time window, with effort estimates summed against a time budget. Then run it as a one-card-at-a-time punch list, grouped room by room: Done writes the full completion record (and decrements supplies) on the spot, Skip leaves the item due, and Can't spawns a linked blocker to-do. Every session is kept in a durable History, and completed sessions appear in the Timeline."],
-  ["To Dos", "A Kanban-style board for one-off action items that don't belong in a recurring schedule. Use it for anything from calling a contractor to ordering a replacement part. Move work from backlog to done."],
-  ["Projects", "Track renovation initiatives and improvement projects from start to completion. Log progress, attach notes, link inventory items, and follow effort across time. Useful for anything with a defined scope that spans days or weeks."],
-  ["Lifecycle", "The financial and time lens on your home. The Cost of Ownership tab rolls up what you've invested by system and room and combines recurring service and utility spend with logged repairs into an annual cost of ownership. The Replacement Forecast tab ages each item against its expected lifespan, projects a suggested annual replacement reserve, and flags warranties expiring soon. The Budget tab projects a forward twelve-month run-rate — services, seasonal utilities, reserve, and a repairs baseline — month by month, with a target to measure against and planned one-offs you can pin, plus a mortgage line (a default payment with per-month corrections and an escrow split) that adds a total-monthly-outlay figure on top of the cost to operate. Turns inventory data you already entered — purchase prices, install dates, warranties — into a picture of what the house costs and what's coming."],
-  ["Notebook", "The home's knowledge base — an article for every inventory item where you can write freely (how something works, what product you used, lessons from a past repair) and edit the item's specs inline, kept in sync with Inventory. Double-click an article — in the sidebar or anywhere in its body — to jump straight into edit mode. Group the article list by system, room, or recency — or arrange it yourself by dragging — and search across note bodies and spec values, not just item names. Beyond the auto-created per-item articles, you can write your own standalone articles and classify any article by the item, location, system, project, or maintenance task it's about. (The Model Coverage reference now lives under Preferences → Info; the home's automatic activity feed lives on its own Timeline page under the Overview menu.)"],
-  ["Preferences", "Configure the structure of your home: floors, rooms, entity types, and application settings. The definitions here shape how data is organized across all other pages. An Info section lists the built-in Model Coverage — the manufacturer and model suggestions used across item details."],
-];
+// Per-page descriptions now live in lib/pageInfo.js (PAGE_INFO) — the single source
+// shared by the Instructions tab below and the global page-info button.
 
 function InstructionsTab() {
   const { activeSection, sectionRefs, scrollTo } = useToc(INSTRUCTIONS_SECTIONS);
@@ -161,11 +147,24 @@ function InstructionsTab() {
       <div ref={el => { sectionRefs.current["sec-pages"] = el; }} id="sec-pages" style={divider}>
         <div style={sectionLabel}>Navigation</div>
         <h2 style={sectionHeading}>Pages</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
-          {PAGES.map(([name, desc]) => (
-            <div key={name}>
-              <div style={{ font: "500 0.9rem var(--fm-serif)", color: "var(--fm-ink)", marginBottom: "0.2rem" }}>{name}</div>
-              <p style={bodyText}>{desc}</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.4rem" }}>
+          {PAGE_INFO.filter(p => p.key !== "readme").map((p) => (
+            <div key={p.key}>
+              <div style={{ font: "500 0.9rem var(--fm-serif)", color: "var(--fm-ink)", marginBottom: "0.2rem" }}>{p.title}</div>
+              <p style={bodyText}>{p.valueProp}</p>
+              {p.howTo?.length > 0 && (
+                <ul style={{ ...bodyText, margin: "0.45rem 0 0", paddingLeft: "1.1rem" }}>
+                  {p.howTo.map((step, i) => (
+                    <li key={i} style={{ marginBottom: "0.15rem" }}>{step}</li>
+                  ))}
+                </ul>
+              )}
+              {p.sharedWith?.length > 0 && (
+                <p style={{ ...bodyText, marginTop: "0.45rem" }}>
+                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>Shares data with: </span>
+                  {p.sharedWith.map(r => pageTitle(r.key)).join(", ")}
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -277,7 +276,7 @@ function ArchTab() {
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component. A global Command Palette (⌘K / Ctrl-K, or the header search box) is mounted above the pages and indexes every page and entity for instant search and jump-to navigation.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Every page uses the same two layout components as its shell: FmHeader (the top bar, whose pages are organized into grouped dropdown menus — Overview, Property, Upkeep, Work — with Notebook and the meta links beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
+          Every page uses the same two layout components as its shell: FmHeader (the top bar, whose pages are organized into grouped dropdown menus — Overview, Property, Finances, Work — with Notebook and the meta links beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           A single Zustand store in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/store.js</span> serves as the authoritative source for all cross-page data. Pages subscribe to named slices of the store using selector functions; when a write happens in one place, every subscribed page updates automatically. Each store action persists its change to IndexedDB in the same operation — there is no separate "save" step. The store is seeded from IndexedDB at startup and can be fully reloaded after profile switches or bulk imports via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>reloadAll()</span>.
@@ -323,18 +322,22 @@ function ArchTab() {
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Services</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-services</span> as a single object with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>services</span> (id → Service) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>visits</span> (id → ServiceVisit). A Service carries provider name, phone, category (from a fixed 15-item taxonomy with an "Other" escape hatch), cost, billing cycle, renewal date, and auto-renews flag. A ServiceVisit is a child record of a Service and records the date, technician, notes, and an optional cost override. Monthly cost is normalized from the billing cycle — annual cost divided by 12, quarterly by 3, one-time excluded — and surfaced on the Dashboard and in the Services stats bar.</p>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-services</span> as a single object with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>services</span> (id → Service) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>visits</span> (id → ServiceVisit). A Service carries provider name, phone, category (from a fixed 15-item taxonomy with an "Other" escape hatch), cost, billing cycle, renewal date, auto-renews flag, a "paying since" start date, and a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>costHistory</span> of dated cost segments (so a price change applies only from its effective date forward, leaving past Ledger months untouched). A ServiceVisit is a child record of a Service and records the date, technician, notes, and an optional cost override — which also corrects that month's generated charge in the Ledger. Monthly cost is normalized from the billing cycle — annual cost divided by 12, quarterly by 3, one-time excluded — and surfaced on the Dashboard and in the Services stats bar.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Utilities</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-utilities</span> with two sub-maps, mirroring Services: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>utilities</span> (id → Utility) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>bills</span> (id → Bill). A Utility carries type (fixed list + "Other"), provider, account number, usage unit, an optional typical monthly amount, and a due day. A Bill is a child record holding the billing period, amount, optional usage in the utility's unit, due date, and paid flag. The estimated monthly cost is a trailing-12-month average of a utility's bills (falling back to its typical amount), summed across active utilities for the Dashboard and Lifecycle.</p>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-utilities</span> with two sub-maps, mirroring Services: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>utilities</span> (id → Utility) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>bills</span> (id → Bill). A Utility carries type (fixed list + "Other"), provider, account number, usage unit, an optional typical monthly amount, a payment cycle (monthly, every 2 months, quarterly, every 6 months, or annually), and a due day. A Bill is a child record holding the billing period, amount, optional usage in the utility's unit, due date, and paid flag. The estimated monthly cost is the trailing-12-month average bill divided by the payment-cycle length (so an every-2-months or annual bill normalizes correctly), summed across active utilities for the Dashboard and the Finances forecast; a non-monthly bill is split evenly across its cycle so it reads as a steady monthly expense rather than a lump.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Expenses</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-expenses</span> as a flat map keyed by id. Each expense records a date, amount, free-text description, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedItem</span> (an inventory stable key). The Lifecycle page reads these to compute a trailing-12-month repair total and, when linked, attributes the cost to an item's system or room.</p>
+            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-expenses</span> as a flat map keyed by id. Each expense records a date, amount, free-text description, an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedItem</span> (an inventory stable key, for system/room rollups), and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedWork</span> (a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>{`{ kind, id }`}</span> pointing at a project or to-do). The Finances → Ledger (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/ledger.js</span>) consolidates these with utility bills, generated service charges, inventory purchases, and mortgage payments into one transaction list — computing a trailing-12-month repairs total and rolling spend up by type, by system/room, and by project.</p>
           </div>
           <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Budget &amp; cash-flow forecast</div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Expected lifespan</div>
+            <p style={bodyText}>Curated default service lives live in code (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/lifespans.js</span>), keyed by item name. The Default Values tab can override a type's default, stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-lifespan-overrides</span> (item name → years). A specific item's lifespan lives on the item as an <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>estimated_lifespan</span> custom field, seeded from the type default when the item is created; the replacement forecast uses the item's own value, falling back to the type default.</p>
+          </div>
+          <div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Forecast (cash-flow projection)</div>
             <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-budget</span>, which holds only what the user sets — the forward projection itself is derived at read time (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/budgetForecast.js</span>) from the services, utilities, expenses, and replacement-reserve data that already exist. The settings are a monthly <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>target</span>, two toggles (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>includeReserve</span>, <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>includeRepairsBaseline</span>) that fold the replacement set-aside and a trailing-12 repairs baseline into the run-rate, and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>planned</span> one-off line items keyed by month (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>YYYY-MM</span>).</p>
             <p style={{ ...bodyText, marginTop: "0.6rem" }}>The forecast builds one bucket per month over a 12-month horizon: services projected from each contract's billing cycle and renewal anchor, a seasonal per-calendar-month average of logged utility bills, the reserve and repairs baselines spread evenly, and any planned items — with warranty expiries riding along as non-dollar risk markers. The <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>mortgage</span> is modelled like a recurring bill rather than a fixed fact: a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>defaultMonthly</span> payment that fills any un-overridden month, a per-month <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>overrides</span> map for retroactive corrections and known future changes, and an <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>escrowMonthly</span> sub-amount that splits each payment into principal &amp; interest versus taxes &amp; insurance. The mortgage is kept out of the operating run-rate — it's financing, not upkeep — and surfaces separately as a total-monthly-outlay figure.</p>
           </div>
@@ -716,6 +719,27 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
+    date: "June 15, 2026",
+    heading: "Finances: One Record of Spend, One Forecast",
+    bullets: [
+      ["A Finances menu", "The header gains a Finances group, and the old Lifecycle page is gone — its two halves are now their own pages: Ledger (what the home has cost) and Forecast (what it's projected to cost). Services and Utilities moved here too, since they're really accounts-payable inputs that feed both."],
+      ["A unified Ledger", "Ledger → History is one backward-looking record of every paid transaction, pulled from everywhere: logged expenses, utility bills, service charges, inventory purchases, and mortgage payments. Filter by type, sort any column, edit expenses inline, or correct a service charge in place. Ledger → Summary rolls it all up — spend by type (trailing-12 and all-time), invested by system and room, and project spend."],
+      ["Services are assumed paid", "A recurring service no longer needs a logged payment to count — Foreman assumes it was paid on its billing cycle, starting from a new “Paying since” date. Change a service's cost and only the current and future months move; past months keep what they were, and you can correct any single entry."],
+      ["Forecast", "The former Budget tab is now Forecast: the same forward twelve-month run-rate — services, seasonal utilities, replacement reserve, repairs baseline, planned costs, and mortgage — framed strictly as a projection."],
+      ["Attribute spend to projects & supplies", "An expense can now be tagged to a project or to-do alongside its item, so the Summary shows estimated-vs-actual Project Spend. And restocking a supply can log its cost as an expense in one step."],
+    ],
+  },
+  {
+    date: "June 15, 2026",
+    heading: "Lifespans, Default Values & Page Help",
+    bullets: [
+      ["Estimated lifespan is per item", "Every item now carries an editable Estimated Lifespan in its details. A new item inherits the default for its type; change one item and only that item changes. The replacement forecast reads each item's own value."],
+      ["Default Values", "Preferences → Info is now Default Values — a searchable table of every item type showing its default estimated lifespan (editable, and used to seed new items) alongside the built-in Model Coverage."],
+      ["Lifespans on Inventory", "The Replacement Forecast moved onto the Inventory page as a sortable “Lifespans” tab. Inventory's other tabs are now named List View, Table View, and Outline View."],
+      ["Help on every page", "An “i” button in the header opens a short guide to the current page — what it's for, how to use it, and which other pages share its data."],
+    ],
+  },
+  {
     date: "June 14, 2026",
     heading: "Chores: Details, Duration & Sorting",
     bullets: [
@@ -740,7 +764,7 @@ const UPDATES = [
     bullets: [
       ["Create standalone articles", "The Notebook is no longer limited to one article per inventory item. Hit + New Article to write a free-standing note — a how-to, a vendor list, a seasonal checklist — that lives in the same sidebar, search, grouping, and drag-reorder as every other article, and rename or delete it from the article itself."],
       ["Classify any article", "Every article now carries association fields for what it's about — the item, location, system, project, and maintenance task. Item articles inherit their item's location and system and add Project and Task; standalone articles set all five. Populated associations show as chips when reading and persist across reloads."],
-      ["Model Coverage moved", "The manufacturer and model coverage reference that used to live in the Notebook now sits under Preferences → Info, keeping the Notebook focused on your writing."],
+      ["Model Coverage moved", "The manufacturer and model coverage reference that used to live in the Notebook now sits under Preferences → Default Values, keeping the Notebook focused on your writing."],
     ],
   },
   {
