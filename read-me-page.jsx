@@ -415,7 +415,7 @@ const ROADMAP_SECTIONS = [
   { id: "road-gcal",     label: "Google Calendar" },
   { id: "road-vault",     label: "Document Vault" },
   { id: "road-handoff",   label: "Handoff Export" },
-  { id: "road-snapshots", label: "Snapshots & Undo" },
+  { id: "road-electron",  label: "Windows App" },
   { id: "road-furniture", label: "Furniture Planning" },
   { id: "road-gla",       label: "GLA Measurements" },
   { id: "road-household", label: "Household & Assignments" },
@@ -565,16 +565,17 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="road-snapshots" label="Durability" heading="Automatic Local Snapshots & Undo" sectionRefs={sectionRefs}>
+      <ArchSection id="road-electron" label="Distribution" heading="Windows Desktop App" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          The Data Storage section above is honest about the tradeoff of being local-first: clearing your browser's site data clears Foreman's data with it, and today a permanent delete is exactly that — permanent. There is no auto-backup, no trash, and no undo; writes are fire-and-forget. For a system whose tenets are <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>durable — built for decades</span> and <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>earns trust</span>, rolling local snapshots with restore points are the cheapest insurance against the worst-case data-loss moment — and the one gap that contradicts a stated tenet outright.
+          Foreman is currently a browser-based development build; the long-term target is a native Windows executable that users download and install. Electron is the planned packaging approach — it wraps the existing React application in a bundled Chromium runtime alongside Node.js, producing a standard Windows installer. Because Electron ships its own browser engine rather than relying on whatever is installed on the machine, the production app is pixel-identical to the development build with no rendering surprises to debug at ship time.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
           {[
-            ["Rolling snapshots", "Periodic point-in-time copies of your IndexedDB data, kept on a rolling window (hourly / daily / weekly), so you can roll back to how things were yesterday, last week, or before a bad import — entirely on-device."],
-            ["Restore points", "Name and pin a snapshot before a big change — a bulk import, a profile reset, a major reorganization — and return to it with one click if it goes sideways."],
-            ["Undo for destructive actions", "Deletes (a service and its visits, a room, a category) drop into a recoverable trash buffer for a window instead of vanishing, turning the new in-app confirmations into a true safety net rather than a speed bump."],
-            ["Durability by default", "Makes “built for decades” and “earns trust” true rather than aspirational: the registry survives a mistaken click, a bad import, or a cleared cache, with no cloud account required."],
+            ["One install, no browser required", "Users download a standard Windows installer. Foreman opens as a native window, appears in the Start Menu and taskbar, and works entirely offline — no browser setup, no tab management, no hunting for the right browser. The interface is the same application already running in development, wrapped rather than rewritten."],
+            ["Your data lives on your machine", "Storage moves from IndexedDB — browser-internal and invisible — to a real file at Documents\\Foreman\\data.json. That file is readable, copyable, and backed up by whatever the user already uses: OneDrive, Dropbox, a USB drive. The transition is confined to lib/storage.js, the single abstraction layer all storage goes through; nothing else in the codebase changes."],
+            ["Automatic backups fall out naturally", "With data in a real file, dated backup copies are straightforward — a rolling window of hourly, daily, and weekly snapshots written to Documents\\Foreman\\backups\\. Restore is a file copy, not a database operation, and backups travel with the user's existing backup strategy without any new configuration."],
+            ["Durability by construction", "Browser-based storage is tied to a browser profile and disappears when the browser is cleared. A file in Documents persists across browser resets, Foreman reinstalls, and machine upgrades as long as the drive survives — or longer, if it is in a synced folder. This closes the gap between the tenet “built for decades” and how the data actually behaves today."],
+            ["Foundation for native features", "The Electron wrapper unlocks capabilities unavailable in a browser tab: system-tray presence, OS-level notifications, deep-link URLs (foreman://item/...) for QR label scanning, native file open/save dialogs for imports and the Handoff Export, and auto-update delivery without requiring the user to find a download page."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>

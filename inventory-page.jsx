@@ -31,7 +31,6 @@ import {
 } from "./lib/customFields.js";
 import { UNIVERSAL_FIELDS, ITEM_FIELDS, TYPE_FIELDS } from "./lib/fieldLibrary.js";
 import { expectedYears } from "./lib/lifespans.js";
-import { ReplacementForecast } from "./lifecycle-page.jsx";
 import { BUILT_IN_ITEM_TYPES } from "./lib/itemTypes.js";
 import { ITEM_SUBTYPES } from "./lib/itemSubtypes.js";
 import {
@@ -4682,8 +4681,8 @@ export default function InventoryPage({ navigate, navState }) {
   const [categoryTypeOverrides, setCategoryTypeOverridesState] = useState(() => loadCategoryTypeOverrides());
   const [activeTab, setActiveTab] = useState("Item List");
   // Internal tab keys (kept stable for the logic below) mapped to display labels.
-  const INV_TAB_KEYS = ["Item List", "Overview", "Outline", "Replacement Forecast"];
-  const INV_TAB_LABEL = { "Item List": "List View", "Overview": "Table View", "Outline": "Outline View", "Replacement Forecast": "Lifespans" };
+  const INV_TAB_KEYS = ["Item List", "Overview", "Outline"];
+  const INV_TAB_LABEL = { "Item List": "List View", "Overview": "Table View", "Outline": "Outline View" };
   const [customGroupTypes, setCustomGroupTypes] = useState(() => loadCustomGroupTypes());
   const [groupLabelOverrides, setGroupLabelOverrides] = useState(() => loadGroupLabelOverrides());
   const [groupFilter, setGroupFilter] = useState("all");
@@ -6458,7 +6457,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
-        <div style={activeTab === "Replacement Forecast" ? { flex: 1, minWidth: 0, overflowY: "auto", paddingBottom: "4rem" } : (activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={(activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (
           <ItemInventoryView
@@ -6506,13 +6505,9 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
           />
         )}
 
-        {activeTab === "Replacement Forecast" && (
-          <ReplacementForecast />
-        )}
-
         </div>
 
-        {activeTab !== "Replacement Forecast" && (activeTab !== "Overview" || selectedItem) && <div style={{
+        {(activeTab !== "Overview" || selectedItem) && <div style={{
           display: "flex",
           flex: 1,
           flexDirection: "column",

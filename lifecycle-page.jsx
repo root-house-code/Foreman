@@ -1263,6 +1263,20 @@ export function LedgerPage(props)   { return <FinancesPage {...props} view="ledg
 export function ForecastPage(props) { return <FinancesPage {...props} view="forecast" />; }
 export function MortgagePage(props) { return <FinancesPage {...props} view="mortgage" />; }
 
+// Item Lifespans — a standalone Property page wrapping the replacement forecast.
+export function ItemLifespansPage() {
+  return (
+    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
+      <FmHeader active="Item Lifespans" tagline="aging & replacement" />
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        <div style={{ maxWidth: 1000, padding: "1.75rem 2.25rem" }}>
+          <ReplacementForecast />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Spend totals by type — trailing-12 and all-time — from the ledger.
 function SpendByType({ summary }) {
   const order = ["expense", "service", "utility", "mortgage", "purchase"];

@@ -32,7 +32,7 @@ import PreferencesPage from "../preferences-page.jsx";
 import ReadMePage from "../read-me-page.jsx";
 import FloorPlanPage from "../floor-plan-page.jsx";
 import ServicesPage from "../services-page.jsx";
-import { LedgerPage, ForecastPage, MortgagePage } from "../lifecycle-page.jsx";
+import { LedgerPage, ForecastPage, MortgagePage, ItemLifespansPage } from "../lifecycle-page.jsx";
 import SuppliesPage from "../supplies-page.jsx";
 import UtilitiesPage from "../utilities-page.jsx";
 import CommandPalette from "../components/CommandPalette.jsx";
@@ -48,6 +48,7 @@ const PAGE_KEYS = {
   calendar: "Calendar",
   floorplan: "Floor Plan",
   inventory: "Inventory",
+  lifespans: "Item Lifespans",
   maintenance: "Maintenance",
   services: "Services",
   utilities: "Utilities",
@@ -87,6 +88,7 @@ export default function App() {
     if (page === "readme") return <ReadMePage navigate={navigate} />;
     if (page === "floorplan") return <FloorPlanPage navigate={navigate} />;
     if (page === "inventory") return <InventoryPage navigate={navigate} navState={navState} />;
+    if (page === "lifespans") return <ItemLifespansPage navigate={navigate} />;
     if (page === "dashboard") return <DashboardPage navigate={navigate} />;
     if (page === "workbench") return <WorkbenchPage navigate={navigate} navState={navState} />;
     if (page === "board") return <BoardPage navigate={navigate} navState={navState} />;

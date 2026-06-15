@@ -26,7 +26,7 @@ function buildDateStrip() {
 // direct buttons; meta pages sit apart on the right.
 const NAV_GROUPS = [
   { label: 'Overview', pages: ['Dashboard', 'Calendar', 'Timeline'] },
-  { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Supplies'] },
+  { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Item Lifespans', 'Supplies'] },
   { label: 'Finances', pages: ['Ledger', 'Forecast', 'Services', 'Utilities', 'Mortgage'] },
   { label: 'Work',     pages: ['Maintenance', 'Chores', 'Workbench', 'To Dos', 'Projects'] },
 ];
