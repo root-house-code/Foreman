@@ -25,9 +25,9 @@ function buildDateStrip() {
 // Grouped navigation. Each group becomes a dropdown menu; singles render as
 // direct buttons; meta pages sit apart on the right.
 const NAV_GROUPS = [
-  { label: 'Overview', pages: ['Dashboard', 'Calendar', 'Timeline'] },
+  { label: 'Overview', pages: ['Dashboard', 'Triage', 'Calendar', 'Timeline'] },
   { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Item Lifespans', 'Supplies'] },
-  { label: 'Finances', pages: ['Ledger', 'Forecast', 'Services', 'Utilities', 'Mortgage'] },
+  { label: 'Finances', pages: ['Spending', 'Forecast', 'Services', 'Utilities', 'Mortgage'] },
   { label: 'Work',     pages: ['Maintenance', 'Chores', 'Workbench', 'To Dos', 'Projects'] },
 ];
 const NAV_DIRECT = ['Notebook'];

@@ -19,6 +19,31 @@ function fmtMonth(periodMonth) {
   return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 }
 
+// DIAGNOSTIC — an alternative est./mo that infers the real billing cadence from the
+// gaps between logged bills, instead of trusting the configured billing cycle (which
+// is what estimatedMonthly() divides by). Same trailing-12-month window. Lets us spot
+// utilities whose logged bills don't match their configured cycle. Returns null when
+// there are no recent bills.
+function cadenceMonthly(bills) {
+  const now = new Date();
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  const cutoffMonth = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}`;
+  const recent = (bills || [])
+    .filter(b => b.periodMonth && b.periodMonth >= cutoffMonth && b.amount != null)
+    .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth));
+  if (recent.length === 0) return null;
+  const avg = recent.reduce((s, b) => s + (Number(b.amount) || 0), 0) / recent.length;
+  if (recent.length === 1) return { value: avg, bills: 1, gap: null }; // can't infer a gap from one bill
+  const monthsBetween = (a, b) => {
+    const [ay, am] = a.split("-").map(Number);
+    const [by, bm] = b.split("-").map(Number);
+    return (by - ay) * 12 + (bm - am);
+  };
+  const span = monthsBetween(recent[0].periodMonth, recent[recent.length - 1].periodMonth);
+  const gap = span > 0 ? span / (recent.length - 1) : 1; // avg months between consecutive bills
+  return { value: avg / gap, bills: recent.length, gap };
+}
+
 function fmtDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso + "T00:00:00");
@@ -576,6 +601,7 @@ export default function UtilitiesPage({ navigate, navState }) {
                   <th style={thCell}>Provider</th>
                   <th style={thCell}>Latest Bill</th>
                   <th style={thCell}>Est. /mo</th>
+                  <th style={thCell} title="Diagnostic: est./mo inferred from the actual gaps between logged bills, ignoring the configured cycle">Est. /mo (cadence)</th>
                   <th style={thCell}>Cycle</th>
                   <th style={thCell}>Due</th>
                   <th style={thCell}>Status</th>
@@ -588,6 +614,8 @@ export default function UtilitiesPage({ navigate, navState }) {
                   const uBills = billsFor(util.id).sort((a, b) => (b.periodMonth || "").localeCompare(a.periodMonth || ""));
                   const latest = latestBill(util.id);
                   const est = estimatedMonthly(util, uBills);
+                  const alt = cadenceMonthly(uBills);
+                  const divergent = alt && est > 0 && Math.abs(alt.value - est) / est > 0.15;
                   return (
                     <>
                       <tr
@@ -601,6 +629,13 @@ export default function UtilitiesPage({ navigate, navState }) {
                         <td style={tdCell}>{util.providerName || "—"}</td>
                         <td style={tdCell}>{latest ? fmtCost(latest.amount) : "—"}</td>
                         <td style={{ ...tdCell, color: "var(--fm-cyan)" }}>{est ? fmtCost(est) : "—"}</td>
+                        <td
+                          style={{ ...tdCell, color: divergent ? "var(--fm-amber)" : "var(--fm-ink-mute)" }}
+                          title={alt ? (alt.gap != null ? `~${alt.gap.toFixed(1)} mo between ${alt.bills} bills (cycle says ${utilityCycleLabel(util.billingCycle)})` : `only ${alt.bills} bill — cadence can't be inferred`) : "no recent bills"}
+                        >
+                          {alt ? fmtCost(alt.value) : "—"}
+                          {divergent && <span style={{ marginLeft: 4 }}>⚠</span>}
+                        </td>
                         <td style={tdCell}>{utilityCycleLabel(util.billingCycle)}</td>
                         <td style={tdCell}>{util.dueDayOfMonth ? `Day ${util.dueDayOfMonth}` : "—"}</td>
                         <td style={tdCell}>
@@ -636,7 +671,7 @@ export default function UtilitiesPage({ navigate, navState }) {
 
                       {isExpanded && (
                         <tr key={util.id + "-exp"}>
-                          <td colSpan={10} style={{ background: "var(--fm-bg-sunk)", borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 0.75rem 0.75rem 2.5rem" }}>
+                          <td colSpan={11} style={{ background: "var(--fm-bg-sunk)", borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 0.75rem 0.75rem 2.5rem" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.6rem" }}>
                               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
                                 Bills ({uBills.length})

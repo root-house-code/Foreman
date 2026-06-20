@@ -5105,8 +5105,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     const existingSchemas = loadItemFieldSchemas();
     let valuesChanged = false;
     let schemasChanged = false;
-    Object.entries(legacyDetails).forEach(([cfKey, details]) => {
+    Object.entries(legacyDetails).forEach(([rawKey, details]) => {
       if (!details || typeof details !== "object") return;
+      // Normalize "HVAC::Furnace" → "default:HVAC|Furnace" so lookup keys agree
+      const dIdx = rawKey.indexOf("::");
+      const cfKey = dIdx >= 0 ? `default:${rawKey.slice(0, dIdx)}|${rawKey.slice(dIdx + 2)}` : rawKey;
       const migratableFields = [
         { id: "manufacturer", name: "Manufacturer", type: "text" },
         { id: "model",        name: "Model",        type: "text" },
@@ -6586,6 +6589,12 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                 const manualIds = new Set(itmFields.map(f => f.id));
                 const inheritedFields = (TYPE_FIELDS[vals.item_type || ""] || []).filter(f => !manualIds.has(f.id));
                 const addedIds = new Set([...manualIds, ...inheritedFields.map(f => f.id), "item_type", "system", "room", "exterior"]);
+                // Surface known library fields that have stored values but no schema or inherited entry.
+                // Handles data from before the stable-key refactor and any future schema/value skew.
+                const orphanedFields = [...UNIVERSAL_FIELDS, ...(ITEM_FIELDS[selectedItem.item] || [])].filter(
+                  f => !addedIds.has(f.id) && vals[f.id] != null && vals[f.id] !== ""
+                );
+                orphanedFields.forEach(f => addedIds.add(f.id));
                 const svgArrow = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5460'/%3E%3C/svg%3E")`;
                 const fieldStyle = { background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", outline: "none", padding: "0.3rem 0.5rem", width: "100%" };
                 const labelStyle = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.12em", textTransform: "uppercase" };
@@ -6734,6 +6743,14 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
                         ))}
                       </>
                     )}
+                    {orphanedFields.map(field => (
+                      <div key={field.id} style={{ marginBottom: "0.45rem" }}>
+                        <div style={{ marginBottom: "0.2rem" }}>
+                          <span style={labelStyle}>{field.name}</span>
+                        </div>
+                        {renderFieldInput(field)}
+                      </div>
+                    ))}
                     {itmFields.map(field => (
                       <div key={field.id} style={{ marginBottom: "0.45rem" }}>
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.2rem" }}>

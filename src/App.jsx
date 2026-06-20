@@ -37,6 +37,7 @@ import SuppliesPage from "../supplies-page.jsx";
 import UtilitiesPage from "../utilities-page.jsx";
 import CommandPalette from "../components/CommandPalette.jsx";
 import WorkbenchPage from "../workbench-page.jsx";
+import AlertsPage from "../alerts-page.jsx";
 
 // Run once at module load — idempotent, safe to re-run on HMR
 migrateToEntityTypes();
@@ -45,6 +46,7 @@ runMigrations();
 const PAGE_KEYS = {
   readme: "Read Me",
   dashboard: "Dashboard",
+  alerts: "Triage",
   calendar: "Calendar",
   floorplan: "Floor Plan",
   inventory: "Inventory",
@@ -57,7 +59,7 @@ const PAGE_KEYS = {
   workbench: "Workbench",
   board: "To Dos",
   projects: "Projects",
-  ledger: "Ledger",
+  ledger: "Spending",
   forecast: "Forecast",
   mortgage: "Mortgage",
   guide: "Notebook",
@@ -90,6 +92,7 @@ export default function App() {
     if (page === "inventory") return <InventoryPage navigate={navigate} navState={navState} />;
     if (page === "lifespans") return <ItemLifespansPage navigate={navigate} />;
     if (page === "dashboard") return <DashboardPage navigate={navigate} />;
+    if (page === "alerts") return <AlertsPage navigate={navigate} />;
     if (page === "workbench") return <WorkbenchPage navigate={navigate} navState={navState} />;
     if (page === "board") return <BoardPage navigate={navigate} navState={navState} />;
     if (page === "projects") return <ProjectsPage navigate={navigate} navState={navState} />;

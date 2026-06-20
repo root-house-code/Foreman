@@ -521,7 +521,14 @@ export default function GuidePage({ navigate }) {
   // Fields common to this item's type (parallels Inventory's "Common" section).
   const inheritedFields = (TYPE_FIELDS[cfVals.item_type || ""] || [])
     .filter(f => !itmFields.some(s => s.id === f.id) && !catFields.some(s => s.id === f.id));
-  const allCustomFields = [...catFields, ...inheritedFields, ...itmFields];
+  // Surface known library fields that have stored values but no schema or inherited entry.
+  const _schemaIds = new Set([...catFields, ...inheritedFields, ...itmFields].map(f => f.id));
+  const orphanedArticleFields = stableKey && effectiveItem
+    ? [...UNIVERSAL_FIELDS.filter(f => !STRUCTURAL_FIELD_IDS.has(f.id)), ...(ITEM_FIELDS[effItem] || [])].filter(
+        f => !_schemaIds.has(f.id) && cfVals[f.id] != null && cfVals[f.id] !== ""
+      )
+    : [];
+  const allCustomFields = [...catFields, ...inheritedFields, ...orphanedArticleFields, ...itmFields];
 
   // Location (room/exterior) options — the COMPLETE set, mirroring Inventory's
   // Location combo: every spatial category (rooms + exteriors) from the full

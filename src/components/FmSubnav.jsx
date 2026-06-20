@@ -1,4 +1,4 @@
-export default function FmSubnav({ tabs, active, stats, onTabChange }) {
+export default function FmSubnav({ tabs, active, stats, onTabChange, filter }) {
   return (
     <div
       style={{
@@ -33,6 +33,7 @@ export default function FmSubnav({ tabs, active, stats, onTabChange }) {
           );
         })}
       </div>
+      {filter && <div style={{ display: 'flex', alignItems: 'center' }}>{filter}</div>}
       {stats && (
         <div
           style={{

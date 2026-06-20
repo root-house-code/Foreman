@@ -9,6 +9,7 @@ import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import ImageAttachments from "./components/ImageAttachments.jsx";
+import ExpenseModal from "./components/ExpenseModal.jsx";
 
 const PRIORITY_HEX = {
   low: "#7fb087", medium: "#c9a96e", high: "#e0b266", urgent: "#e07b6a",
@@ -69,6 +70,9 @@ function statusBadgeStyle(status) {
 
 export default function ProjectsPage({ navigate, navState }) {
   const projects = useForemanStore(s => s.projects);
+  const expenses = useForemanStore(s => s.expenses);
+  const addExpense = useForemanStore(s => s.addExpense);
+  const deleteExpense = useForemanStore(s => s.deleteExpense);
   const [todos, setTodos] = useState(() => loadTodos());
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [selectedTodoId, setSelectedTodoId] = useState(null);
@@ -92,6 +96,7 @@ export default function ProjectsPage({ navigate, navState }) {
   const [rightProjectForm, setRightProjectForm] = useState(null);
   const [rightProjectAddingTask, setRightProjectAddingTask] = useState(false);
   const [rightProjectNewTaskTitle, setRightProjectNewTaskTitle] = useState("");
+  const [expenseModalOpen, setExpenseModalOpen] = useState(false);
   const [hoveredProjectId, setHoveredProjectId] = useState(null);
   const [renamingProjectId, setRenamingProjectId] = useState(null);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(null);
@@ -130,6 +135,24 @@ export default function ProjectsPage({ navigate, navState }) {
 
   const linkedItems = rightPanelForm?.linkedCategory ? (categoryItems[rightPanelForm.linkedCategory] || []) : [];
   const projectLinkedItems = rightProjectForm?.linkedCategory ? (categoryItems[rightProjectForm.linkedCategory] || []) : [];
+
+  const projectExpenses = useMemo(() => {
+    if (!selectedProjectId) return [];
+    return Object.values(expenses || {})
+      .filter(e => e.linkedWork?.kind === "project" && e.linkedWork?.id === selectedProjectId)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [expenses, selectedProjectId]);
+
+  const itemOptions = useMemo(() => {
+    const opts = [];
+    rows.forEach(row => {
+      if (deletedCategories.has(row.category)) return;
+      if (row._isBlankCategory || !row.category || !row.item) return;
+      if (deletedItems.has(`${row.category}|${row.item}`)) return;
+      opts.push({ stableKey: `default:${row.category}|${row.item}`, category: row.category, item: row.item });
+    });
+    return opts.sort((a, b) => a.category.localeCompare(b.category) || a.item.localeCompare(b.item));
+  }, [rows, deletedCategories, deletedItems]);
 
   // Items linked to this project via todos (for Linked Inventory section)
   const projectLinkedInventory = useMemo(() => {
@@ -172,6 +195,11 @@ export default function ProjectsPage({ navigate, navState }) {
     setRightProjectAddingTask(false);
     setRightProjectNewTaskTitle("");
   }, [selectedProjectId, rightPanelType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleSaveExpense(payload) {
+    addExpense({ id: `exp-${Date.now()}`, ...payload });
+    setExpenseModalOpen(false);
+  }
 
   function persistTodos(next) { setTodos(next); saveTodos(next); }
   function persistProjects(next) { useForemanStore.getState().setProjects(next); }
@@ -305,6 +333,15 @@ export default function ProjectsPage({ navigate, navState }) {
 
   return (
     <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+
+      {expenseModalOpen && selectedProject && (
+        <ExpenseModal
+          presetWork={{ kind: "project", id: selectedProject.id, name: selectedProject.name }}
+          itemOptions={itemOptions}
+          onSave={handleSaveExpense}
+          onClose={() => setExpenseModalOpen(false)}
+        />
+      )}
 
       {confirmDeleteProject && (
         <div
@@ -746,6 +783,49 @@ export default function ProjectsPage({ navigate, navState }) {
                   </div>
                 ) : (
                   <button onClick={() => setRightProjectAddingTask(true)} style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", marginTop: "0.25rem", padding: "0.2rem 0", transition: "color 0.15s" }} onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}>+ Add</button>
+                )}
+              </div>
+
+              {/* Expenses */}
+              <div style={{ borderTop: "var(--fm-border)", marginTop: "0.85rem", paddingTop: "0.85rem" }}>
+                <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+                  <label style={fieldLabel}>Expenses</label>
+                  <button
+                    onClick={() => setExpenseModalOpen(true)}
+                    style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: "0.1rem 0", transition: "color 0.15s" }}
+                    onMouseEnter={e => { e.currentTarget.style.color = "var(--fm-brass)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+                  >+ Log</button>
+                </div>
+                {projectExpenses.length === 0 ? (
+                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.72rem" }}>None logged</div>
+                ) : (
+                  <>
+                    {projectExpenses.map(e => (
+                      <div key={e.id} style={{ alignItems: "center", display: "flex", gap: "0.4rem", marginBottom: "0.3rem" }}>
+                        <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>
+                          {new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </span>
+                        <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}>
+                          ${Number(e.amount).toFixed(2)}
+                        </span>
+                        <span style={{ color: "var(--fm-ink-dim)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.73rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {e.label || "—"}
+                        </span>
+                        <button
+                          onClick={() => deleteExpense(e.id)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.7rem", padding: "0 0.1rem", transition: "color 0.15s" }}
+                          onMouseEnter={e2 => { e2.currentTarget.style.color = "var(--fm-red)"; }}
+                          onMouseLeave={e2 => { e2.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+                        >×</button>
+                      </div>
+                    ))}
+                    {projectExpenses.length > 1 && (
+                      <div style={{ borderTop: "var(--fm-border)", color: "var(--fm-ink-dim)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", justifyContent: "flex-end", marginTop: "0.4rem", paddingTop: "0.4rem" }}>
+                        Total: ${projectExpenses.reduce((sum, e) => sum + Number(e.amount), 0).toFixed(2)}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 

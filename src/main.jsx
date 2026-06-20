@@ -9,7 +9,7 @@ import { loadFpData } from "../lib/fpData.js";
 import { loadRooms, saveRooms } from "../lib/rooms.js";
 import { loadFloors, saveFloors, sortFloors, getDefaultFloors } from "../lib/floors.js";
 import { useForemanStore } from "../lib/store.js";
-import { migrateCfvSplit, loadItemFieldValues, saveItemFieldValues } from "../lib/customFields.js";
+import { migrateCfvSplit, loadItemFieldValues, saveItemFieldValues, loadItemFieldSchemas, saveItemFieldSchemas } from "../lib/customFields.js";
 import { migrateStructureCategories } from "../lib/entityTypes.js";
 
 storageInit().then(() => {
@@ -81,6 +81,45 @@ storageInit().then(() => {
   // Must run after storageInit so the cache has the real data, and before reloadAll.
   migrateCfvSplit();
   migrateStructureCategories();
+
+  // Normalize itemFieldSchemas and itemFieldValues keys written by the old legacy
+  // itemDetails migration. That migration used raw "HVAC::Furnace" keys copied
+  // directly from itemDetails, but the current lookup uses "default:HVAC|Furnace"
+  // (from getItemStableKey). Renormalize so the two paths agree.
+  {
+    function normItemKey(k) {
+      if (k.startsWith("default:") || k.startsWith("custom-")) return k;
+      const idx = k.indexOf("::");
+      if (idx >= 0) return `default:${k.slice(0, idx)}|${k.slice(idx + 2)}`;
+      if (k.includes("|")) return `default:${k}`;
+      return k;
+    }
+
+    const schemas = loadItemFieldSchemas();
+    const nextSchemas = {};
+    let schemasNeedSave = false;
+    Object.entries(schemas).forEach(([k, fields]) => {
+      const nk = normItemKey(k);
+      if (nk !== k) schemasNeedSave = true;
+      if (!nextSchemas[nk]) {
+        nextSchemas[nk] = fields;
+      } else {
+        const seen = new Set(nextSchemas[nk].map(f => f.id));
+        nextSchemas[nk] = [...nextSchemas[nk], ...fields.filter(f => !seen.has(f.id))];
+      }
+    });
+    if (schemasNeedSave) saveItemFieldSchemas(nextSchemas);
+
+    const itemVals = loadItemFieldValues();
+    const nextVals = {};
+    let valsNeedSave = false;
+    Object.entries(itemVals).forEach(([k, fieldVals]) => {
+      const nk = normItemKey(k);
+      if (nk !== k) valsNeedSave = true;
+      nextVals[nk] = nk in nextVals ? { ...fieldVals, ...nextVals[nk] } : fieldVals;
+    });
+    if (valsNeedSave) saveItemFieldValues(nextVals);
+  }
 
   // Correct Gas Fireplace: was miscategorized as Fixture; it is a fuel-supplied heating Appliance.
   {
