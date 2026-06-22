@@ -720,6 +720,46 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
+    date: "June 21, 2026",
+    heading: "Windows Desktop App",
+    bullets: [
+      ["Runs as a native Windows app", "Foreman can now be launched as a standalone desktop application — no browser required. Run npm run electron:dev to open it in a native window during development, or npm run electron:build to produce an NSIS installer."],
+      ["Data lives in Documents\\Foreman\\", "All your data is written to two real files on disk: data.json (everything except images) and images.json. They're plain text, copyable, and yours — not locked inside IndexedDB. The browser dev build continues to use IndexedDB exactly as before; the file backend only activates in the Electron app."],
+      ["Automatic rolling backups", "On every launch and once per hour while the app is open, Foreman snapshots data.json into Documents\\Foreman\\backups\\. Backups are pruned on a three-tier schedule: all hourlies for the last 24 hours, one per day for the last 7 days, one per week for the last 4 weeks."],
+      ["System tray", "Closing the window hides Foreman to the system tray rather than quitting it. Right-click the tray icon to reopen or quit."],
+      ["Native file dialogs", "Profile export and import use the OS save/open dialog in the desktop app instead of the browser download mechanism."],
+      ["Deep links", "Foreman registers the foreman:// custom protocol. Clicking a foreman:// link from another app focuses the window and navigates to the right page."],
+    ],
+  },
+  {
+    date: "June 19, 2026",
+    heading: "Mortgage: Real Loan Modeling & Equity",
+    bullets: [
+      ["Amortize from your loan terms", "Enter your original principal, interest rate, term, and start month, and the Mortgage page computes your current balance, payoff date, and interest — paid so far, remaining, and this year (an estimate for the mortgage-interest tax deduction). The computed principal & interest can be set as your monthly payment in one click."],
+      ["Amortization chart", "See the loan's whole life at a glance, by year, with two views: Balance (the declining-balance staircase, with the current year marked and past years dimmed) and Principal vs Interest (each year's payments split, showing the crossover where principal overtakes interest). Hover any year for its principal, interest, and end-of-year balance."],
+      ["Equity & loan-to-value", "Add your home value to see the equity you've built and your loan-to-value. The loan terms are additive — your cash-flow payment model is untouched; they just power the analysis on top."],
+      ["PMI cancellation heads-up", "When your loan-to-value reaches 80%, the Mortgage page flags it and a heads-up appears in Triage — you may be able to ask your lender to cancel PMI."],
+      ["Full-height panel", "The Mortgage panel now fills the screen, with the month-by-month payment ledger scrolling inside it."],
+    ],
+  },
+  {
+    date: "June 19, 2026",
+    heading: "Utilities: Cost Over Time",
+    bullets: [
+      ["See your spending history", "Utilities → History gains a Cost Over Time chart of every logged bill, with three views: Timeline (each month, stacked by utility type), Year over year (a Jan–Dec axis with one bar per year, to spot seasonal patterns), and Totals (composition pies by type, season, and year)."],
+      ["Respects your filter", "The chart follows the History type filter, so you can isolate a single utility — handy for seeing a heating or cooling season swing on its own."],
+    ],
+  },
+  {
+    date: "June 19, 2026",
+    heading: "Spending: Edit or Delete Any Entry",
+    bullets: [
+      ["One selection, two actions", "Click any ledger row to select it; Edit and Delete then appear by the “+ Add Expense” button instead of crowding every row. Expenses open the full form; utility, service, purchase, and mortgage entries edit their amount inline."],
+      ["Delete with a safeguard", "Deleting any entry now asks first, with a message tailored to what actually happens — removing a utility bill, clearing an item's price, or suppressing a generated service/mortgage charge."],
+      ["Tidier tabs", "The redundant Summary tab is gone, and “Purchases” is now “Inventory Purchases.” The ledger scrolls within its panel while the filters, summary, and column headers stay put."],
+    ],
+  },
+  {
     date: "June 15, 2026",
     heading: "Finances: One Record of Spend, One Forecast",
     bullets: [

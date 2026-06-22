@@ -10,6 +10,7 @@ import {
   buildForecast, summarize, actualForMonth, hasBudgetInputs, ymKeyOf,
   mortgageLedger, hasMortgage,
 } from "./lib/budgetForecast.js";
+import { amortization, equityStats, hasLoanTerms } from "./lib/mortgage.js";
 import {
   loadCategoryTypeOverrides,
   GROUP_LABELS,
@@ -409,6 +410,9 @@ function FinancesPage({ navigate, navState, view }) {
     return { services: s.services / n, utilities: s.utilities / n, reserve: s.reserve / n, repairs: s.repairs / n, planned: s.planned / n };
   }, [budgetMonths]);
 
+  // Views that make their inner panel fill the viewport height (panel owns the scroll).
+  const fillHeight = (view === "ledger" && ledgerTab === "Ledger") || view === "mortgage";
+
   return (
     <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
       <FmHeader active={view === "ledger" ? "Spending" : view === "mortgage" ? "Mortgage" : "Forecast"} tagline={view === "ledger" ? "spending & history" : view === "mortgage" ? "financing" : "forward projection"} />
@@ -425,8 +429,8 @@ function FinancesPage({ navigate, navState, view }) {
         />
       )}
 
-      <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: (view === "ledger" && ledgerTab === "Ledger") ? "hidden" : "auto" }}>
-        <div style={{ display: (view === "ledger" && ledgerTab === "Ledger") ? "flex" : undefined, flex: (view === "ledger" && ledgerTab === "Ledger") ? 1 : undefined, flexDirection: "column", maxWidth: (view === "ledger" && ledgerTab === "Ledger") || view === "forecast" ? "none" : 1000, minHeight: 0, padding: "1.75rem 2.25rem" }}>
+      <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: fillHeight ? "hidden" : "auto" }}>
+        <div style={{ display: fillHeight ? "flex" : undefined, flex: fillHeight ? 1 : undefined, flexDirection: "column", maxWidth: (view === "ledger" && ledgerTab === "Ledger") || view === "forecast" ? "none" : 1000, minHeight: 0, padding: "1.75rem 2.25rem" }}>
 
           {view === "ledger" && ledgerTab === "Ledger" && (
             <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
@@ -1266,6 +1270,104 @@ function ClassBlock({ group, totalInvested, sort }) {
 
 // ── Budget subcomponents ────────────────────────────────────────────────────────
 
+function MortgageStat({ label, value, sub, color, onClick, hint }) {
+  return (
+    <div onClick={onClick} style={{ cursor: onClick ? "pointer" : "default" }} title={hint || (onClick ? "Use as the monthly payment" : undefined)}>
+      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.1em", marginBottom: "0.15rem", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ color: color || "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.95rem" }}>{value}</div>
+      {sub && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", marginTop: "0.1rem" }}>{sub}</div>}
+    </div>
+  );
+}
+
+// Amortization over the life of the loan, aggregated by year. Two views: the
+// declining Balance, and Principal vs Interest paid each year (the classic crossover
+// where principal overtakes interest). The current year is marked; past years dim.
+function AmortizationChart({ amort, now = new Date() }) {
+  const [mode, setMode] = useState("balance"); // "balance" | "split"
+  const [hover, setHover] = useState(null);
+  const nowYear = now.getFullYear();
+
+  const years = useMemo(() => {
+    const byYear = {};
+    amort.schedule.forEach(p => {
+      const y = byYear[p.year] || (byYear[p.year] = { year: p.year, principal: 0, interest: 0, endBalance: p.balance });
+      y.principal += p.principal; y.interest += p.interest; y.endBalance = p.balance; // chronological → last is year-end
+    });
+    return Object.values(byYear).sort((a, b) => a.year - b.year);
+  }, [amort.schedule]);
+
+  if (!years.length) return null;
+  const H = 150;
+  const maxBal = Math.max(1, amort.originalPrincipal, ...years.map(y => y.endBalance));
+  const maxFlow = Math.max(1, ...years.map(y => y.principal + y.interest));
+
+  return (
+    <div style={{ marginTop: "1.1rem" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.6rem" }}>
+        <span style={detailLabel} title="Amortization: how each payment is split between principal and interest over the life of the loan. Early payments are mostly interest; later ones mostly principal.">Amortization</span>
+        <div style={{ display: "flex", gap: "0.35rem", marginLeft: "auto" }}>
+          {[["balance", "Balance"], ["split", "Principal vs interest"]].map(([m, lbl]) => (
+            <button key={m} onClick={() => { setMode(m); setHover(null); }} style={mode === m ? pillBtn : cancelBtn}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ alignItems: "flex-end", display: "flex", gap: 2, height: H }}>
+        {years.map(y => {
+          const total = y.principal + y.interest;
+          const isCurrent = y.year === nowYear;
+          const isPast = y.year < nowYear;
+          const active = hover === y.year;
+          const barH = mode === "balance" ? (y.endBalance / maxBal) * H : (total / maxFlow) * H;
+          return (
+            <div key={y.year}
+              onMouseEnter={() => setHover(y.year)} onMouseLeave={() => setHover(h => (h === y.year ? null : h))}
+              style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", height: "100%", justifyContent: "flex-end", position: "relative" }}>
+              {active && (
+                <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, bottom: "100%", boxShadow: "0 6px 18px #00000055", left: "50%", marginBottom: 6, minWidth: 130, padding: "0.4rem 0.55rem", position: "absolute", transform: "translateX(-50%)", whiteSpace: "nowrap", zIndex: 10 }}>
+                  <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", marginBottom: "0.3rem" }}>{y.year}</div>
+                  {[["Principal", y.principal, "var(--fm-green)"], ["Interest", y.interest, "var(--fm-amber)"], ["End balance", y.endBalance, "var(--fm-ink-dim)"]].map(([l, v, c]) => (
+                    <div key={l} style={{ display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", gap: "0.6rem", justifyContent: "space-between" }}>
+                      <span style={{ color: c }}>{l}</span><span style={{ color: "var(--fm-ink-dim)" }}>{fmtMoney(v)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {mode === "balance" ? (
+                <div style={{ background: isCurrent ? "var(--fm-brass)" : "var(--fm-cyan)", borderRadius: "2px 2px 0 0", height: Math.max(barH, 2), opacity: isPast ? 0.45 : (active ? 1 : 0.85), width: "100%" }} />
+              ) : (
+                <div style={{ borderRadius: "2px 2px 0 0", display: "flex", flexDirection: "column-reverse", height: Math.max(barH, 2), opacity: isPast ? 0.55 : 1, outline: isCurrent ? "1px solid var(--fm-brass)" : "none", overflow: "hidden", width: "100%" }}>
+                  <div style={{ background: "var(--fm-green)", height: `${(y.principal / total) * 100}%`, opacity: active ? 1 : 0.85, width: "100%" }} />
+                  <div style={{ background: "var(--fm-amber)", height: `${(y.interest / total) * 100}%`, opacity: active ? 1 : 0.85, width: "100%" }} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 2, marginTop: "0.35rem" }}>
+        {years.map((y, i) => (
+          <div key={y.year} style={{ color: y.year === nowYear ? "var(--fm-brass)" : "var(--fm-ink-mute)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.5rem", textAlign: "center" }}>
+            {(y.year % 5 === 0 || i === 0 || i === years.length - 1 || y.year === nowYear) ? `'${String(y.year).slice(2)}` : ""}
+          </div>
+        ))}
+      </div>
+
+      {mode === "split" && (
+        <div style={{ display: "flex", gap: "0.85rem", marginTop: "0.5rem" }}>
+          {[["Principal", "var(--fm-green)", "Principal: the part of each payment that reduces what you owe (builds equity)."], ["Interest", "var(--fm-amber)", "Interest: the cost of borrowing, paid to the lender — it doesn't reduce your balance."]].map(([l, c, h]) => (
+            <span key={l} title={h} style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "inline-flex", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", gap: "0.3rem" }}>
+              <span style={{ background: c, borderRadius: 1, height: 8, width: 8 }} />{l}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MortgageCard({ mortgage, ledger, roll, onSet, onOverride, onClear }) {
   const [editingYm, setEditingYm] = useState(null);
   const [editVal, setEditVal]     = useState("");
@@ -1274,6 +1376,9 @@ function MortgageCard({ mortgage, ledger, roll, onSet, onOverride, onClear }) {
   const escrow = Number(mortgage.escrowMonthly) || 0;
   const hasDefault = (Number(def) || 0) > 0;
   const pi = Math.max((Number(def) || 0) - escrow, 0);
+  const amort = amortization(mortgage);
+  const eq = amort.hasLoan ? equityStats(amort.currentBalance, mortgage.homeValue) : null;
+  const num = (v) => (v === "" ? null : parseFloat(v));
 
   function startEdit(row) { setEditingYm(row.ym); setEditVal(String(row.total || "")); }
   function cancelEdit()   { setEditingYm(null); setEditVal(""); }
@@ -1284,35 +1389,85 @@ function MortgageCard({ mortgage, ledger, roll, onSet, onOverride, onClear }) {
   }
 
   return (
-    <div style={{ ...card, marginBottom: "1.5rem" }}>
-      <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+    <div style={{ ...card, display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ alignItems: "center", display: "flex", flexShrink: 0, justifyContent: "space-between", marginBottom: "0.9rem" }}>
         <span style={sectionTitle}>Mortgage</span>
-        {hasDefault && <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{fmtMoney(roll.avgMonthly)}/mo avg · {fmtMoney(roll.annual)}/yr</span>}
+        {hasDefault && <span title="Your average monthly payment and the yearly total across the projected months (individual months you've corrected are included in the average)." style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{fmtMoney(roll.avgMonthly)}/mo avg · {fmtMoney(roll.annual)}/yr</span>}
       </div>
 
-      {/* Setup */}
-      <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.25rem", marginBottom: hasDefault ? "1rem" : 0 }}>
-        <label style={fieldLabel}>
-          Monthly payment
-          <span style={{ color: "var(--fm-ink-mute)", margin: "0 0.3rem" }}>$</span>
-          <input type="number" step="10" min="0" placeholder="0"
-            value={def ?? ""}
-            onChange={e => onSet({ defaultMonthly: e.target.value === "" ? null : parseFloat(e.target.value) })}
-            style={{ ...inputStyle, width: 110 }} />
-        </label>
-        <label style={fieldLabel}>
-          of which escrow
-          <span style={{ color: "var(--fm-ink-mute)", margin: "0 0.3rem" }}>$</span>
-          <input type="number" step="10" min="0" placeholder="0"
-            value={mortgage.escrowMonthly ?? ""}
-            onChange={e => onSet({ escrowMonthly: e.target.value === "" ? null : parseFloat(e.target.value) })}
-            style={{ ...inputStyle, width: 100 }} />
-        </label>
-        {hasDefault && (
-          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
-            = {fmtMoney(pi)} P&amp;I + {fmtMoney(Math.min(escrow, Number(def) || 0))} escrow
-          </span>
+      {/* 1. The loan itself — the facts that define everything below */}
+      <div style={{ flexShrink: 0 }}>
+        <div style={{ ...detailLabel, marginBottom: "0.65rem" }} title="The terms of your loan. Optional — but entering them lets Foreman work out your balance, payoff date, interest, and equity.">Loan · for balance, payoff, interest &amp; equity</div>
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.1rem" }}>
+          <label style={fieldLabel} title="The amount you originally borrowed (the starting loan balance, not the home's price).">
+            Original principal<span style={{ color: "var(--fm-ink-mute)", margin: "0 0.3rem" }}>$</span>
+            <input type="number" step="1000" min="0" placeholder="0" value={mortgage.principal ?? ""} onChange={e => onSet({ principal: num(e.target.value) })} style={{ ...inputStyle, width: 120 }} />
+          </label>
+          <label style={fieldLabel} title="The loan's annual interest rate (APR), as a percent — e.g. 6.5.">
+            Rate
+            <input type="number" step="0.01" min="0" placeholder="0" value={mortgage.rate ?? ""} onChange={e => onSet({ rate: num(e.target.value) })} style={{ ...inputStyle, margin: "0 0.3rem", width: 70 }} />%
+          </label>
+          <label style={fieldLabel} title="The loan's length in years — how long until it's fully paid off (e.g. 30 or 15).">
+            Term
+            <input type="number" step="1" min="1" placeholder="30" value={mortgage.termYears ?? ""} onChange={e => onSet({ termYears: num(e.target.value) })} style={{ ...inputStyle, margin: "0 0.3rem", width: 60 }} />yrs
+          </label>
+          <label style={fieldLabel} title="The month of your first payment — sets where the loan is in its amortization today.">
+            Start
+            <input type="month" value={mortgage.startMonth ?? ""} onChange={e => onSet({ startMonth: e.target.value || null })} style={{ ...inputStyle, marginLeft: "0.4rem", width: 130 }} />
+          </label>
+          <label style={fieldLabel} title="Your home's current market value — used to compute equity and loan-to-value (LTV).">
+            Home value<span style={{ color: "var(--fm-ink-mute)", margin: "0 0.3rem" }}>$</span>
+            <input type="number" step="1000" min="0" placeholder="0" value={mortgage.homeValue ?? ""} onChange={e => onSet({ homeValue: num(e.target.value) })} style={{ ...inputStyle, width: 120 }} />
+          </label>
+        </div>
+
+        {amort.hasLoan && (
+          <>
+            <div style={{ display: "grid", gap: "0.7rem 1.25rem", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", marginTop: "1rem" }}>
+              <MortgageStat label="Current balance" value={fmtMoney(amort.currentBalance)} sub={`${amort.monthsRemaining} of ${amort.termMonths} mo left`} hint="The loan principal you still owe today, after the payments made so far." />
+              {eq && <MortgageStat label="Equity" value={fmtMoney(eq.equity)} sub={`${Math.round(eq.ltv * 100)}% LTV`} color="var(--fm-green)" hint="Equity is your home's value minus what you still owe. LTV (loan-to-value) is the balance as a percent of home value — lenders can drop PMI around 80%." />}
+              <MortgageStat label="Payoff" value={amort.payoffDate.toLocaleDateString("en-US", { month: "short", year: "numeric" })} hint="The month your mortgage will be fully paid off if you keep to the scheduled payment." />
+              <MortgageStat label="Interest remaining" value={fmtMoney(amort.interestRemaining)} sub={`${fmtMoney(amort.interestPaid)} paid`} hint="Total interest you'll still pay over the rest of the loan (and the total already paid so far)." />
+              <MortgageStat label="Interest this year" value={fmtMoney(amort.interestThisYear)} sub="est. for taxes" hint="Interest paid during this calendar year — mortgage interest is often tax-deductible." />
+              <MortgageStat label="Computed P&I" value={fmtMoney(amort.pi)} sub="→ set as payment" onClick={() => onSet({ defaultMonthly: Math.round(amort.pi + escrow) })} hint="Principal & Interest: the standard monthly payment your loan terms produce, before escrow. Click to use it as your payment." />
+            </div>
+            {eq && eq.pmiRemovable && amort.currentBalance > 0 && (
+              <div title="PMI (Private Mortgage Insurance) is a monthly fee lenders charge while your equity is under ~20% (loan-to-value above 80%). Once you cross that line you can usually ask to have it removed." style={{ background: "rgba(127,176,135,0.1)", border: "1px solid var(--fm-green)", borderRadius: "var(--fm-radius)", color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.5, marginTop: "0.85rem", padding: "0.5rem 0.7rem" }}>
+                You're at {Math.round(eq.ltv * 100)}% loan-to-value (≤ 80%). You may be able to request PMI cancellation with your lender.
+              </div>
+            )}
+            <AmortizationChart amort={amort} />
+          </>
         )}
+      </div>
+
+      {/* 2. What you actually pay each month — feeds the cash-flow forecast */}
+      <div style={{ borderTop: "1px solid var(--fm-hairline)", flexShrink: 0, marginTop: "1.1rem", paddingTop: "1rem" }}>
+        <div style={{ ...detailLabel, marginBottom: "0.65rem" }} title="What you actually pay each month. This is the figure that feeds your cash-flow forecast and posts to the spending ledger.">Monthly payment · feeds your forecast</div>
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.25rem" }}>
+          <label style={fieldLabel} title="Your total monthly mortgage payment, including escrow. This is what flows into your cash-flow forecast.">
+            Payment
+            <span style={{ color: "var(--fm-ink-mute)", margin: "0 0.3rem" }}>$</span>
+            <input type="number" step="10" min="0" placeholder="0"
+              value={def ?? ""}
+              onChange={e => onSet({ defaultMonthly: e.target.value === "" ? null : parseFloat(e.target.value) })}
+              style={{ ...inputStyle, width: 110 }} />
+          </label>
+          <label style={fieldLabel} title="Escrow: the portion of your payment the lender holds to pay your property taxes and homeowners insurance for you.">
+            of which escrow
+            <span style={{ color: "var(--fm-ink-mute)", margin: "0 0.3rem" }}>$</span>
+            <input type="number" step="10" min="0" placeholder="0"
+              value={mortgage.escrowMonthly ?? ""}
+              onChange={e => onSet({ escrowMonthly: e.target.value === "" ? null : parseFloat(e.target.value) })}
+              style={{ ...inputStyle, width: 100 }} />
+          </label>
+          {hasDefault && (
+            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}
+              title="P&I (Principal & Interest) pays down the loan and its interest; escrow covers taxes and insurance. Together they make up your payment.">
+              = {fmtMoney(pi)} P&amp;I + {fmtMoney(Math.min(escrow, Number(def) || 0))} escrow
+            </span>
+          )}
+        </div>
       </div>
 
       {!hasDefault ? (
@@ -1326,8 +1481,8 @@ function MortgageCard({ mortgage, ledger, roll, onSet, onOverride, onClear }) {
               Escrow already covers taxes &amp; insurance — don't also log those as a service or planned cost, or they'll be counted twice.
             </div>
           )}
-          <div style={{ ...detailLabel, marginBottom: "0.4rem" }}>Payment by month · click an amount to correct it</div>
-          <div style={{ display: "flex", flexDirection: "column", maxHeight: 260, overflowY: "auto" }}>
+          <div style={{ ...detailLabel, flexShrink: 0, marginBottom: "0.4rem" }} title="Each month projects your default payment forward. Click an amount to override (correct) a single month — e.g. an escrow adjustment or a missed/extra payment — without changing the rest.">Payment by month · click an amount to correct it</div>
+          <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto" }}>
             {ledger.map(row => {
               const editing = editingYm === row.ym;
               return (

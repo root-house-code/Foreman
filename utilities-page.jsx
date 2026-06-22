@@ -19,31 +19,6 @@ function fmtMonth(periodMonth) {
   return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 }
 
-// DIAGNOSTIC — an alternative est./mo that infers the real billing cadence from the
-// gaps between logged bills, instead of trusting the configured billing cycle (which
-// is what estimatedMonthly() divides by). Same trailing-12-month window. Lets us spot
-// utilities whose logged bills don't match their configured cycle. Returns null when
-// there are no recent bills.
-function cadenceMonthly(bills) {
-  const now = new Date();
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-  const cutoffMonth = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}`;
-  const recent = (bills || [])
-    .filter(b => b.periodMonth && b.periodMonth >= cutoffMonth && b.amount != null)
-    .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth));
-  if (recent.length === 0) return null;
-  const avg = recent.reduce((s, b) => s + (Number(b.amount) || 0), 0) / recent.length;
-  if (recent.length === 1) return { value: avg, bills: 1, gap: null }; // can't infer a gap from one bill
-  const monthsBetween = (a, b) => {
-    const [ay, am] = a.split("-").map(Number);
-    const [by, bm] = b.split("-").map(Number);
-    return (by - ay) * 12 + (bm - am);
-  };
-  const span = monthsBetween(recent[0].periodMonth, recent[recent.length - 1].periodMonth);
-  const gap = span > 0 ? span / (recent.length - 1) : 1; // avg months between consecutive bills
-  return { value: avg / gap, bills: recent.length, gap };
-}
-
 function fmtDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso + "T00:00:00");
@@ -406,6 +381,276 @@ function BillModal({ utility, initial, isEdit, onSave, onClose }) {
   );
 }
 
+// ── Cost-over-time chart ──────────────────────────────────────────────────────
+
+const CHART_PALETTE = [
+  "var(--fm-cyan)", "var(--fm-brass)", "var(--fm-green)", "var(--fm-amber)",
+  "var(--fm-purple)", "var(--fm-red)", "var(--fm-brass-dim)", "var(--fm-ink-dim)",
+];
+const MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function BarTip({ title, rows, total }) {
+  return (
+    <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, bottom: "100%", boxShadow: "0 6px 18px #00000055", left: "50%", marginBottom: 6, minWidth: 110, padding: "0.4rem 0.55rem", position: "absolute", transform: "translateX(-50%)", whiteSpace: "nowrap", zIndex: 10 }}>
+      <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", marginBottom: rows.length ? "0.3rem" : 0 }}>{title}</div>
+      {rows.map(([label, v, color]) => (
+        <div key={label} style={{ display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", gap: "0.6rem", justifyContent: "space-between" }}>
+          <span style={{ color }}>{label}</span><span style={{ color: "var(--fm-ink-dim)" }}>{fmtCost(v)}</span>
+        </div>
+      ))}
+      {rows.length > 1 && (
+        <div style={{ borderTop: "1px solid var(--fm-hairline2)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 500, gap: "0.6rem", justifyContent: "space-between", marginTop: "0.3rem", paddingTop: "0.3rem" }}>
+          <span style={{ color: "var(--fm-ink-mute)" }}>Total</span><span style={{ color: "var(--fm-ink)" }}>{fmtCost(total)}</span>
+        </div>
+      )}
+      {rows.length === 0 && <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>{fmtCost(total)}</div>}
+    </div>
+  );
+}
+
+const segBtn = (on) => ({
+  background: on ? "var(--fm-brass-bg)" : "transparent",
+  border: `1px solid ${on ? "var(--fm-brass)" : "var(--fm-hairline2)"}`,
+  borderRadius: 3,
+  color: on ? "var(--fm-brass)" : "var(--fm-ink-mute)",
+  cursor: "pointer",
+  fontFamily: "var(--fm-mono)",
+  fontSize: "0.58rem",
+  letterSpacing: "0.06em",
+  padding: "0.25rem 0.6rem",
+  textTransform: "uppercase",
+});
+
+// ── Pie (Totals) helpers ──────────────────────────────────────────────────────
+
+const SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"];
+const SEASON_COLOR = { Winter: "var(--fm-cyan)", Spring: "var(--fm-green)", Summer: "var(--fm-amber)", Fall: "var(--fm-brass)" };
+function seasonOf(month) {
+  if (month === 12 || month <= 2) return "Winter";
+  if (month <= 5) return "Spring";
+  if (month <= 8) return "Summer";
+  return "Fall";
+}
+
+const miniTitle = { color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.12em", marginBottom: "0.75rem", textTransform: "uppercase" };
+
+// SVG path for a pie wedge from angle a0→a1 (radians) about (cx,cy).
+function arcPath(cx, cy, r, a0, a1) {
+  const pt = (a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  const [x0, y0] = pt(a0), [x1, y1] = pt(a1);
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  return `M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`;
+}
+
+// Sum `amount` over rows, bucketed by keyFn.
+function sumBy(rows, keyFn) {
+  const m = {};
+  rows.forEach(r => { const k = keyFn(r); if (k == null) return; m[k] = (m[k] || 0) + r.amount; });
+  return m;
+}
+
+// Turn a {label: total} map into colored slices, sorted by value (or a fixed order),
+// grouping the long tail past `cap` into an "Other" wedge.
+function toSlices(map, colorFor, { cap = 6, order } = {}) {
+  let entries = Object.entries(map).filter(([, v]) => v > 0);
+  if (order) entries.sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+  else entries.sort((a, b) => b[1] - a[1]);
+  let slices = entries.map(([label, value]) => ({ label, value, color: colorFor(label) }));
+  if (!order && slices.length > cap) {
+    const head = slices.slice(0, cap);
+    const rest = slices.slice(cap).reduce((s, x) => s + x.value, 0);
+    if (rest > 0) head.push({ label: "Other", value: rest, color: "var(--fm-ink-dim)" });
+    slices = head;
+  }
+  return slices;
+}
+
+function MiniPie({ title, slices }) {
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  if (total <= 0) {
+    return (
+      <div>
+        <div style={miniTitle}>{title}</div>
+        <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", padding: "1.5rem 0", textAlign: "center" }}>no data</div>
+      </div>
+    );
+  }
+  let ang = -Math.PI / 2;
+  const arcs = slices.map(s => { const start = ang; ang += (s.value / total) * 2 * Math.PI; return { ...s, start, end: ang }; });
+  return (
+    <div>
+      <div style={miniTitle}>{title}</div>
+      <div style={{ alignItems: "center", display: "flex", gap: "1.1rem" }}>
+        <svg viewBox="0 0 100 100" width={130} height={130} style={{ flexShrink: 0 }}>
+          {arcs.length === 1
+            ? <circle cx="50" cy="50" r="46" fill={arcs[0].color} />
+            : arcs.map((a, i) => <path key={i} d={arcPath(50, 50, 46, a.start, a.end)} fill={a.color} stroke="var(--fm-bg-panel)" strokeWidth="1" />)}
+        </svg>
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.35rem", minWidth: 0 }}>
+          {slices.map(s => (
+            <div key={s.label} style={{ alignItems: "baseline", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", gap: "0.45rem" }}>
+              <span style={{ alignSelf: "center", background: s.color, borderRadius: 2, flexShrink: 0, height: 11, width: 11 }} />
+              <span style={{ color: "var(--fm-ink-dim)", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: 88 }}>{s.label}</span>
+              <span style={{ color: "var(--fm-ink)", flexShrink: 0, textAlign: "left", width: 56 }}>${Math.round(s.value).toLocaleString("en-US")}</span>
+              <span style={{ color: "var(--fm-ink-mute)", flexShrink: 0, textAlign: "left", width: 34 }}>{Math.round((s.value / total) * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Bar chart of logged utility bills over time. Timeline = one stacked bar per calendar
+// month (segmented by type) in chronological order; Year-over-year = a Jan–Dec axis with
+// one bar per year per month, so the same month across years sits together (seasonality);
+// Totals = a grid of composition pies (by type, season, account, year).
+function UtilityHistoryChart({ bills, utilitiesById }) {
+  const [mode, setMode] = useState("timeline"); // "timeline" | "year" | "totals"
+  const [hover, setHover] = useState(null);
+
+  const rows = useMemo(() => bills
+    .filter(b => b.periodMonth && b.amount != null)
+    .map(b => {
+      const [y, m] = b.periodMonth.split("-").map(Number);
+      const u = utilitiesById[b.utilityId] || {};
+      const type = u.type === "Other" ? (u.customType || "Other") : (u.type || "Other");
+      return { ym: b.periodMonth, year: y, month: m, amount: Number(b.amount) || 0, type, name: u.name || "—" };
+    }), [bills, utilitiesById]);
+
+  const types = useMemo(() => [...new Set(rows.map(r => r.type))].sort(), [rows]);
+  const typeColor = useMemo(() => Object.fromEntries(types.map((t, i) => [t, CHART_PALETTE[i % CHART_PALETTE.length]])), [types]);
+  const years = useMemo(() => [...new Set(rows.map(r => r.year))].sort(), [rows]);
+  const yearColor = useMemo(() => Object.fromEntries(years.map((y, i) => [y, CHART_PALETTE[i % CHART_PALETTE.length]])), [years]);
+
+  // Continuous months from first to last logged (gaps included, so missed bills show).
+  const timeline = useMemo(() => {
+    if (rows.length === 0) return [];
+    const sorted = [...rows].sort((a, b) => a.ym.localeCompare(b.ym));
+    const f = sorted[0], l = sorted[sorted.length - 1];
+    const out = [];
+    let yy = f.year, mm = f.month;
+    while (yy < l.year || (yy === l.year && mm <= l.month)) {
+      out.push({ key: `${yy}-${String(mm).padStart(2, "0")}`, year: yy, month: mm, byType: {}, total: 0 });
+      mm++; if (mm > 12) { mm = 1; yy++; }
+    }
+    const byKey = Object.fromEntries(out.map(b => [b.key, b]));
+    rows.forEach(r => {
+      const b = byKey[r.ym]; if (!b) return;
+      b.byType[r.type] = (b.byType[r.type] || 0) + r.amount;
+      b.total += r.amount;
+    });
+    return out;
+  }, [rows]);
+
+  // month(1-12) × year totals for the year-over-year view.
+  const yoy = useMemo(() => {
+    const cells = {};
+    rows.forEach(r => { const k = `${r.month}:${r.year}`; cells[k] = (cells[k] || 0) + r.amount; });
+    return cells;
+  }, [rows]);
+
+  if (rows.length === 0) return null;
+
+  const BODY_H = 240; // shared content height so all three modes make an equal-height panel
+  const tlMax = Math.max(1, ...timeline.map(b => b.total));
+  const yoyMax = Math.max(1, ...Object.values(yoy));
+  const legend = mode === "timeline" ? types.map(t => [t, typeColor[t]]) : years.map(y => [String(y), yearColor[y]]);
+  const Legend = () => (legend.length > 0 ? (
+    <div style={{ display: "flex", flexShrink: 0, flexWrap: "wrap", gap: "0.75rem", marginTop: "0.6rem" }}>
+      {legend.map(([label, color]) => (
+        <span key={label} style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "inline-flex", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", gap: "0.3rem" }}>
+          <span style={{ background: color, borderRadius: 1, display: "inline-block", height: 8, width: 8 }} />{label}
+        </span>
+      ))}
+    </div>
+  ) : null);
+
+  return (
+    <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", marginBottom: "1.25rem", padding: "1.1rem 1.35rem" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "1rem" }}>
+        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>Cost Over Time</span>
+        <div style={{ display: "flex", gap: "0.35rem", marginLeft: "auto" }}>
+          {[["timeline", "Timeline"], ["year", "Year over year"], ["totals", "Totals"]].map(([m, lbl]) => (
+            <button key={m} onClick={() => { setMode(m); setHover(null); }} style={segBtn(mode === m)}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ height: BODY_H }}>
+        {mode === "timeline" && (
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ alignItems: "flex-end", display: "flex", flex: 1, gap: 2, minHeight: 0 }}>
+              {timeline.map(b => {
+                const active = hover === b.key;
+                return (
+                  <div key={b.key}
+                    onMouseEnter={() => setHover(b.key)} onMouseLeave={() => setHover(h => (h === b.key ? null : h))}
+                    style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", height: "100%", justifyContent: "flex-end", position: "relative" }}>
+                    {active && b.total > 0 && <BarTip title={fmtMonth(b.key)} rows={types.map(t => [t, b.byType[t] || 0, typeColor[t]]).filter(r => r[1] > 0)} total={b.total} />}
+                    <div style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: "2px 2px 0 0", display: "flex", flexDirection: "column-reverse", height: `${(b.total / tlMax) * 100}%`, minHeight: b.total > 0 ? 2 : 0, overflow: "hidden", width: "100%" }}>
+                      {types.map(t => { const v = b.byType[t] || 0; if (v <= 0) return null; return <div key={t} style={{ background: typeColor[t], height: `${(v / b.total) * 100}%`, opacity: active ? 1 : 0.85, width: "100%" }} />; })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", flexShrink: 0, gap: 2, marginTop: "0.4rem" }}>
+              {timeline.map((b, i) => (
+                <div key={b.key} style={{ color: "var(--fm-ink-mute)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.5rem", textAlign: "center" }}>
+                  {b.month === 1 || i === 0 ? `'${String(b.year).slice(2)}` : ""}
+                </div>
+              ))}
+            </div>
+            <Legend />
+          </div>
+        )}
+
+        {mode === "year" && (
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ alignItems: "flex-end", display: "flex", flex: 1, gap: "0.5rem", minHeight: 0 }}>
+              {MONTH_ABBR.slice(1).map((lbl, idx) => {
+                const month = idx + 1;
+                return (
+                  <div key={month} style={{ alignItems: "flex-end", display: "flex", flex: 1, gap: 1, height: "100%", justifyContent: "center" }}>
+                    {years.map(y => {
+                      const v = yoy[`${month}:${y}`] || 0;
+                      const key = `${month}:${y}`;
+                      const active = hover === key;
+                      return (
+                        <div key={y}
+                          onMouseEnter={() => setHover(key)} onMouseLeave={() => setHover(h => (h === key ? null : h))}
+                          style={{ alignItems: "flex-end", display: "flex", flex: 1, height: "100%", position: "relative" }}>
+                          {active && v > 0 && <BarTip title={`${lbl} ${y}`} rows={[]} total={v} />}
+                          <div style={{ background: v > 0 ? yearColor[y] : "transparent", border: v > 0 ? "none" : "1px dashed var(--fm-hairline)", borderRadius: "2px 2px 0 0", height: v > 0 ? `${(v / yoyMax) * 100}%` : 0, minHeight: v > 0 ? 2 : 0, opacity: active ? 1 : 0.85, width: "100%" }} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", flexShrink: 0, gap: "0.5rem", marginTop: "0.4rem" }}>
+              {MONTH_ABBR.slice(1).map(lbl => (
+                <div key={lbl} style={{ color: "var(--fm-ink-mute)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.5rem", textAlign: "center" }}>{lbl}</div>
+              ))}
+            </div>
+            <Legend />
+          </div>
+        )}
+
+        {mode === "totals" && (
+          <div style={{ alignItems: "center", display: "grid", gap: "1.75rem", gridTemplateColumns: "repeat(3, 1fr)", height: "100%" }}>
+            <MiniPie title="By Type" slices={toSlices(sumBy(rows, r => r.type), t => typeColor[t] || "var(--fm-ink-dim)")} />
+            <MiniPie title="By Season" slices={toSlices(sumBy(rows, r => seasonOf(r.month)), s => SEASON_COLOR[s], { order: SEASON_ORDER })} />
+            <MiniPie title="By Year" slices={toSlices(sumBy(rows, r => String(r.year)), y => yearColor[y] || "var(--fm-ink-dim)", { cap: 8 })} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function UtilitiesPage({ navigate, navState }) {
@@ -500,6 +745,16 @@ export default function UtilitiesPage({ navigate, navState }) {
       })
       .sort((a, b) => (b.periodMonth || "").localeCompare(a.periodMonth || ""));
   }, [allBills, utilData, histTypeFilter, histSearch]);
+
+  // Chart respects the type filter but not the text search (search narrows the table only).
+  const chartBills = useMemo(() => {
+    if (histTypeFilter === "ALL") return allBills;
+    return allBills.filter(b => {
+      const util = utilData?.utilities?.[b.utilityId] ?? {};
+      const t = util.type === "Other" ? (util.customType || "Other") : util.type;
+      return t === histTypeFilter;
+    });
+  }, [allBills, utilData, histTypeFilter]);
 
   // Handlers
   function handleSaveUtility(obj) {
@@ -601,7 +856,6 @@ export default function UtilitiesPage({ navigate, navState }) {
                   <th style={thCell}>Provider</th>
                   <th style={thCell}>Latest Bill</th>
                   <th style={thCell}>Est. /mo</th>
-                  <th style={thCell} title="Diagnostic: est./mo inferred from the actual gaps between logged bills, ignoring the configured cycle">Est. /mo (cadence)</th>
                   <th style={thCell}>Cycle</th>
                   <th style={thCell}>Due</th>
                   <th style={thCell}>Status</th>
@@ -614,8 +868,6 @@ export default function UtilitiesPage({ navigate, navState }) {
                   const uBills = billsFor(util.id).sort((a, b) => (b.periodMonth || "").localeCompare(a.periodMonth || ""));
                   const latest = latestBill(util.id);
                   const est = estimatedMonthly(util, uBills);
-                  const alt = cadenceMonthly(uBills);
-                  const divergent = alt && est > 0 && Math.abs(alt.value - est) / est > 0.15;
                   return (
                     <>
                       <tr
@@ -629,13 +881,6 @@ export default function UtilitiesPage({ navigate, navState }) {
                         <td style={tdCell}>{util.providerName || "—"}</td>
                         <td style={tdCell}>{latest ? fmtCost(latest.amount) : "—"}</td>
                         <td style={{ ...tdCell, color: "var(--fm-cyan)" }}>{est ? fmtCost(est) : "—"}</td>
-                        <td
-                          style={{ ...tdCell, color: divergent ? "var(--fm-amber)" : "var(--fm-ink-mute)" }}
-                          title={alt ? (alt.gap != null ? `~${alt.gap.toFixed(1)} mo between ${alt.bills} bills (cycle says ${utilityCycleLabel(util.billingCycle)})` : `only ${alt.bills} bill — cadence can't be inferred`) : "no recent bills"}
-                        >
-                          {alt ? fmtCost(alt.value) : "—"}
-                          {divergent && <span style={{ marginLeft: 4 }}>⚠</span>}
-                        </td>
                         <td style={tdCell}>{utilityCycleLabel(util.billingCycle)}</td>
                         <td style={tdCell}>{util.dueDayOfMonth ? `Day ${util.dueDayOfMonth}` : "—"}</td>
                         <td style={tdCell}>
@@ -671,7 +916,7 @@ export default function UtilitiesPage({ navigate, navState }) {
 
                       {isExpanded && (
                         <tr key={util.id + "-exp"}>
-                          <td colSpan={11} style={{ background: "var(--fm-bg-sunk)", borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 0.75rem 0.75rem 2.5rem" }}>
+                          <td colSpan={10} style={{ background: "var(--fm-bg-sunk)", borderBottom: "1px solid var(--fm-hairline)", padding: "0.75rem 0.75rem 0.75rem 2.5rem" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.6rem" }}>
                               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
                                 Bills ({uBills.length})
@@ -750,6 +995,10 @@ export default function UtilitiesPage({ navigate, navState }) {
               onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
             />
           </div>
+
+          {allBills.length > 0 && (
+            <UtilityHistoryChart bills={chartBills} utilitiesById={utilData?.utilities ?? {}} />
+          )}
 
           {allBills.length === 0 ? (
             <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>

@@ -1328,6 +1328,32 @@ function ImportExportSettings() {
     e.target.value = "";
   }
 
+  async function pickImportFile() {
+    setImportFile(null);
+    if (window.foreman?.showOpenDialog) {
+      // Electron: native open dialog
+      const { canceled, filePaths } = await window.foreman.showOpenDialog({
+        filters: [{ name: "Foreman Backup", extensions: ["json"] }],
+        properties: ["openFile"],
+      });
+      if (canceled || !filePaths?.length) return;
+      const filePath = filePaths[0];
+      const fileName = filePath.split(/[\\/]/).pop();
+      try {
+        const text = await window.foreman.readFile(filePath);
+        const parsed = JSON.parse(text);
+        if (!parsed?._foreman || parsed.version !== 1) { setImportFile("error"); return; }
+        setImportFile({ name: fileName, data: parsed });
+        setImportSuccess(false);
+      } catch {
+        setImportFile("error");
+      }
+    } else {
+      // Browser: hidden file input
+      jsonFileInputRef.current?.click();
+    }
+  }
+
   function handleProfileImport() {
     if (!importFile || importFile === "error") return;
     setImporting(true);
@@ -1633,7 +1659,7 @@ function ImportExportSettings() {
 
         {!importFile ? (
           <button
-            onClick={() => jsonFileInputRef.current?.click()}
+            onClick={pickImportFile}
             style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.05em", padding: "0.5rem 1.1rem", transition: "all 0.15s" }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-ink-dim)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
@@ -1646,7 +1672,7 @@ function ImportExportSettings() {
               Invalid file — make sure you're importing a Foreman backup.
             </div>
             <button
-              onClick={() => { setImportFile(null); jsonFileInputRef.current?.click(); }}
+              onClick={pickImportFile}
               style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0 }}
               onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}
               onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}

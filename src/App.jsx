@@ -1,4 +1,4 @@
-import { useState, useMemo, Component } from "react";
+import { useState, useMemo, useEffect, Component } from "react";
 import { FmNavContext } from "./context/FmNavContext";
 
 class ErrorBoundary extends Component {
@@ -77,6 +77,19 @@ export default function App() {
     setPage(key);
     setNavState(state);
   };
+
+  // In Electron: subscribe to foreman:// deep links from the main process
+  useEffect(() => {
+    if (window.foreman?.onDeepLink) {
+      window.foreman.onDeepLink((url) => {
+        try {
+          const parsed = new URL(url);
+          const page = parsed.hostname || parsed.pathname.replace(/^\/+/, "");
+          if (page) navigate(page);
+        } catch {}
+      });
+    }
+  }, []);
 
   const navContextValue = useMemo(
     () => ({

@@ -20,7 +20,7 @@ const SECTIONS = [
 
 const SEV_COLOR = { overdue: "var(--fm-red)", soon: "var(--fm-amber)", info: "var(--fm-brass)" };
 const KIND_LABEL = {
-  maintenance: "MAINT", chore: "CHORE", warranty: "WARR", supply: "SUPPLY", service: "SVC", planned: "PLAN",
+  maintenance: "MAINT", chore: "CHORE", warranty: "WARR", supply: "SUPPLY", service: "SVC", planned: "PLAN", mortgage: "MORTG",
 };
 
 const sectionTitle = {
