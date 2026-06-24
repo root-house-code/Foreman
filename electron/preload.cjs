@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("foreman", {
   // ── Storage ─────────────────────────────────────────────────────────────
   readAllSync: () => ipcRenderer.sendSync("storage:readAll"),
   flush: (snapshot) => ipcRenderer.send("storage:flush", snapshot),
+  flushNow: (snapshot) => ipcRenderer.sendSync("storage:flushNow", snapshot),
 
   // ── Notifications ────────────────────────────────────────────────────────
   notify: (title, body) => ipcRenderer.send("notify", title, body),

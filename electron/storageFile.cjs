@@ -1,13 +1,19 @@
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 
-const DATA_DIR = path.join(os.homedir(), "Documents", "Foreman");
-const DATA_FILE = path.join(DATA_DIR, "data.json");
-const IMAGES_FILE = path.join(DATA_DIR, "images.json");
+// Use app.getPath("documents") so the path follows Windows folder redirection
+// (e.g. OneDrive Documents) rather than assuming os.homedir()\Documents.
+// Computed lazily — IPC handlers only fire after app is ready.
+function dataDir() {
+  return path.join(require("electron").app.getPath("documents"), "Foreman");
+}
+function dataFile()   { return path.join(dataDir(), "data.json"); }
+function imagesFile() { return path.join(dataDir(), "images.json"); }
+function backupsDir() { return path.join(dataDir(), "backups"); }
 
 function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const d = dataDir();
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
 function atomicWrite(file, obj) {
@@ -22,7 +28,7 @@ function safeRead(file) {
 
 function readAllSync() {
   ensureDir();
-  return { ...safeRead(DATA_FILE), ...safeRead(IMAGES_FILE) };
+  return { ...safeRead(dataFile()), ...safeRead(imagesFile()) };
 }
 
 // Partition snapshot: images key → images.json, everything else → data.json.
@@ -35,13 +41,11 @@ function flush(snapshot) {
     if (k === "foreman-images") images[k] = v;
     else data[k] = v;
   }
-  atomicWrite(DATA_FILE, data);
-  atomicWrite(IMAGES_FILE, images);
+  atomicWrite(dataFile(), data);
+  atomicWrite(imagesFile(), images);
 }
 
 // ── Backups ───────────────────────────────────────────────────────────────────
-const BACKUPS_DIR = path.join(DATA_DIR, "backups");
-
 function isoStamp() {
   // "2026-06-21T11-04-56" — colons swapped to hyphens so it's a valid filename
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -57,9 +61,10 @@ function parseStamp(filename) {
 
 // Tiered retention: keep all hourlies for 24h, 1/day for 7 days, 1/week for 4 weeks.
 function pruneBackups() {
-  if (!fs.existsSync(BACKUPS_DIR)) return;
+  const bd = backupsDir();
+  if (!fs.existsSync(bd)) return;
   const now = Date.now();
-  const files = fs.readdirSync(BACKUPS_DIR)
+  const files = fs.readdirSync(bd)
     .filter(f => f.startsWith("backup-") && f.endsWith(".json"))
     .map(f => ({ name: f, time: parseStamp(f)?.getTime() }))
     .filter(f => f.time)
@@ -72,33 +77,30 @@ function pruneBackups() {
   for (const f of files) {
     const age = now - f.time;
     if (age < 24 * 3600_000) {
-      // Last 24 h: keep all (up to 24)
       if (keep.size < 24) keep.add(f.name);
     } else if (age < 7 * 24 * 3600_000) {
-      // 1–7 days: keep one per calendar day
       const day = new Date(f.time).toDateString();
       if (!dailySeen[day]) { dailySeen[day] = true; keep.add(f.name); }
     } else if (age < 28 * 24 * 3600_000) {
-      // 7–28 days: keep one per ISO week
       const week = Math.floor(f.time / (7 * 24 * 3600_000));
       if (!weeklySeen[week]) { weeklySeen[week] = true; keep.add(f.name); }
     }
-    // > 28 days: drop
   }
 
   for (const f of files) {
     if (!keep.has(f.name)) {
-      try { fs.unlinkSync(path.join(BACKUPS_DIR, f.name)); } catch {}
+      try { fs.unlinkSync(path.join(bd, f.name)); } catch {}
     }
   }
 }
 
 // Create a timestamped copy of data.json in the backups directory.
 function createBackup() {
-  if (!fs.existsSync(DATA_FILE)) return;
-  if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-  const dest = path.join(BACKUPS_DIR, `backup-${isoStamp()}.json`);
-  fs.copyFileSync(DATA_FILE, dest);
+  const src = dataFile();
+  if (!fs.existsSync(src)) return;
+  const bd = backupsDir();
+  if (!fs.existsSync(bd)) fs.mkdirSync(bd, { recursive: true });
+  fs.copyFileSync(src, path.join(bd, `backup-${isoStamp()}.json`));
   pruneBackups();
 }
 

@@ -83,6 +83,16 @@ ipcMain.on("storage:readAll", (event) => {
   try { createBackup(); } catch {}
 });
 
+// Synchronous immediate flush — used before window.location.reload() so the
+// debounced timer doesn't race with the next storageInit read.
+ipcMain.on("storage:flushNow", (event, snapshot) => {
+  clearTimeout(_flushTimer);
+  _flushTimer = null;
+  _pendingSnapshot = null;
+  try { flush(snapshot); } catch {}
+  event.returnValue = true;
+});
+
 let _flushTimer = null;
 let _pendingSnapshot = null;
 let _lastBackupTime = 0;

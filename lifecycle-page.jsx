@@ -382,6 +382,21 @@ function FinancesPage({ navigate, navState, view }) {
   }), [svcData, utilData, reserve.annual, repairs12mo, budgetWarranties, budget, forecastHorizon]);
   const budgetSummary = useMemo(() => summarize(budgetMonths), [budgetMonths]);
 
+  const reserveTooltip = useMemo(() => {
+    const items = forecast.filter(f => f.remaining <= 5);
+    if (!items.length) return undefined;
+    const lines = items.map(f => {
+      const yr = f.remaining <= 0 ? "overdue" : `~${f.remaining.toFixed(1)} yr`;
+      const cost = f.estCost != null ? `, $${Math.round(f.estCost).toLocaleString()}` : "";
+      return `  ${f.item} (${yr}${cost})`;
+    });
+    return `End-of-life items (≤5 yr):\n${lines.join("\n")}`;
+  }, [forecast]);
+
+  const repairsTooltip = repairs12mo > 0
+    ? `Based on $${Math.round(repairs12mo).toLocaleString()} in logged expenses over the past 12 months`
+    : undefined;
+
   // ── Mortgage (recurring bill: default + per-month overrides) ───────────────────
   const mortgageOn = hasMortgage(budget.mortgage);
   const mortLedger = useMemo(() => mortgageLedger(budget.mortgage), [budget.mortgage]);
@@ -646,9 +661,6 @@ function FinancesPage({ navigate, navState, view }) {
                     >{forecastHorizon}</span>
                   )}
                   <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>months</span>
-                  <span style={{ background: "var(--fm-hairline)", height: 12, margin: "0 6px", width: 1 }} />
-                  <ToggleChip on={budget.includeReserve} label="Reserve" onClick={() => setBudgetSettings({ includeReserve: !budget.includeReserve })} />
-                  <ToggleChip on={budget.includeRepairsBaseline} label="Repairs baseline" onClick={() => setBudgetSettings({ includeRepairsBaseline: !budget.includeRepairsBaseline })} />
                 </div>
                 {/* Two-column layout: left = hero + chart stacked, right = month-by-month */}
                 <div style={{ alignItems: "stretch", display: "flex", gap: "1.5rem", marginBottom: "1.5rem" }}>
@@ -670,28 +682,39 @@ function FinancesPage({ navigate, navState, view }) {
                         {/* Column headers */}
                         <div style={{ alignItems: "baseline", display: "flex", marginBottom: "0.5rem" }}>
                           <span style={{ flex: 1 }} />
-                          <span style={{ ...hdrStyle(colW.thisMonth), ...thisMonthGap }}>{cur?.shortLabel ?? "This Mo"}</span>
-                          <span style={hdrStyle(colW.mo)}>Mo Avg</span>
-                          <span style={hdrStyle(colW.horizon)}>{forecastHorizon} Mo</span>
+                          <span style={{ ...hdrStyle(colW.thisMonth), ...thisMonthGap, cursor: "help" }} title={`What each line is projected to cost this specific month (${cur?.shortLabel ?? "current month"}), based on your scheduled services, utilities, and other line items`}>{cur?.shortLabel ?? "This Mo"}</span>
+                          <span style={{ ...hdrStyle(colW.mo), cursor: "help" }} title={`Average monthly cost for each line across the full ${forecastHorizon}-month forecast horizon`}>Mo Avg</span>
+                          <span style={{ ...hdrStyle(colW.horizon), cursor: "help" }} title={`Total projected spend per line over the next ${forecastHorizon} months`}>{forecastHorizon} Mo</span>
                         </div>
                         {[
-                          mortgageOn               && ["Mortgage",         mortgageRoll.avgMonthly,  mortgageRoll.annual,                    cur?.mortgage      || 0, "var(--fm-ink-dim)", null],
-                          catAverages.services > 0 && ["Services",         catAverages.services,     catAverages.services  * forecastHorizon, cur?.servicesTotal || 0, "var(--fm-brass)",   null],
-                          catAverages.utilities > 0&& ["Utilities",        catAverages.utilities,    catAverages.utilities * forecastHorizon, cur?.utilities     || 0, "var(--fm-cyan)",    null],
-                          catAverages.reserve > 0  && [`Reserve (${reserve.count} items)`, catAverages.reserve, catAverages.reserve * forecastHorizon, cur?.reserve || 0, "var(--fm-amber)", "lifespans"],
-                          catAverages.repairs > 0  && ["Repairs Baseline", catAverages.repairs,      catAverages.repairs   * forecastHorizon, cur?.repairs       || 0, "var(--fm-ink-dim)", null],
-                          catAverages.planned > 0  && ["Planned",          catAverages.planned,      catAverages.planned   * forecastHorizon, cur?.plannedTotal  || 0, "var(--fm-green)",   null],
-                        ].filter(Boolean).map(([label, monthly, horizonTotal, thisMonth, color, navTarget]) => (
-                          <div key={label} style={{ alignItems: "baseline", display: "flex", marginBottom: "0.42rem" }}>
-                            <span
-                              style={{ color, cursor: navTarget ? "pointer" : "default", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textDecoration: navTarget ? "underline" : "none", textDecorationStyle: "dotted" }}
-                              onClick={navTarget ? () => navigate(navTarget) : undefined}
-                            >{label}</span>
-                            <span style={{ ...colStyle(colW.thisMonth), ...thisMonthGap, color: "var(--fm-ink-dim)" }}>{fmtMoney(thisMonth)}</span>
-                            <span style={{ ...colStyle(colW.mo),      color: "var(--fm-ink)" }}>{fmtMoney(monthly)}</span>
-                            <span style={{ ...colStyle(colW.horizon), color: "var(--fm-ink-dim)" }}>{fmtMoney(horizonTotal)}</span>
-                          </div>
-                        ))}
+                          mortgageOn               && ["Mortgage",                          mortgageRoll.avgMonthly,   mortgageRoll.annual,                      cur?.mortgage      || 0, "var(--fm-ink-dim)", null,        null,        null,                                    null],
+                          catAverages.services > 0 && ["Services",                          catAverages.services,      catAverages.services  * forecastHorizon,  cur?.servicesTotal || 0, "var(--fm-brass)",  null,        null,        null,                                    null],
+                          catAverages.utilities > 0&& ["Utilities",                         catAverages.utilities,     catAverages.utilities * forecastHorizon,  cur?.utilities     || 0, "var(--fm-cyan)",   null,        null,        null,                                    null],
+                          reserve.annual > 0       && [`Reserve (${reserve.count} items)`,  reserve.annual / 12,       (reserve.annual / 12) * forecastHorizon,  reserve.annual / 12,     "var(--fm-amber)",  null,        "reserve",   budget.includeReserve !== false,          reserveTooltip],
+                          repairs12mo > 0          && ["Repairs baseline",                  repairs12mo / 12,          (repairs12mo / 12) * forecastHorizon,     repairs12mo / 12,        "var(--fm-ink-dim)", null,        "repairs",   budget.includeRepairsBaseline !== false,  repairsTooltip],
+                          catAverages.planned > 0  && ["Planned",                           catAverages.planned,       catAverages.planned   * forecastHorizon,  cur?.plannedTotal  || 0, "var(--fm-green)",  null,        null,        null,                                    null],
+                        ].filter(Boolean).map(([label, monthly, horizonTotal, thisMonth, color, navTarget, toggleKey, toggleOn, tooltip]) => {
+                          const excluded = toggleKey !== null && toggleOn === false;
+                          const handleRowClick = toggleKey
+                            ? () => setBudgetSettings({ [toggleKey === "reserve" ? "includeReserve" : "includeRepairsBaseline"]: !toggleOn })
+                            : undefined;
+                          return (
+                            <div
+                              key={label}
+                              onClick={handleRowClick}
+                              title={tooltip}
+                              style={{ alignItems: "baseline", cursor: (toggleKey || navTarget) ? "pointer" : "default", display: "flex", marginBottom: "0.42rem", opacity: excluded ? 0.38 : 1, transition: "opacity 0.15s" }}
+                            >
+                              <span
+                                style={{ color, flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textDecoration: navTarget ? "underline" : "none", textDecorationStyle: "dotted" }}
+                                onClick={navTarget ? (e) => { e.stopPropagation(); navigate(navTarget); } : undefined}
+                              >{label}</span>
+                              <span style={{ ...colStyle(colW.thisMonth), ...thisMonthGap, color: "var(--fm-ink-dim)" }}>{fmtMoney(thisMonth)}</span>
+                              <span style={{ ...colStyle(colW.mo), color: "var(--fm-ink)" }}>{fmtMoney(monthly)}</span>
+                              <span style={{ ...colStyle(colW.horizon), color: "var(--fm-ink-dim)" }}>{fmtMoney(horizonTotal)}</span>
+                            </div>
+                          );
+                        })}
                         {/* Projected total row */}
                         <div style={{ alignItems: "baseline", borderTop: "1px solid var(--fm-hairline2)", display: "flex", marginTop: "0.5rem", paddingTop: "0.5rem" }}>
                           <span style={{ color: "var(--fm-ink-mute)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.04em" }}>Projected</span>
@@ -745,13 +768,13 @@ function FinancesPage({ navigate, navState, view }) {
                     <thead>
                       <tr>
                         <th style={thCell}>Month</th>
-                        <th style={{ ...thCell, textAlign: "right" }}>Services</th>
-                        <th style={{ ...thCell, textAlign: "right" }}>Utilities</th>
-                        <th style={{ ...thCell, textAlign: "right" }}>Reserve</th>
-                        <th style={{ ...thCell, textAlign: "right" }}>Repairs</th>
-                        <th style={{ ...thCell, textAlign: "right" }}>Planned</th>
-                        {mortgageOn && <th style={{ ...thCell, textAlign: "right", color: "var(--fm-purple)" }}>Mortgage</th>}
-                        <th style={{ ...thCell, textAlign: "right", paddingRight: 0 }}>Projected</th>
+                        <th style={{ ...thCell, textAlign: "right", cursor: "help" }} title="Projected service charges for the month, based on each active service's billing cycle and rate">Services</th>
+                        <th style={{ ...thCell, textAlign: "right", cursor: "help" }} title="Utility bills projected for the month based on your logged utility accounts">Utilities</th>
+                        <th style={{ ...thCell, textAlign: "right", cursor: "help" }} title={reserveTooltip}>Reserve</th>
+                        <th style={{ ...thCell, textAlign: "right", cursor: "help" }} title={repairsTooltip}>Repairs</th>
+                        <th style={{ ...thCell, textAlign: "right", cursor: "help" }} title="One-time or irregular costs you have manually planned for specific months">Planned</th>
+                        {mortgageOn && <th style={{ ...thCell, textAlign: "right", color: "var(--fm-purple)", cursor: "help" }} title="Monthly mortgage payment — shown separately and excluded from the operating run-rate total">Mortgage</th>}
+                        <th style={{ ...thCell, textAlign: "right", paddingRight: 0, cursor: "help" }} title="Sum of all operating lines for the month (services + utilities + reserve + repairs + planned), excluding mortgage">Projected</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1528,30 +1551,6 @@ function MortgageCard({ mortgage, ledger, roll, onSet, onOverride, onClear }) {
   );
 }
 
-function ToggleChip({ on, label, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        alignItems: "center",
-        background: on ? "var(--fm-brass-bg)" : "transparent",
-        border: `1px solid ${on ? "var(--fm-brass)" : "var(--fm-hairline2)"}`,
-        borderRadius: 3,
-        color: on ? "var(--fm-brass)" : "var(--fm-ink-mute)",
-        cursor: "pointer",
-        display: "inline-flex",
-        fontFamily: "var(--fm-mono)",
-        fontSize: "0.62rem",
-        gap: "0.35rem",
-        letterSpacing: "0.06em",
-        padding: "0.3rem 0.65rem",
-        textTransform: "uppercase",
-      }}
-    >
-      <span>{on ? "✓" : "○"}</span>{label}
-    </button>
-  );
-}
 
 const BUDGET_SEGMENTS = [
   ["servicesTotal", "var(--fm-brass)"],

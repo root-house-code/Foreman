@@ -130,6 +130,11 @@ const STRIP_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function fmtMinutes(min) {
+  if (min >= 60) { const h = Math.floor(min / 60), m = min % 60; return m ? `${h}h ${m}m` : `${h}h`; }
+  return `${min}m`;
+}
+
 function formatTimeOfDay(t) {
   if (!t) return "";
   const [h, m] = t.split(":").map(Number);
@@ -769,6 +774,7 @@ export default function ChoresPage({ navigate, navState }) {
       case "title":    return (chore.title || "").toLowerCase();
       case "schedule": return parseMonths(chore.schedule) ?? 999;
       case "next":     return choreNextDates[chore.id] || "9999-99-99";
+      case "duration": return chore.duration ?? null;
       case "status": {
         // Sort by urgency, mirroring choreStatus: days until next (negative =
         // overdue first), today = 0, upcoming positive; no date → last.
@@ -979,7 +985,8 @@ export default function ChoresPage({ navigate, navState }) {
     { key: "room",     label: "Location" },
     { key: "schedule", label: "Cadence" },
     { key: "next",     label: "Next"    },
-    { key: "status",   label: "Status", width: "80px" },
+    { key: "status",   label: "Status",   width: "80px" },
+    { key: "duration", label: "Est. Time", width: "72px" },
   ];
 
   return (
@@ -1173,7 +1180,7 @@ export default function ChoresPage({ navigate, navState }) {
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", padding: "3rem", textAlign: "center" }}>
+                  <td colSpan={8} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", padding: "3rem", textAlign: "center" }}>
                     No chores found.
                   </td>
                 </tr>
@@ -1231,6 +1238,13 @@ export default function ChoresPage({ navigate, navState }) {
                     {/* Status text */}
                     <td style={{ ...TD, width: "80px" }}>
                       <span style={{ color: status.dot, fontFamily: "var(--fm-mono)", fontSize: "0.68rem" }}>{status.text}</span>
+                    </td>
+
+                    {/* Est. Time */}
+                    <td style={{ ...TD, width: "72px" }}>
+                      <span style={{ color: chore.duration != null ? "var(--fm-brass)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem" }}>
+                        {chore.duration != null ? fmtMinutes(chore.duration) : "—"}
+                      </span>
                     </td>
 
                     {/* Actions */}

@@ -66,7 +66,8 @@ import { loadRooms, saveRooms, createRoom, updateRoom } from "./lib/rooms.js";
 import { getManufacturers } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
 import { polygonCentroid } from "./lib/geometry.js";
-import { loadFpData, saveFpData, rectToPolygon } from "./lib/fpData.js";
+import { loadFpData, saveFpData, shapeToPolygon } from "./lib/fpData.js";
+import { fetchBuildingFootprint, addressToQuery } from "./lib/buildingFootprint.js";
 import { useForemanStore, selectZoneItems } from "./lib/store.js";
 import { SEASON_OPTIONS } from "./lib/scheduleOptions.js";
 import FollowButton from "./components/FollowButton.jsx";
@@ -275,9 +276,33 @@ function InlineComboInput({ placeholder = "", onCommit, onCancel, options = [] }
 
 // ── Floor Plan ────────────────────────────────────────────────────────────────
 
-const FP_GRID = 20;
+const FP_GRID = 20; // canvas units per foot
 const FP_W = 3200;
 const FP_H = 2400;
+
+// Parametric room primitives. Dimensions are in feet; converted to canvas units
+// (×FP_GRID) at placement time. Notch/gap describe the cut-out for L and U shapes.
+const ROOM_SHAPE_DEFAULTS = {
+  rect: { w: 12, h: 10 },
+  L:    { w: 16, h: 12, notchW: 8, notchH: 6 },
+  U:    { w: 16, h: 12, gapW: 6, gapDepth: 7 },
+};
+const ROOM_SHAPES = [
+  { key: "rect", label: "Rect", title: "Rectangle" },
+  { key: "L",    label: "L",    title: "L-shape" },
+  { key: "U",    label: "U",    title: "U-shape" },
+];
+
+// Clamp a shape's notch/gap so it can never meet or exceed the bounding box (which
+// would produce a self-touching or inverted polygon), then convert feet → units.
+function roomDimsToUnits(shape, dims) {
+  const d = { ...dims };
+  if (shape === "L") { d.notchW = Math.min(d.notchW, d.w - 1); d.notchH = Math.min(d.notchH, d.h - 1); }
+  if (shape === "U") { d.gapW = Math.min(d.gapW, d.w - 2); d.gapDepth = Math.min(d.gapDepth, d.h - 1); }
+  const out = {};
+  for (const k of Object.keys(d)) out[k] = Math.max(0, d[k]) * FP_GRID;
+  return out;
+}
 
 const FP_FILL = {
   room:      "rgba(122,181,217,0.12)",
@@ -309,6 +334,49 @@ function pointInPolygon(pt, points) {
     if ((yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+
+// ── Wall snapping ───────────────────────────────────────────────────────────
+// Edges within this distance (canvas units, ~0.8 ft) magnetically snap together,
+// so dragging a room next to another makes them share a wall / align cleanly.
+const WALL_SNAP_DIST = 16;
+
+function bboxEdges(points) {
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  return { l: Math.min(...xs), r: Math.max(...xs), t: Math.min(...ys), b: Math.max(...ys) };
+}
+
+// Vertical (xs) and horizontal (ys) edge lines from a set of zone polygons —
+// the candidate lines a moving edge or vertex can snap onto.
+function zoneSnapLines(polys) {
+  const xs = [], ys = [];
+  for (const poly of polys) {
+    if (!poly?.points) continue;
+    const e = bboxEdges(poly.points);
+    xs.push(e.l, e.r); ys.push(e.t, e.b);
+  }
+  return { xs, ys };
+}
+
+// Nearest snap line to value v within WALL_SNAP_DIST, or null.
+function nearestSnapLine(v, lines) {
+  let best = null, bd = WALL_SNAP_DIST;
+  for (const ln of lines) { const d = Math.abs(ln - v); if (d < bd) { bd = d; best = ln; } }
+  return best;
+}
+
+// First top-left position (grid-aligned) where a w×h box fits without overlapping
+// any existing bbox, scanning left-to-right then top-to-bottom. Used by dimension
+// entry to auto-arrange typed rooms. Falls back to the origin if the canvas is full.
+function findFreeSpot(w, h, bboxes, gap = FP_GRID) {
+  const step = FP_GRID * 2;
+  for (let y = gap; y + h <= FP_H; y += step) {
+    for (let x = gap; x + w <= FP_W; x += step) {
+      const hit = bboxes.some(b => !(x + w + gap <= b.l || x >= b.r + gap || y + h + gap <= b.t || y >= b.b + gap));
+      if (!hit) return { x: fpSnap(x), y: fpSnap(y) };
+    }
+  }
+  return { x: gap, y: gap };
 }
 
 function fpSnap(v) { return Math.round(v / FP_GRID) * FP_GRID; }
@@ -469,6 +537,17 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   useEffect(() => () => clearTimeout(hoverLeaveTimerRef.current), []);
   const [ghostZone, setGhostZone] = useState(null);
   const ghostZoneRef = useRef(null);
+  const [snapGuides, setSnapGuides] = useState(null); // { x, y } edge lines shown while snapping
+  // Dimension-entry ("no-draw") mode: type a name + size and the room is auto-placed.
+  const [dimEntryOpen, setDimEntryOpen] = useState(false);
+  const [dimName, setDimName] = useState("");
+  const [dimShape, setDimShape] = useState("rect");
+  const [dimDims, setDimDims] = useState({ ...ROOM_SHAPE_DEFAULTS.rect });
+  // Address → building footprint (opt-in online import).
+  const [addrModalOpen, setAddrModalOpen] = useState(false);
+  const [addrInput, setAddrInput] = useState("");
+  const [addrBusy, setAddrBusy] = useState(false);
+  const [addrError, setAddrError] = useState(null);
   const [layers, setLayers] = useState(() => {
     try { return { ...DEFAULT_LAYERS, ...(storageGet(FP_LAYER_KEY) || {}) }; }
     catch { return DEFAULT_LAYERS; }
@@ -810,12 +889,33 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   }
 
   function addToCanvas(cat) {
-    setGhostZone({ cat });
-    ghostZoneRef.current = { cat };
+    const gz = { cat, shape: "rect", dims: { ...ROOM_SHAPE_DEFAULTS.rect } };
+    setGhostZone(gz);
+    ghostZoneRef.current = gz;
   }
 
-  function placeZoneOnCanvas(cat, x, y) {
-    const W = 200, H = 120;
+  // Update the in-flight ghost zone, keeping state and ref in sync.
+  function updateGhost(patch) {
+    setGhostZone(prev => {
+      if (!prev) return prev;
+      const next = { ...prev, ...patch };
+      ghostZoneRef.current = next;
+      return next;
+    });
+  }
+  function setGhostShape(shape) { updateGhost({ shape, dims: { ...ROOM_SHAPE_DEFAULTS[shape] } }); }
+  function setGhostDim(key, raw) {
+    const n = Math.max(1, Math.min(200, Math.round(Number(raw) || 0)));
+    const gz = ghostZoneRef.current;
+    if (gz) updateGhost({ dims: { ...gz.dims, [key]: n } });
+  }
+  // Bounding size (units) of a ghost zone, used to center it under the cursor.
+  function ghostBoundsUnits(gz) {
+    const u = roomDimsToUnits(gz.shape, gz.dims);
+    return { w: u.w, h: u.h, units: u };
+  }
+
+  function placeZoneOnCanvas(cat, polygon) {
     const floorId = activeLevelRef.current;
     const existing = fpDataRef.current.placements[floorId] || {};
     const allRooms = loadRooms();
@@ -832,7 +932,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const d = fpDataRef.current;
     save({
       ...d,
-      placements: { ...d.placements, [floorId]: { ...existing, [roomId]: rectToPolygon({ x, y, w: W, h: H }) } },
+      placements: { ...d.placements, [floorId]: { ...existing, [roomId]: polygon } },
     });
     useForemanStore.getState().reloadAll();
     setSelected(roomId); setEditingPanelName(false);
@@ -844,6 +944,66 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const { [roomId]: _, ...rest } = d.placements[lvl] || {};
     save({ ...d, placements: { ...d.placements, [lvl]: rest } });
     if (selected === roomId) setSelected(null);
+  }
+
+  function setDimEntryShape(shape) { setDimShape(shape); setDimDims({ ...ROOM_SHAPE_DEFAULTS[shape] }); }
+  function setDimEntryDim(key, raw) {
+    const n = Math.max(1, Math.min(200, Math.round(Number(raw) || 0)));
+    setDimDims(prev => ({ ...prev, [key]: n }));
+  }
+
+  // No-draw placement: register the typed name as a spatial category (if new) and
+  // drop its room into the first free spot on the floor — no click-to-place needed.
+  function addRoomByDimensions() {
+    const name = dimName.trim();
+    if (!name) return;
+    const floorId = activeLevelRef.current;
+    const units = roomDimsToUnits(dimShape, dimDims);
+    const others = Object.values(fpDataRef.current.placements[floorId] || {}).map(p => bboxEdges(p.points));
+    const spot = findFreeSpot(units.w, units.h, others);
+    const polygon = shapeToPolygon(dimShape, spot, units);
+    const allRooms = loadRooms();
+    const known = categories.includes(name) || Object.values(allRooms).some(r => r.label === name || r.categoryName === name);
+    if (!known) onCreateCategory?.(name, "room");
+    placeZoneOnCanvas(name, polygon);
+    setDimName("");
+  }
+
+  function openAddressImport() {
+    let prefill = "";
+    try { prefill = addressToQuery(storageGet("foreman-household-address")); } catch {}
+    setAddrInput(prefill);
+    setAddrError(null);
+    setAddrModalOpen(true);
+  }
+
+  // Place the imported building outline as an exterior-typed zone (the envelope is
+  // not a room, so it stays out of finished-area sq ft and reads green as a scaffold).
+  function placeBuildingFootprint(label, points) {
+    const allRooms = loadRooms();
+    const known = categories.includes(label) || Object.values(allRooms).some(r => r.label === label || r.categoryName === label);
+    if (!known) onCreateCategory?.(label, "exterior");
+    placeZoneOnCanvas(label, { points });
+  }
+
+  async function runAddressImport() {
+    if (addrBusy) return;
+    setAddrBusy(true);
+    setAddrError(null);
+    try {
+      const vb = viewBoxRef.current;
+      const { points } = await fetchBuildingFootprint(addrInput, {
+        unitsPerFoot: FP_GRID,
+        centerX: vb.x + vb.w / 2,
+        centerY: vb.y + vb.h / 2,
+      });
+      placeBuildingFootprint("Building", points);
+      setAddrModalOpen(false);
+    } catch (e) {
+      setAddrError(e?.message || "Something went wrong.");
+    } finally {
+      setAddrBusy(false);
+    }
   }
 
   function toggleZoneLock(roomId) {
@@ -947,8 +1107,15 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const d = fpDataRef.current;
         const lvl = activeLevelRef.current;
         const zonePoly = (d.placements[lvl] || {})[roomId];
-        const nx = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) * scaleX)));
-        const ny = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) * scaleY)));
+        const rawX = Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) * scaleX));
+        const rawY = Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) * scaleY));
+        // Snap the vertex onto a neighboring room's edge line if one is near, else to grid.
+        const others = Object.entries(d.placements[lvl] || {}).filter(([rid]) => rid !== roomId).map(([, p]) => p);
+        const { xs, ys } = zoneSnapLines(others);
+        const snapX = nearestSnapLine(rawX, xs), snapY = nearestSnapLine(rawY, ys);
+        const nx = snapX !== null ? snapX : fpSnap(rawX);
+        const ny = snapY !== null ? snapY : fpSnap(rawY);
+        setSnapGuides(snapX !== null || snapY !== null ? { x: snapX, y: snapY } : null);
         const newPoints = zonePoly.points.map((p, i) => i === vi ? { x: nx, y: ny } : p);
         const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } };
         fpDataRef.current = next;
@@ -962,12 +1129,25 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const lvl = activeLevelRef.current;
         const svgX = vb.x + (e.clientX - svgRect.left) * scaleX;
         const svgY = vb.y + (e.clientY - svgRect.top) * scaleY;
-        const dx = fpSnap(svgX - startSVGX);
-        const dy = fpSnap(svgY - startSVGY);
-        const minX = Math.min(...startPoints.map(p => p.x));
-        const maxX = Math.max(...startPoints.map(p => p.x));
-        const minY = Math.min(...startPoints.map(p => p.y));
-        const maxY = Math.max(...startPoints.map(p => p.y));
+        const rawDx = svgX - startSVGX;
+        const rawDy = svgY - startSVGY;
+        const me = bboxEdges(startPoints);
+        // Snap the room's leading/trailing edges onto neighboring rooms' edge lines
+        // (shared wall / alignment). Falls back to grid snap per-axis when none near.
+        const others = Object.entries(d.placements[lvl] || {}).filter(([rid]) => rid !== roomId).map(([, p]) => p);
+        const { xs, ys } = zoneSnapLines(others);
+        let corrX = null, bestX = WALL_SNAP_DIST, gX = null;
+        for (const edge of [me.l + rawDx, me.r + rawDx]) {
+          for (const ln of xs) { const c = ln - edge; if (Math.abs(c) < bestX) { bestX = Math.abs(c); corrX = c; gX = ln; } }
+        }
+        let corrY = null, bestY = WALL_SNAP_DIST, gY = null;
+        for (const edge of [me.t + rawDy, me.b + rawDy]) {
+          for (const ln of ys) { const c = ln - edge; if (Math.abs(c) < bestY) { bestY = Math.abs(c); corrY = c; gY = ln; } }
+        }
+        const dx = corrX !== null ? rawDx + corrX : fpSnap(rawDx);
+        const dy = corrY !== null ? rawDy + corrY : fpSnap(rawDy);
+        setSnapGuides(corrX !== null || corrY !== null ? { x: corrX !== null ? gX : null, y: corrY !== null ? gY : null } : null);
+        const minX = me.l, maxX = me.r, minY = me.t, maxY = me.b;
         const cdx = Math.max(-minX, Math.min(FP_W - maxX, dx));
         const cdy = Math.max(-minY, Math.min(FP_H - maxY, dy));
         const newPoints = startPoints.map(p => ({ x: p.x + cdx, y: p.y + cdy }));
@@ -1082,6 +1262,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     }
 
     function onUp(e) {
+      setSnapGuides(null); // any drag is ending — clear snap guide lines
       if (vertexDragRef.current) {
         const { roomId, vi, startX, startY } = vertexDragRef.current;
         vertexDragRef.current = null;
@@ -1887,6 +2068,92 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             <option value="marker">● Marker</option>
           </select>
 
+          {/* Parametric room placement: shape + dimensions while a ghost zone is active */}
+          {ghostZone && (() => {
+            const dimInput = { background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.2rem", textAlign: "center", width: 34 };
+            const dimLabel = { color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" };
+            const numCell = (key) => (
+              <input type="number" min={1} max={200} value={ghostZone.dims[key] ?? ""}
+                onChange={e => setGhostDim(key, e.target.value)} style={dimInput} />
+            );
+            return (
+              <>
+                <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em" }}>Room</span>
+                {ROOM_SHAPES.map(s => {
+                  const active = ghostZone.shape === s.key;
+                  return (
+                    <button key={s.key} title={s.title} onClick={() => setGhostShape(s.key)}
+                      style={{ background: active ? "rgba(201,169,110,0.15)" : "transparent", border: `1px solid ${active ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: active ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.4rem", transition: "all 0.1s" }}>
+                      {s.label}
+                    </button>
+                  );
+                })}
+                <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                {numCell("w")}<span style={dimLabel}>×</span>{numCell("h")}
+                {ghostZone.shape === "L" && (<><span style={dimLabel}>notch</span>{numCell("notchW")}<span style={dimLabel}>×</span>{numCell("notchH")}</>)}
+                {ghostZone.shape === "U" && (<><span style={dimLabel}>gap</span>{numCell("gapW")}<span style={dimLabel}>×</span>{numCell("gapDepth")}</>)}
+                <span style={dimLabel}>ft · click to place</span>
+                <button onClick={() => { setGhostZone(null); ghostZoneRef.current = null; setCursorPt(null); }}
+                  style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", padding: "0.1rem 0.3rem" }}>esc ×</button>
+              </>
+            );
+          })()}
+
+          {/* Dimension-entry trigger */}
+          {!ghostZone && !dimEntryOpen && (drawMode === "move" || drawMode === "select") && !selectedDrawing && (
+            <>
+              <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+              <button onClick={() => setDimEntryOpen(true)} title="Add a room by typing its name and size — no drawing"
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.5rem" }}>
+                ⊞ Dimensions
+              </button>
+              <button onClick={openAddressImport} title="Import your building outline from your address (online)"
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.5rem" }}>
+                ⌖ Address
+              </button>
+            </>
+          )}
+
+          {/* Dimension-entry ("no-draw") inline block */}
+          {dimEntryOpen && !ghostZone && (() => {
+            const dimInput = { background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.2rem", textAlign: "center", width: 34 };
+            const dimLabel = { color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" };
+            const numCell = (key) => (
+              <input type="number" min={1} max={200} value={dimDims[key] ?? ""}
+                onChange={e => setDimEntryDim(key, e.target.value)} style={dimInput} />
+            );
+            const canAdd = !!dimName.trim();
+            return (
+              <>
+                <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em" }}>New room</span>
+                <input autoFocus value={dimName} onChange={e => setDimName(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") addRoomByDimensions(); if (e.key === "Escape") setDimEntryOpen(false); }}
+                  placeholder="Room name…"
+                  style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.68rem", outline: "none", padding: "0.15rem 0.45rem", width: 130 }} />
+                {ROOM_SHAPES.map(s => {
+                  const active = dimShape === s.key;
+                  return (
+                    <button key={s.key} title={s.title} onClick={() => setDimEntryShape(s.key)}
+                      style={{ background: active ? "rgba(201,169,110,0.15)" : "transparent", border: `1px solid ${active ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: active ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.4rem", transition: "all 0.1s" }}>
+                      {s.label}
+                    </button>
+                  );
+                })}
+                <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
+                {numCell("w")}<span style={dimLabel}>×</span>{numCell("h")}
+                {dimShape === "L" && (<><span style={dimLabel}>notch</span>{numCell("notchW")}<span style={dimLabel}>×</span>{numCell("notchH")}</>)}
+                {dimShape === "U" && (<><span style={dimLabel}>gap</span>{numCell("gapW")}<span style={dimLabel}>×</span>{numCell("gapDepth")}</>)}
+                <span style={dimLabel}>ft</span>
+                <button onClick={addRoomByDimensions} disabled={!canAdd}
+                  style={{ background: canAdd ? "var(--fm-brass)" : "var(--fm-hairline2)", border: "none", borderRadius: 3, color: canAdd ? "var(--fm-bg)" : "var(--fm-ink-mute)", cursor: canAdd ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.05em", padding: "0.18rem 0.6rem" }}>Add</button>
+                <button onClick={() => setDimEntryOpen(false)}
+                  style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", padding: "0.1rem 0.3rem" }}>esc ×</button>
+              </>
+            );
+          })()}
+
           {/* Edit mode: drawing selected from right panel */}
           {drawMode === "move" && selectedDrawing && (() => {
             const isPathOrLine = selectedDrawing.type === "path" || selectedDrawing.type === "line";
@@ -1962,7 +2229,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             </>
           )}
           {/* Layers control */}
-          {(drawMode === "move" || drawMode === "select") && !selectedDrawingId && (
+          {(drawMode === "move" || drawMode === "select") && !selectedDrawingId && !ghostZone && !dimEntryOpen && (
             <>
               <div style={{ background: "var(--fm-hairline2)", flexShrink: 0, height: 14, width: 1 }} />
               <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.2rem" }}>
@@ -2046,8 +2313,10 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               const vb = viewBoxRef.current;
               const rawX = vb.x + (e.clientX - r.left) / r.width * vb.w;
               const rawY = vb.y + (e.clientY - r.top) / r.height * vb.h;
-              const W = 200, H = 120;
-              placeZoneOnCanvas(gz.cat, fpSnap(Math.max(0, Math.min(FP_W - W, rawX - W / 2))), fpSnap(Math.max(0, Math.min(FP_H - H, rawY - H / 2))));
+              const { w: W, h: H, units } = ghostBoundsUnits(gz);
+              const x = fpSnap(Math.max(0, Math.min(FP_W - W, rawX - W / 2)));
+              const y = fpSnap(Math.max(0, Math.min(FP_H - H, rawY - H / 2)));
+              placeZoneOnCanvas(gz.cat, shapeToPolygon(gz.shape, { x, y }, units));
               return;
             }
             if (drawMode !== "move" && drawMode !== "select") handleDrawClick(e);
@@ -2259,13 +2528,26 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             );
           })}
 
+          {/* Snap guide lines while dragging a room/vertex near a neighbor's wall */}
+          {snapGuides && (
+            <g style={{ pointerEvents: "none" }}>
+              {snapGuides.x != null && (
+                <line x1={snapGuides.x} y1={0} x2={snapGuides.x} y2={FP_H} stroke="var(--fm-brass)" strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
+              )}
+              {snapGuides.y != null && (
+                <line x1={0} y1={snapGuides.y} x2={FP_W} y2={snapGuides.y} stroke="var(--fm-brass)" strokeWidth={1} strokeDasharray="4 4" opacity={0.7} />
+              )}
+            </g>
+          )}
+
           {/* Ghost zone during click-to-place */}
           {ghostZone && cursorPt && (() => {
-            const W = 200, H = 120;
+            const { w: W, h: H, units } = ghostBoundsUnits(ghostZone);
             const x = fpSnap(Math.max(0, Math.min(FP_W - W, cursorPt.x - W / 2)));
             const y = fpSnap(Math.max(0, Math.min(FP_H - H, cursorPt.y - H / 2)));
             const type = categoryTypes[ghostZone.cat] || "system";
-            const ptStr = `${x},${y} ${x+W},${y} ${x+W},${y+H} ${x},${y+H}`;
+            const poly = shapeToPolygon(ghostZone.shape, { x, y }, units);
+            const ptStr = poly.points.map(p => `${p.x},${p.y}`).join(" ");
             return (
               <g style={{ pointerEvents: "none" }} opacity={0.65}>
                 <polygon points={ptStr} fill={FP_FILL[type]} stroke={FP_STROKE[type]} strokeWidth={1.5} strokeDasharray="6 3" />
@@ -3044,6 +3326,55 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           </div>
         )}
       </div>
+
+      {/* Address → building footprint import modal */}
+      {addrModalOpen && (() => {
+        const onlineMode = storageGet("foreman-online-mode") === true;
+        const close = () => { if (!addrBusy) setAddrModalOpen(false); };
+        const label = { color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", marginBottom: "0.3rem", textTransform: "uppercase" };
+        return (
+          <div onMouseDown={close} style={{ alignItems: "center", background: "rgba(0,0,0,0.5)", display: "flex", inset: 0, justifyContent: "center", position: "fixed", zIndex: 1000 }}>
+            <div onMouseDown={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: 6, boxShadow: "0 12px 40px rgba(0,0,0,0.5)", boxSizing: "border-box", maxWidth: "92vw", padding: "1.25rem 1.4rem", width: 440 }}>
+              <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between", marginBottom: "0.85rem" }}>
+                <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem" }}>Import building outline</span>
+                <button onClick={close} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", padding: 0 }}>✕</button>
+              </div>
+
+              {!onlineMode ? (
+                <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", lineHeight: 1.55 }}>
+                  This feature looks up your building's footprint over the network. <strong style={{ color: "var(--fm-ink)" }}>Online Mode is off</strong>, so no requests are made. Enable it in Preferences → Profile to use address import, then return here.
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1rem" }}>
+                    <button onClick={close} style={{ background: "var(--fm-brass)", border: "none", borderRadius: 3, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.4rem 1rem" }}>Got it</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <label style={label}>Address</label>
+                  <input
+                    autoFocus value={addrInput} onChange={e => setAddrInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") runAddressImport(); if (e.key === "Escape") close(); }}
+                    placeholder="123 Main St, Springfield, IL 62704"
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", outline: "none", padding: "0.45rem 0.55rem", width: "100%" }} />
+                  <p style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", lineHeight: 1.5, margin: "0.6rem 0 0" }}>
+                    Looks up the published building outline (OpenStreetMap) and drops it on this floor as an exterior “Building” zone, pre-scaled to feet. It's the envelope to build rooms inside — interior walls aren't included, and a roof outline runs slightly larger than the foundation.
+                  </p>
+                  {addrError && (
+                    <div style={{ background: "rgba(224,123,106,0.1)", border: "1px solid var(--fm-red)", borderRadius: 3, color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.45, margin: "0.7rem 0 0", padding: "0.45rem 0.55rem" }}>
+                      {addrError}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "1rem" }}>
+                    <button onClick={close} disabled={addrBusy} style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: addrBusy ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.4rem 0.9rem" }}>Cancel</button>
+                    <button onClick={runAddressImport} disabled={addrBusy || !addrInput.trim()} style={{ background: addrBusy || !addrInput.trim() ? "var(--fm-hairline2)" : "var(--fm-brass)", border: "none", borderRadius: 3, color: addrBusy || !addrInput.trim() ? "var(--fm-ink-mute)" : "var(--fm-bg)", cursor: addrBusy || !addrInput.trim() ? "default" : "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.4rem 1rem" }}>
+                      {addrBusy ? "Fetching…" : "Fetch outline"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3843,7 +4174,6 @@ function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseI
           onDragEnd={() => { setDragCol(null); setDragOverCol(null); }}
           style={{
             ...thBase,
-            borderLeft: "2px solid var(--fm-hairline2)",
             borderLeft: isDragOver ? "2px solid var(--fm-brass)" : "2px solid var(--fm-hairline2)",
             cursor: "grab",
             opacity: isDragging ? 0.3 : 1,

@@ -24,6 +24,7 @@ import { loadGuideNotes, saveGuideNotes } from "./lib/guideNotes.js";
 import { loadStandaloneArticles, saveStandaloneArticles, standaloneNoteKey } from "./lib/standaloneArticles.js";
 import { loadProjects } from "./lib/projects.js";
 import { loadArticleAssociations, saveArticleAssociations, setAssociationIn } from "./lib/articleAssociations.js";
+import { storageGet, storageSet } from "./lib/storage.js";
 
 // Structural fields stay Inventory-managed; keep them out of the article's add-field menu.
 const STRUCTURAL_FIELD_IDS = new Set(["item_type", "item_subtype"]);
@@ -266,6 +267,16 @@ export default function GuidePage({ navigate }) {
   // Inline add-field state for the article spec editor (Part B)
   const [showFieldPicker, setShowFieldPicker] = useState(false);
   const [newField, setNewField] = useState({ name: "", type: "text", options: "" });
+  const [maintenanceNotes, setMaintenanceNotes]     = useState(() => storageGet("maintenance-notes") ?? {});
+  const [maintenanceNextDates]                      = useState(() => {
+    try {
+      const raw = storageGet("maintenance-next-dates") ?? {};
+      return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, new Date(v)]));
+    } catch { return {}; }
+  });
+  const [maintenanceSectionOpen, setMaintenanceSectionOpen] = useState(false);
+
+  useEffect(() => { setMaintenanceSectionOpen(false); }, [selectedItem]);
 
   function setGroupingPersist(mode) { setGrouping(mode); saveNotebookGrouping(mode); }
 
@@ -470,6 +481,15 @@ export default function GuidePage({ navigate }) {
     });
   }
 
+  function handleMaintenanceNoteChange(key, text) {
+    setMaintenanceNotes(prev => {
+      const next = { ...prev };
+      if (text) next[key] = text; else delete next[key];
+      storageSet("maintenance-notes", next);
+      return next;
+    });
+  }
+
   // Selected-article identity. Item articles are keyed `${category}|${item}`;
   // standalone (user-created) articles by `standalone:<id>`, reading their live
   // title from the record so renames reflect immediately.
@@ -509,7 +529,9 @@ export default function GuidePage({ navigate }) {
   const effCategory = effectiveItem?.category || "";
   const effItem = effectiveItem?.item || "";
   const articleTasks = effectiveItem?.tasks || [];
-  const deletedTasks = articleTasks.filter(t => deletedRows.has(`${t.category}|${t.item}|${t.task}`));
+  const deletedTasks     = articleTasks.filter(t =>  deletedRows.has(`${t.category}|${t.item}|${t.task}`));
+  const activeMaintTasks = articleTasks.filter(t => !deletedRows.has(`${t.category}|${t.item}|${t.task}`));
+  const maintNoteCount   = activeMaintTasks.filter(t => !!maintenanceNotes[`${t.category}|${t.item}|${t.task}`]).length;
   const stableKey = effectiveItem?.stableKey ?? null;
   // Legacy item-detail specs (manufacturer/model/serial/purchase) keyed `${category}|${item}`.
   const d = effectiveItem ? ((itemDetails || {})[`${effCategory}|${effItem}`] || {}) : {};
@@ -1072,6 +1094,69 @@ export default function GuidePage({ navigate }) {
                     />
                   )}
                 </div>
+
+                {/* Maintenance tasks */}
+                {activeMaintTasks.length > 0 && (
+                  <div style={{ borderTop: "var(--fm-border)", flexShrink: 0 }}>
+                    <div
+                      style={{ alignItems: "center", cursor: "pointer", display: "flex", gap: "0.5rem", padding: "0.6rem 1.5rem", userSelect: "none" }}
+                      onClick={() => setMaintenanceSectionOpen(o => !o)}
+                    >
+                      <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>
+                        Maintenance
+                      </span>
+                      <span style={{ color: "var(--fm-ink-mute)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>
+                        {activeMaintTasks.length} task{activeMaintTasks.length !== 1 ? "s" : ""}{maintNoteCount > 0 ? `, ${maintNoteCount} note${maintNoteCount !== 1 ? "s" : ""}` : ""}
+                      </span>
+                      <button
+                        onClick={e => { e.stopPropagation(); navigate("home-maintenance"); }}
+                        style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", padding: 0, transition: "color 0.12s" }}
+                        onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+                        onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}
+                      >
+                        Open in Maintenance →
+                      </button>
+                      <svg width="8" height="5" viewBox="0 0 8 5" style={{ color: "var(--fm-ink-mute)", flexShrink: 0, transform: maintenanceSectionOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
+                        <path d="M0 0l4 5 4-5z" fill="currentColor" />
+                      </svg>
+                    </div>
+                    {maintenanceSectionOpen && (
+                      <div style={{ borderTop: "1px solid var(--fm-hairline)", padding: "0.5rem 1.5rem 0.75rem" }}>
+                        {activeMaintTasks.map(t => {
+                          const key = `${t.category}|${t.item}|${t.task}`;
+                          const nextDate = maintenanceNextDates[key];
+                          const noteText = maintenanceNotes[key] || "";
+                          const isOverdue = nextDate && !isNaN(nextDate) && nextDate < new Date();
+                          const formattedDate = nextDate && !isNaN(nextDate)
+                            ? nextDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : null;
+                          return (
+                            <div key={key} style={{ marginBottom: "0.75rem" }}>
+                              <div style={{ alignItems: "baseline", display: "flex", gap: "0.75rem", marginBottom: "0.25rem" }}>
+                                <span style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.75rem" }}>{t.task}</span>
+                                {t.schedule && (
+                                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>{t.schedule}</span>
+                                )}
+                                <span style={{ color: isOverdue ? "var(--fm-red)" : (formattedDate ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)"), fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
+                                  {isOverdue ? "Overdue" : (formattedDate ?? "—")}
+                                </span>
+                              </div>
+                              <textarea
+                                value={noteText}
+                                onChange={e => handleMaintenanceNoteChange(key, e.target.value)}
+                                placeholder="Add a note..."
+                                rows={2}
+                                style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", outline: "none", padding: "0.3rem 0.5rem", resize: "vertical", width: "100%" }}
+                                onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+                                onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Deleted tasks */}
                 {deletedTasks.length > 0 && (
