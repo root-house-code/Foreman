@@ -594,26 +594,19 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
   const tasklessItems = useMemo(() => {
     const withTasks = new Set();
+    const allItems  = new Map();
     rows.forEach(row => {
-      if (!row.category || !row.item || !row.task || row._isBlankCategory) return;
+      if (!row.category || !row.item) return;
       if (!row._isCustom && deletedCategories.has(row.category)) return;
       if (deletedItems.has(`${row.category}|${row.item}`)) return;
-      if (deletedRows.has(`${row.category}|${row.item}|${row.task}`)) return;
-      withTasks.add(`${row.category}|${row.item}`);
+      const itemKey = `${row.category}|${row.item}`;
+      if (!allItems.has(itemKey)) allItems.set(itemKey, { category: row.category, item: row.item });
+      if (row.task && !row._isBlankCategory && !deletedRows.has(`${itemKey}|${row.task}`)) {
+        withTasks.add(itemKey);
+      }
     });
-    const invRows = storageGet("home-maintenance-data") ?? [];
     const result = [];
-    const seen = new Set();
-    invRows.forEach(inv => {
-      if (!inv.category || !inv.item || inv._isBlankCategory) return;
-      const key = `${inv.category}|${inv.item}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      if (withTasks.has(key)) return;
-      if (deletedItems.has(key)) return;
-      if (!inv._isCustom && deletedCategories.has(inv.category)) return;
-      result.push({ category: inv.category, item: inv.item });
-    });
+    allItems.forEach((item, key) => { if (!withTasks.has(key)) result.push(item); });
     return result.sort((a, b) => a.category.localeCompare(b.category) || a.item.localeCompare(b.item));
   }, [rows, deletedRows, deletedCategories, deletedItems]);
 
