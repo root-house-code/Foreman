@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
-  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList,
 } from "recharts";
 import { DATA_SOURCES, DATE_RANGE_PRESETS, getSourceFields, runQuery } from "../lib/dashboardQuery.js";
 
@@ -81,9 +81,26 @@ const btnSecondary = {
   transition: "all 0.12s",
 };
 
+// ── Data-label helpers ──────────────────────────────────────────────────────
+// Keep value labels short so they don't overflow small panels.
+export const fmtLabelValue = (v) => (typeof v === "number" ? (v % 1 === 0 ? v : Number(v.toFixed(1))) : v);
+
+// Pie/donut value label, drawn at the slice centroid so it never overflows.
+export function renderPieValueLabel({ cx, cy, midAngle, innerRadius, outerRadius, value }) {
+  const RAD = Math.PI / 180;
+  const r = innerRadius + (outerRadius - innerRadius) * 0.5;
+  const x = cx + r * Math.cos(-midAngle * RAD);
+  const y = cy + r * Math.sin(-midAngle * RAD);
+  return (
+    <text x={x} y={y} fill="var(--fm-ink)" fontFamily="var(--fm-mono)" fontSize={10} textAnchor="middle" dominantBaseline="central">
+      {fmtLabelValue(value)}
+    </text>
+  );
+}
+
 // ── Chart Preview ─────────────────────────────────────────────────────────────
 
-function ChartPreview({ chartType, data }) {
+function ChartPreview({ chartType, data, showLabels = false }) {
   if (!data || data.length === 0) {
     return <div style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", height: "100%", justifyContent: "center" }}>No data — adjust settings</div>;
   }
@@ -97,7 +114,9 @@ function ChartPreview({ chartType, data }) {
           <XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} angle={-35} textAnchor="end" interval={0} />
           <YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} />
           <Tooltip contentStyle={tooltipStyle} />
-          <Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[2, 2, 0, 0]} />
+          <Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[2, 2, 0, 0]}>
+            {showLabels && <LabelList dataKey="value" position="top" fill="var(--fm-ink-dim)" fontFamily="var(--fm-mono)" fontSize={10} formatter={fmtLabelValue} />}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     );
@@ -110,7 +129,9 @@ function ChartPreview({ chartType, data }) {
           <XAxis type="number" tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} />
           <YAxis type="category" dataKey="label" tick={{ fill: "var(--fm-ink-dim)", fontSize: 10, fontFamily: "var(--fm-mono)" }} width={76} />
           <Tooltip contentStyle={tooltipStyle} />
-          <Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[0, 2, 2, 0]} />
+          <Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[0, 2, 2, 0]}>
+            {showLabels && <LabelList dataKey="value" position="right" fill="var(--fm-ink-dim)" fontFamily="var(--fm-mono)" fontSize={10} formatter={fmtLabelValue} />}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     );
@@ -123,7 +144,9 @@ function ChartPreview({ chartType, data }) {
           <XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} angle={-35} textAnchor="end" interval={0} />
           <YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} />
           <Tooltip contentStyle={tooltipStyle} />
-          <Line dataKey="value" stroke="#c9a96e" strokeWidth={2} dot={{ r: 3, fill: "#c9a96e" }} />
+          <Line dataKey="value" stroke="#c9a96e" strokeWidth={2} dot={{ r: 3, fill: "#c9a96e" }}>
+            {showLabels && <LabelList dataKey="value" position="top" fill="var(--fm-ink-dim)" fontFamily="var(--fm-mono)" fontSize={10} formatter={fmtLabelValue} />}
+          </Line>
         </LineChart>
       </ResponsiveContainer>
     );
@@ -136,7 +159,9 @@ function ChartPreview({ chartType, data }) {
           <XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} angle={-35} textAnchor="end" interval={0} />
           <YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 10, fontFamily: "var(--fm-mono)" }} />
           <Tooltip contentStyle={tooltipStyle} />
-          <Area dataKey="value" stroke="#c9a96e" fill="#c9a96e" fillOpacity={0.15} strokeWidth={2} />
+          <Area dataKey="value" stroke="#c9a96e" fill="#c9a96e" fillOpacity={0.15} strokeWidth={2}>
+            {showLabels && <LabelList dataKey="value" position="top" fill="var(--fm-ink-dim)" fontFamily="var(--fm-mono)" fontSize={10} formatter={fmtLabelValue} />}
+          </Area>
         </AreaChart>
       </ResponsiveContainer>
     );
@@ -147,7 +172,8 @@ function ChartPreview({ chartType, data }) {
     return (
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
-          <Pie data={data} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius="70%" innerRadius={innerR} paddingAngle={2}>
+          <Pie data={data} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius="70%" innerRadius={innerR} paddingAngle={2}
+            label={showLabels ? renderPieValueLabel : false} labelLine={false}>
             {data.map((_, i) => <Cell key={i} fill={COLORS_HEX[i % COLORS_HEX.length]} fillOpacity={0.8} />)}
           </Pie>
           <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [value, name]} />
@@ -198,6 +224,9 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
   const [sortBy,       setSortBy]       = useState(initialConfig?.query?.sortBy ?? "value");
   const [sortDir,      setSortDir]      = useState(initialConfig?.query?.sortDir ?? "desc");
   const [limit,        setLimit]        = useState(initialConfig?.query?.limit ?? 10);
+  // New charts default to labels on; editing a pre-existing panel keeps its
+  // current look (legacy panels with no flag render without labels).
+  const [showLabels,   setShowLabels]   = useState(initialConfig ? (initialConfig.showLabels ?? false) : true);
   const [panelTitle,   setPanelTitle]   = useState(initialConfig?.title ?? "");
 
   const sourceFields = useMemo(() => getSourceFields(sourceId), [sourceId]);
@@ -242,6 +271,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
     onSave({
       title:     panelTitle.trim() || "Custom Chart",
       chartType,
+      showLabels,
       query:     queryConfig,
     });
   }
@@ -304,6 +334,23 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                     </button>
                   ))}
                 </div>
+
+                {chartType !== "table" && (
+                  <div style={{ borderTop: "1px solid var(--fm-hairline)", marginTop: "1.25rem", paddingTop: "1rem" }}>
+                    <div style={labelStyle}>Display</div>
+                    <button
+                      onClick={() => setShowLabels(v => !v)}
+                      style={{ alignItems: "center", background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: "0.6rem", padding: 0 }}
+                    >
+                      <span style={{ alignItems: "center", background: showLabels ? "var(--fm-brass)" : "var(--fm-bg-sunk)", border: `1px solid ${showLabels ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 999, display: "flex", height: 18, justifyContent: showLabels ? "flex-end" : "flex-start", padding: 2, transition: "all 0.12s", width: 32 }}>
+                        <span style={{ background: showLabels ? "var(--fm-bg)" : "var(--fm-ink-mute)", borderRadius: "50%", height: 12, width: 12 }} />
+                      </span>
+                      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
+                        Show value labels on the chart
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -443,7 +490,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                   {previewData.length} data points — {sourceId ? DATA_SOURCES[sourceId]?.label : "no source"}
                 </div>
                 <div style={{ height: 240 }}>
-                  <ChartPreview chartType={chartType} data={previewData} />
+                  <ChartPreview chartType={chartType} data={previewData} showLabels={showLabels} />
                 </div>
               </div>
             )}
@@ -470,6 +517,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                     ["Measure", measure + (measureField ? ` of ${measureField}` : "")],
                     ["Date",   DATE_RANGE_PRESETS[dateRange]?.label ?? dateRange],
                     ["Filters", filters.length > 0 ? `${filters.length} active` : "None"],
+                    ["Labels", chartType === "table" ? "n/a" : showLabels ? "On" : "Off"],
                   ].map(([k, v]) => (
                     <div key={k} style={{ alignItems: "baseline", color: "var(--fm-ink-dim)", display: "flex", gap: "0.75rem", marginBottom: "0.3rem" }}>
                       <span style={{ color: "var(--fm-ink-mute)", minWidth: "50px", textTransform: "uppercase" }}>{k}</span>
@@ -490,7 +538,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                   Configure source + group to see preview
                 </div>
               ) : (
-                <ChartPreview chartType={chartType} data={previewData} />
+                <ChartPreview chartType={chartType} data={previewData} showLabels={showLabels} />
               )}
             </div>
             <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginTop: "0.5rem" }}>

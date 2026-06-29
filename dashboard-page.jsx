@@ -24,10 +24,10 @@ import {
 } from "./lib/chores.js";
 import { loadCategoryTypeOverrides, BUILT_IN_CATEGORY_TYPES } from "./lib/categoryTypes.js";
 import { runQuery } from "./lib/dashboardQuery.js";
-import VisualizationBuilderModal from "./components/VisualizationBuilderModal.jsx";
+import VisualizationBuilderModal, { fmtLabelValue, renderPieValueLabel } from "./components/VisualizationBuilderModal.jsx";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
-  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList,
 } from "recharts";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -620,25 +620,27 @@ function CustomPanel({ panel, onEdit, onDelete, isEditMode = false }) {
 
   const tooltipStyle = { background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, fontFamily: "var(--fm-mono)", fontSize: "0.65rem" };
   const ct = panel.chartType;
+  const showLabels = panel.showLabels ?? false;
+  const barLabel  = (pos) => showLabels ? <LabelList dataKey="value" position={pos} fill="var(--fm-ink-dim)" fontFamily="var(--fm-mono)" fontSize={9} formatter={fmtLabelValue} /> : null;
 
   function renderChart() {
     if (!data || data.length === 0) {
       return <div style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", height: "100%", justifyContent: "center" }}>No data</div>;
     }
     if (ct === "bar-v") {
-      return <ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[2,2,0,0]} /></BarChart></ResponsiveContainer>;
+      return <ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[2,2,0,0]}>{barLabel("top")}</Bar></BarChart></ResponsiveContainer>;
     }
     if (ct === "bar-h") {
-      return <ResponsiveContainer width="100%" height="100%"><BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 70, bottom: 4 }}><XAxis type="number" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><YAxis type="category" dataKey="label" tick={{ fill: "var(--fm-ink-dim)", fontSize: 9, fontFamily: "var(--fm-mono)" }} width={68} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[0,2,2,0]} /></BarChart></ResponsiveContainer>;
+      return <ResponsiveContainer width="100%" height="100%"><BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 70, bottom: 4 }}><XAxis type="number" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><YAxis type="category" dataKey="label" tick={{ fill: "var(--fm-ink-dim)", fontSize: 9, fontFamily: "var(--fm-mono)" }} width={68} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[0,2,2,0]}>{barLabel("right")}</Bar></BarChart></ResponsiveContainer>;
     }
     if (ct === "line") {
-      return <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Line dataKey="value" stroke="#c9a96e" strokeWidth={2} dot={{ r: 3, fill: "#c9a96e" }} /></LineChart></ResponsiveContainer>;
+      return <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Line dataKey="value" stroke="#c9a96e" strokeWidth={2} dot={{ r: 3, fill: "#c9a96e" }}>{barLabel("top")}</Line></LineChart></ResponsiveContainer>;
     }
     if (ct === "area") {
-      return <ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Area dataKey="value" stroke="#c9a96e" fill="#c9a96e" fillOpacity={0.15} strokeWidth={2} /></AreaChart></ResponsiveContainer>;
+      return <ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Area dataKey="value" stroke="#c9a96e" fill="#c9a96e" fillOpacity={0.15} strokeWidth={2}>{barLabel("top")}</Area></AreaChart></ResponsiveContainer>;
     }
     if (ct === "pie" || ct === "donut") {
-      return <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius="70%" innerRadius={ct === "donut" ? "50%" : "0%"} paddingAngle={2}>{data.map((_, i) => <Cell key={i} fill={CUSTOM_COLORS_HEX[i % CUSTOM_COLORS_HEX.length]} fillOpacity={0.8} />)}</Pie><Tooltip contentStyle={tooltipStyle} /></PieChart></ResponsiveContainer>;
+      return <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius="70%" innerRadius={ct === "donut" ? "50%" : "0%"} paddingAngle={2} label={showLabels ? renderPieValueLabel : false} labelLine={false}>{data.map((_, i) => <Cell key={i} fill={CUSTOM_COLORS_HEX[i % CUSTOM_COLORS_HEX.length]} fillOpacity={0.8} />)}</Pie><Tooltip contentStyle={tooltipStyle} /></PieChart></ResponsiveContainer>;
     }
     if (ct === "table") {
       return <div style={{ height: "100%", overflow: "auto" }}><table style={{ borderCollapse: "collapse", width: "100%" }}><thead><tr>{["Label","Value"].map(h=><th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", fontWeight: 400, letterSpacing: "0.1em", padding: "0.25rem 0.5rem", textAlign: "left", textTransform: "uppercase" }}>{h}</th>)}</tr></thead><tbody>{data.map((row,i)=><tr key={i} style={{ borderBottom: "1px solid var(--fm-hairline)" }}><td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.28rem 0.5rem" }}>{row.label}</td><td style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.28rem 0.5rem", textAlign: "right" }}>{typeof row.value === "number" ? row.value.toFixed(row.value % 1 === 0 ? 0 : 2) : row.value}</td></tr>)}</tbody></table></div>;
