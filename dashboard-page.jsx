@@ -34,28 +34,21 @@ import {
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const SYS_ABBR = {
-  "HVAC": "HVAC", "Plumbing": "PLM", "Electrical": "ELEC", "Appliances": "APPL",
-  "Exterior": "EXT", "Structure": "STRC", "Safety": "SAF", "General": "GEN",
-  "Roofing": "ROOF", "Landscaping": "LAND", "Pool": "POOL", "Irrigation": "IRR",
-};
 
 const DEFAULT_LAYOUT = [
-  { i: "health-dial",    x: 0,  y: 0,  w: 2,  h: 8, minW: 2, minH: 5 },
-  { i: "at-a-glance",   x: 2,  y: 0,  w: 3,  h: 8, minW: 2, minH: 4 },
-  { i: "due-this-week", x: 5,  y: 0,  w: 3,  h: 8, minW: 2, minH: 4 },
-  { i: "systems",       x: 8,  y: 0,  w: 2,  h: 8, minW: 2, minH: 4 },
-  { i: "rooms",         x: 10, y: 0,  w: 2,  h: 8, minW: 2, minH: 4 },
-  { i: "coverage",      x: 0,  y: 8,  w: 4,  h: 5, minW: 2, minH: 3 },
-  { i: "schedule",      x: 4,  y: 8,  w: 8,  h: 6, minW: 4, minH: 4 },
+  { i: "health-dial",   x: 0,  y: 0,  w: 2,  h: 8, minW: 2, minH: 5 },
+  { i: "at-a-glance",   x: 2,  y: 0,  w: 4,  h: 8, minW: 2, minH: 4 },
+  { i: "systems",       x: 6,  y: 0,  w: 3,  h: 8, minW: 2, minH: 4 },
+  { i: "rooms",         x: 9,  y: 0,  w: 3,  h: 8, minW: 2, minH: 4 },
+  { i: "schedule",      x: 0,  y: 8,  w: 12, h: 6, minW: 4, minH: 4 },
   { i: "completions",   x: 0,  y: 14, w: 12, h: 6, minW: 4, minH: 4 },
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// Panels removed from the dashboard; drop them from any saved layout so the
+// grid doesn't reserve stale slots for users who had them positioned.
+const REMOVED_PANEL_IDS = new Set(["due-this-week", "coverage"]);
 
-function getSysTag(cat) {
-  return SYS_ABBR[cat] || (cat || "").slice(0, 4).toUpperCase();
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function keyOf(row) { return `${row.category}|${row.item}|${row.task}`; }
 
@@ -100,16 +93,6 @@ const emptyText = {
   padding: "0.5rem 0",
 };
 
-const rowStyle = {
-  alignItems: "center",
-  borderBottom: "1px solid var(--fm-hairline)",
-  color: "var(--fm-ink-dim)",
-  display: "flex",
-  fontFamily: "var(--fm-mono)",
-  fontSize: "0.72rem",
-  gap: "0.5rem",
-  padding: "0.4rem 0",
-};
 
 // ── DashboardPanel ────────────────────────────────────────────────────────────
 
@@ -246,23 +229,6 @@ export default function DashboardPage({ navigate }) {
     return c;
   }, [todos]);
 
-  // ── Coverage ─────────────────────────────────────────────────────────────
-
-  const allInventoryItems = useMemo(() => {
-    const seen = new Set();
-    rows.forEach(row => {
-      if (row._isBlankCategory || !row.category || !row.item) return;
-      if (deletedCategories.has(row.category)) return;
-      if (deletedItems.has(`${row.category}|${row.item}`)) return;
-      seen.add(`${row.category}|${row.item}`);
-    });
-    return seen;
-  }, [rows, deletedCategories, deletedItems]);
-
-  const itemsWithTasksSet  = useMemo(() => new Set(activeRows.map(r => `${r.category}|${r.item}`)), [activeRows]);
-  const zeroTaskItemCount  = useMemo(() => [...allInventoryItems].filter(k => !itemsWithTasksSet.has(k)).length, [allInventoryItems, itemsWithTasksSet]);
-  const unscheduledTaskCount = useMemo(() => activeRows.filter(row => !row.schedule && !nextDatesMap[keyOf(row)]).length, [activeRows, nextDatesMap]);
-
   // ── Completions chart ────────────────────────────────────────────────────
 
   const completionsByMonth = useMemo(() => {
@@ -360,42 +326,17 @@ export default function DashboardPage({ navigate }) {
     return map;
   }, [activeRows, nextDatesMap, chores, choreNextDates]);
 
-  // ── Due This Week (was: triage) ───────────────────────────────────────────
-
-  const dueThisWeekItems = useMemo(() => {
-    const overdue = [], upcoming = [];
-    activeRows.forEach(row => {
-      const d = nextDatesMap[keyOf(row)]; if (!d) return;
-      const dt = new Date(d);
-      const item = { type: "maint", key: `maint:${keyOf(row)}`, date: dt, label: row.task, sub: row.category };
-      dt < today ? overdue.push(item) : dt <= in7Days ? upcoming.push(item) : null;
-    });
-    chores.forEach(c => {
-      const dt = choreNextDate(c); if (!dt) return;
-      const item = { type: "chore", key: `chore:${c.id}`, date: dt, label: c.title, sub: c.room };
-      dt < today ? overdue.push(item) : dt <= in7Days ? upcoming.push(item) : null;
-    });
-    overdue.sort((a, b) => a.date - b.date);
-    upcoming.sort((a, b) => a.date - b.date);
-    return [...overdue, ...upcoming];
-  }, [activeRows, chores, nextDatesMap, choreNextDates, today, in7Days]);
-
   const totalOverdue   = overdueItems.length + overdueChores.length;
   const openTodosCount = todoStatusCounts["not-started"] + todoStatusCounts["in-progress"];
-
-  function fmtDaysStatus(date) {
-    const days = Math.round((today - date) / 86400000);
-    if (days > 0) return `${days}d late`;
-    if (days === 0) return "today";
-    return `T+${-days}d`;
-  }
 
   // ── Layout ────────────────────────────────────────────────────────────────
 
   const [layout, setLayout] = useState(() => {
     const saved = storageGet("foreman-dashboard-layout");
     if (saved && Array.isArray(saved) && saved.length > 0) {
-      return saved.map(({ isDraggable, isResizable, ...item }) => item);
+      return saved
+        .filter(item => !REMOVED_PANEL_IDS.has(item.i))
+        .map(({ isDraggable, isResizable, ...item }) => item);
     }
     return DEFAULT_LAYOUT;
   });
@@ -574,37 +515,6 @@ export default function DashboardPage({ navigate }) {
             </DashboardPanel>
           </div>
 
-          {/* Due This Week */}
-          <div key="due-this-week" style={{ overflow: "hidden" }}>
-            <DashboardPanel isEditMode={isEditMode} title="Due This Week" onDeepLink={() => navigate("workbench")} deepLinkLabel="Workbench">
-              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                <div style={{ flex: 1, overflowY: "auto" }}>
-                  {dueThisWeekItems.length === 0 ? (
-                    <div style={emptyText}>All clear — nothing overdue or due this week</div>
-                  ) : dueThisWeekItems.map(item => {
-                    const isOverdue = item.date < today;
-                    const tag = item.type === "chore" ? "CHORE" : getSysTag(item.sub);
-                    return (
-                      <div key={item.key} style={rowStyle}>
-                        <div style={{ background: isOverdue ? "var(--fm-red)" : "var(--fm-amber)", borderRadius: "50%", flexShrink: 0, height: "5px", width: "5px" }} />
-                        <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-dim)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.06em", padding: "0.1rem 0.35rem" }}>
-                          {tag}
-                        </span>
-                        <span style={{ flex: 1, fontFamily: "var(--fm-sans)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {item.type === "maint" && item.sub && <span style={{ color: "var(--fm-ink-mute)" }}>{item.sub} · </span>}
-                          {item.label}
-                        </span>
-                        <span style={{ color: isOverdue ? "var(--fm-red)" : "var(--fm-amber)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.65rem", minWidth: "58px", textAlign: "right" }}>
-                          {fmtDaysStatus(item.date)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </DashboardPanel>
-          </div>
-
           {/* Systems */}
           <div key="systems" style={{ overflow: "hidden" }}>
             <DashboardPanel isEditMode={isEditMode} title="Systems" onDeepLink={() => navigate("maintenance")} deepLinkLabel="Maintenance">
@@ -616,30 +526,6 @@ export default function DashboardPage({ navigate }) {
           <div key="rooms" style={{ overflow: "hidden" }}>
             <DashboardPanel isEditMode={isEditMode} title="Rooms" onDeepLink={() => navigate("maintenance")} deepLinkLabel="Maintenance">
               <ArchSection cats={categoryGroups.rooms} catHealthMap={catHealthMap} catNextDueMap={catNextDueMap} emptyMsg="No rooms added yet" unstyled />
-            </DashboardPanel>
-          </div>
-
-          {/* Coverage */}
-          <div key="coverage" style={{ overflow: "hidden" }}>
-            <DashboardPanel isEditMode={isEditMode} title="Coverage" onDeepLink={() => navigate("inventory", { expandAll: true })} deepLinkLabel="Inventory">
-              {zeroTaskItemCount === 0 && unscheduledTaskCount === 0 ? (
-                <div style={emptyText}>All items have tasks and schedules</div>
-              ) : (
-                <div style={{ display: "flex", gap: "1.5rem", paddingTop: "0.25rem" }}>
-                  {zeroTaskItemCount > 0 && (
-                    <button onClick={() => navigate("inventory", { expandAll: true })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
-                      <div style={{ color: "var(--fm-hairline2)", fontFamily: "var(--fm-mono)", fontSize: "1.6rem", fontWeight: 300 }}>{zeroTaskItemCount}</div>
-                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>items with no tasks</div>
-                    </button>
-                  )}
-                  {unscheduledTaskCount > 0 && (
-                    <button onClick={() => navigate("inventory", { expandAll: true })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
-                      <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "1.6rem", fontWeight: 300 }}>{unscheduledTaskCount}</div>
-                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>tasks not scheduled</div>
-                    </button>
-                  )}
-                </div>
-              )}
             </DashboardPanel>
           </div>
 
