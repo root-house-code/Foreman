@@ -806,9 +806,9 @@ const UPDATES = [
     date: "June 28, 2026",
     heading: "Dashboard: Custom Panels & Arrange Mode",
     bullets: [
-      ["Build your own charts", "A new "+ Add Visualization" button opens an 8-step builder: pick a chart type (bar, line, area, pie), a data source (chore completions, maintenance completions, spending, utilities, services, or inventory), a group-by field, a measure (count, sum, or average), optional filters, and a date range. A live preview updates as you configure each step. Name it and save, and it lands on the dashboard as a draggable panel."],
+      ["Build your own charts", "A new '+ Add Visualization' button opens an 8-step builder: pick a chart type (bar, line, area, pie), a data source (chore completions, maintenance completions, spending, utilities, services, or inventory), a group-by field, a measure (count, sum, or average), optional filters, and a date range. A live preview updates as you configure each step. Name it and save, and it lands on the dashboard as a draggable panel."],
       ["Edit or delete any custom panel", "Custom panels show a ⋯ menu with Edit and Delete. Edit reopens the builder with the panel's current config pre-filled so you can refine it."],
-      ["Arrange panels freely", "A new "⊞ Arrange Panels" button puts the dashboard into edit mode: all panels get a dashed brass border and a grab cursor; resize handles appear in the corner. Drag any panel to reorder it; drag the corner to resize. Escape or "✓ Done" exits. A Reset button restores the default layout. The arrangement persists across reloads."],
+      ["Arrange panels freely", "A new '⊞ Arrange Panels' button puts the dashboard into edit mode: all panels get a dashed brass border and a grab cursor; resize handles appear in the corner. Drag any panel to reorder it; drag the corner to resize. Escape or '✓ Done' exits. A Reset button restores the default layout. The arrangement persists across reloads."],
     ],
   },
   {
