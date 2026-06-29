@@ -4,6 +4,7 @@ import { FIXED_UTILITY_TYPES, DEFAULT_UNIT, estimatedMonthly, monthlyUtilitiesTo
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
+import InlineEditCell from "./components/InlineEditCell.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -774,6 +775,15 @@ export default function UtilitiesPage({ navigate, navState }) {
     setBillUtil(null);
     setBillFromHistory(false);
   }
+  // Inline history edit (double-click a cell). Numbers coerce; blanks clear.
+  function editBillField(id, field, raw) {
+    let v = raw;
+    if (field === "amount" || field === "usage") {
+      v = raw === "" ? null : Number(raw);
+      if (v != null && Number.isNaN(v)) return;
+    }
+    updateBill(id, { [field]: v });
+  }
   function handleDeleteBill(id) {
     deleteBill(id);
     setConfirmDeleteBillId(null);
@@ -1020,12 +1030,38 @@ export default function UtilitiesPage({ navigate, navState }) {
                   const util = utilData?.utilities?.[b.utilityId] ?? {};
                   return (
                     <tr key={b.id} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
-                      <td style={{ ...tdCell, color: "var(--fm-brass-dim)", whiteSpace: "nowrap" }}>{fmtMonth(b.periodMonth)}</td>
+                      <InlineEditCell
+                        type="month"
+                        value={b.periodMonth}
+                        display={fmtMonth(b.periodMonth)}
+                        onCommit={raw => editBillField(b.id, "periodMonth", raw)}
+                        style={{ ...tdCell, color: "var(--fm-brass-dim)", whiteSpace: "nowrap" }}
+                      />
                       <td style={{ ...tdCell, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)" }}>{util.name || "—"}</td>
                       <td style={tdCell}>{util.id ? displayType(util) : "—"}</td>
-                      <td style={{ ...tdCell, color: "var(--fm-ink)", whiteSpace: "nowrap" }}>{fmtCost(b.amount)}</td>
-                      <td style={{ ...tdCell, whiteSpace: "nowrap" }}>{fmtUsage(b.usage, util.unitLabel)}</td>
-                      <td style={tdCell}>{b.paid ? <span style={{ color: "var(--fm-green)" }}>✓</span> : "—"}</td>
+                      <InlineEditCell
+                        type="number"
+                        step="0.01"
+                        value={b.amount}
+                        display={fmtCost(b.amount)}
+                        onCommit={raw => editBillField(b.id, "amount", raw)}
+                        style={{ ...tdCell, color: "var(--fm-ink)", whiteSpace: "nowrap" }}
+                      />
+                      <InlineEditCell
+                        type="number"
+                        step="any"
+                        value={b.usage}
+                        display={fmtUsage(b.usage, util.unitLabel)}
+                        onCommit={raw => editBillField(b.id, "usage", raw)}
+                        style={{ ...tdCell, whiteSpace: "nowrap" }}
+                      />
+                      <InlineEditCell
+                        type="boolean"
+                        value={!!b.paid}
+                        display={b.paid ? <span style={{ color: "var(--fm-green)" }}>✓</span> : "—"}
+                        onCommit={next => editBillField(b.id, "paid", next)}
+                        style={tdCell}
+                      />
                     </tr>
                   );
                 })}

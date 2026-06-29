@@ -18,9 +18,10 @@ import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes,
 import { resolveTypeId, isSpatial, isFunctional, isExteriorType } from "./lib/entityTypes.js";
 import { useForemanStore } from "./lib/store.js";
 import { getItemStableKey } from "./lib/itemKeys.js";
-import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
+import { loadMaintenanceCompletionRecords, updateMaintenanceCompletionRecord } from "./lib/maintenance.js";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
+import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
 
 const DEFAULT_CAT_SET = new Set(defaultData.map(d => d.category));
 const DEFAULT_CAT_ORDER = Array.from(new Set(defaultData.map(r => r.category)));
@@ -45,7 +46,12 @@ function saveDates(key, dates) {
 export default function HomeMaintenanceTable({ navigate, navState }) {
   const [rows, setRows] = useState(() => loadData());
   const [activeTab, setActiveTab] = useState("All tasks");
-  const [completionRecords] = useState(() => loadMaintenanceCompletionRecords());
+  const [completionRecords, setCompletionRecords] = useState(() => loadMaintenanceCompletionRecords());
+
+  function handleHistoryEdit(key, field, raw) {
+    const patch = field === "completedAt" ? { completedAt: dateInputToISO(raw) } : { [field]: raw };
+    setCompletionRecords(updateMaintenanceCompletionRecord(key, patch));
+  }
   const [activeStatus, setActiveStatus] = useState("ALL");
   const [locationFilter, setLocationFilter] = useState("ALL");
   const [levelFilter, setLevelFilter] = useState("ALL");
@@ -687,12 +693,27 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
                   const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
                   return (
                     <tr key={e.key} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
-                      <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{dateStr}</td>
+                      <InlineEditCell
+                        type="date"
+                        value={e.completedAt}
+                        editValue={toDateInput(e.completedAt)}
+                        display={dateStr}
+                        onCommit={raw => handleHistoryEdit(e.key, "completedAt", raw)}
+                        style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                      />
                       <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.category}</td>
                       <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.item}</td>
                       <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.task}</td>
-                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.assignee || "—"}</td>
-                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{e.notes || "—"}</td>
+                      <InlineEditCell
+                        value={e.assignee}
+                        onCommit={raw => handleHistoryEdit(e.key, "assignee", raw)}
+                        style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                      />
+                      <InlineEditCell
+                        value={e.notes}
+                        onCommit={raw => handleHistoryEdit(e.key, "notes", raw)}
+                        style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}
+                      />
                     </tr>
                   );
                 })}

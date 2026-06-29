@@ -22,6 +22,7 @@ import {
 } from "./lib/sessions.js";
 import MaintenanceCompleteModal from "./components/MaintenanceCompleteModal.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
+import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -615,6 +616,21 @@ export default function WorkbenchPage({ navigate, navState }) {
 
   function persistSessions(map) { setSessionsMap(map); saveSessions(map); }
 
+  // Inline history edit (double-click a cell on the History tab).
+  function editSessionField(id, field, raw) {
+    const s = sessionsMap[id];
+    if (!s) return;
+    let v = raw;
+    if (field === "completedAt") v = dateInputToISO(raw);
+    else if (field === "actualDuration") {
+      v = raw === "" ? null : Number(raw);
+      if (v != null && Number.isNaN(v)) return;
+    } else if (field === "assignees") {
+      v = raw ? raw.split(",").map(x => x.trim()).filter(Boolean) : [];
+    }
+    persistSessions({ ...sessionsMap, [id]: { ...s, [field]: v } });
+  }
+
   function handleCreateSession(fields) {
     const session = createWorkSession(fields);
     const next = { ...sessionsMap, [session.id]: session };
@@ -798,12 +814,38 @@ export default function WorkbenchPage({ navigate, navState }) {
                   const doneCount = (s.items ?? []).filter(i => i.result === "done").length;
                   return (
                     <tr key={s.id} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
-                      <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{fmtDate(s.completedAt || s.endedAt)}</td>
-                      <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{s.title || "Untitled Session"}</td>
+                      <InlineEditCell
+                        type="date"
+                        value={s.completedAt || s.endedAt}
+                        editValue={toDateInput(s.completedAt || s.endedAt)}
+                        display={fmtDate(s.completedAt || s.endedAt)}
+                        onCommit={raw => editSessionField(s.id, "completedAt", raw)}
+                        style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                      />
+                      <InlineEditCell
+                        value={s.title}
+                        display={s.title || "Untitled Session"}
+                        onCommit={raw => editSessionField(s.id, "title", raw)}
+                        style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}
+                      />
                       <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{doneCount} / {(s.items ?? []).length}</td>
                       <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{fmtMinutes(s.estimatedDuration)}</td>
-                      <td style={{ color: s.actualDuration ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{fmtMinutes(s.actualDuration)}</td>
-                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{(s.assignees ?? []).join(", ") || s.assignee || "—"}</td>
+                      <InlineEditCell
+                        type="number"
+                        min="0"
+                        value={s.actualDuration}
+                        display={fmtMinutes(s.actualDuration)}
+                        title="Double-click to edit (minutes)"
+                        onCommit={raw => editSessionField(s.id, "actualDuration", raw)}
+                        style={{ color: s.actualDuration ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                      />
+                      <InlineEditCell
+                        value={(s.assignees ?? []).join(", ") || s.assignee || ""}
+                        display={(s.assignees ?? []).join(", ") || s.assignee || "—"}
+                        title="Double-click to edit (comma-separated)"
+                        onCommit={raw => editSessionField(s.id, "assignees", raw)}
+                        style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}
+                      />
                     </tr>
                   );
                 })}

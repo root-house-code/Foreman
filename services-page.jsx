@@ -4,6 +4,7 @@ import { FIXED_SERVICE_CATEGORIES, toMonthly } from "./lib/services.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
+import InlineEditCell, { toDateInput } from "./components/InlineEditCell.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -493,6 +494,16 @@ export default function ServicesPage({ navigate, navState }) {
     setVisitSvc(null);
     setVisitFromHistory(false);
   }
+  // Inline history edit (double-click a cell). Cost maps to overrideCost; blank
+  // clears the override so the visit inherits the service's standing cost.
+  function editVisitField(id, field, raw) {
+    let v = raw;
+    if (field === "overrideCost") {
+      v = raw === "" ? null : Number(raw);
+      if (v != null && Number.isNaN(v)) return;
+    }
+    updateVisit(id, { [field]: v });
+  }
 
   function handleDeleteVisit(id) {
     deleteVisit(id);
@@ -792,15 +803,36 @@ export default function ServicesPage({ navigate, navState }) {
                   const svc = svcData?.services?.[v.serviceId] ?? {};
                   return (
                     <tr key={v.id} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
-                      <td style={{ ...tdCell, color: "var(--fm-brass-dim)", whiteSpace: "nowrap" }}>{fmtDate(v.date)}</td>
+                      <InlineEditCell
+                        type="date"
+                        value={v.date}
+                        editValue={/^\d{4}-\d{2}-\d{2}$/.test(v.date || "") ? v.date : toDateInput(v.date)}
+                        display={fmtDate(v.date)}
+                        onCommit={raw => editVisitField(v.id, "date", raw)}
+                        style={{ ...tdCell, color: "var(--fm-brass-dim)", whiteSpace: "nowrap" }}
+                      />
                       <td style={{ ...tdCell, color: "var(--fm-ink)", fontFamily: "var(--fm-sans)" }}>{svc.name || "—"}</td>
                       <td style={tdCell}>{svc.id ? displayCat(svc) : "—"}</td>
                       <td style={tdCell}>{svc.providerName || "—"}</td>
-                      <td style={tdCell}>{v.techName || "—"}</td>
-                      <td style={{ ...tdCell, maxWidth: 280 }}>{v.notes || "—"}</td>
-                      <td style={{ ...tdCell, whiteSpace: "nowrap" }}>
-                        {v.overrideCost != null ? fmtCost(v.overrideCost) : fmtCost(svc.cost)}
-                      </td>
+                      <InlineEditCell
+                        value={v.techName}
+                        onCommit={raw => editVisitField(v.id, "techName", raw)}
+                        style={tdCell}
+                      />
+                      <InlineEditCell
+                        value={v.notes}
+                        onCommit={raw => editVisitField(v.id, "notes", raw)}
+                        style={{ ...tdCell, maxWidth: 280 }}
+                      />
+                      <InlineEditCell
+                        type="number"
+                        step="0.01"
+                        value={v.overrideCost}
+                        display={v.overrideCost != null ? fmtCost(v.overrideCost) : fmtCost(svc.cost)}
+                        title="Double-click to set a cost override (blank inherits)"
+                        onCommit={raw => editVisitField(v.id, "overrideCost", raw)}
+                        style={{ ...tdCell, whiteSpace: "nowrap" }}
+                      />
                     </tr>
                   );
                 })}

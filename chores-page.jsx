@@ -24,9 +24,10 @@ import { loadRoomCategories, loadRoomSubtypes, formatRoomLabel } from "./lib/cat
 import { loadRooms } from "./lib/rooms.js";
 import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
-  saveChoreCompletionRecord, loadChoreCompletionRecords,
+  saveChoreCompletionRecord, loadChoreCompletionRecords, updateChoreCompletionRecord,
 } from "./lib/choreCompletions.js";
 import { FilterDropdown } from "./components/FilterPill.jsx";
+import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import { useForemanStore } from "./lib/store.js";
 import {
@@ -709,7 +710,12 @@ export default function ChoresPage({ navigate, navState }) {
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [choreNextDates, setChoreNextDates] = useState(() => loadChoreNextDates());
   const [detailEvent, setDetailEvent]     = useState(null); // { chore, date }
-  const [choreCompletionRecords]          = useState(() => loadChoreCompletionRecords());
+  const [choreCompletionRecords, setChoreCompletionRecords] = useState(() => loadChoreCompletionRecords());
+
+  function handleHistoryEdit(key, field, raw) {
+    const patch = field === "completedAt" ? { completedAt: dateInputToISO(raw) } : { [field]: raw };
+    setChoreCompletionRecords(updateChoreCompletionRecord(key, patch));
+  }
   const [historySearch, setHistorySearch] = useState("");
   const [historyRoomFilter, setHistoryRoomFilter] = useState("ALL");
 
@@ -1343,17 +1349,44 @@ export default function ChoresPage({ navigate, navState }) {
                     const perPerson = assigneeCount > 1 && totalMin > 0 ? totalMin / assigneeCount : null;
                     return (
                       <tr key={e.key} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
-                        <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{dateStr}</td>
+                        <InlineEditCell
+                          type="date"
+                          value={e.completedAt}
+                          editValue={toDateInput(e.completedAt)}
+                          display={dateStr}
+                          onCommit={raw => handleHistoryEdit(e.key, "completedAt", raw)}
+                          style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                        />
                         <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.chore?.title || e.choreId}</td>
-                        <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.room || "—"}</td>
-                        <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.assignee || "—"}</td>
-                        <td style={{ color: e.duration ? "var(--fm-brass-dim)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>
-                          {e.duration || "—"}
-                          {perPerson != null && (
-                            <span style={{ color: "var(--fm-ink-mute)", marginLeft: "0.4rem" }}>({fmtMinutes(Math.round(perPerson))} ea)</span>
+                        <InlineEditCell
+                          value={e.room}
+                          onCommit={raw => handleHistoryEdit(e.key, "room", raw)}
+                          style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                        />
+                        <InlineEditCell
+                          value={e.assignee}
+                          onCommit={raw => handleHistoryEdit(e.key, "assignee", raw)}
+                          style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                        />
+                        <InlineEditCell
+                          value={e.duration}
+                          onCommit={raw => handleHistoryEdit(e.key, "duration", raw)}
+                          title="Double-click to edit (HH:MM)"
+                          display={(
+                            <>
+                              {e.duration || "—"}
+                              {perPerson != null && (
+                                <span style={{ color: "var(--fm-ink-mute)", marginLeft: "0.4rem" }}>({fmtMinutes(Math.round(perPerson))} ea)</span>
+                              )}
+                            </>
                           )}
-                        </td>
-                        <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{e.notes || "—"}</td>
+                          style={{ color: e.duration ? "var(--fm-brass-dim)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}
+                        />
+                        <InlineEditCell
+                          value={e.notes}
+                          onCommit={raw => handleHistoryEdit(e.key, "notes", raw)}
+                          style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}
+                        />
                       </tr>
                     );
                   })}
