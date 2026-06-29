@@ -257,9 +257,13 @@ export default function MaintenanceTable({
             return (
               <tr
                 key={row._id || key}
-                style={{ background: baseBg, borderBottom: "1px solid var(--fm-hairline)", transition: "background 0.1s" }}
+                style={{ background: baseBg, borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", transition: "background 0.1s" }}
                 onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
                 onMouseLeave={e => e.currentTarget.style.background = baseBg}
+                onClick={e => {
+                  if (e.target.closest("button,input,select,textarea")) return;
+                  setDetailRow(row);
+                }}
               >
                 {/* Status dot + text */}
                 <td style={{ padding: "0.45rem 0.5rem", verticalAlign: "middle", whiteSpace: "nowrap" }}>
@@ -402,6 +406,9 @@ export default function MaintenanceTable({
           row={detailRow}
           note={notes[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? ""}
           onNoteChange={text => onNoteChange(`${detailRow.category}|${detailRow.item}|${detailRow.task}`, text)}
+          completedDate={completedDates[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? null}
+          nextDate={nextDates[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? null}
+          onLogIt={() => setCompletionRow({ row: detailRow, key: `${detailRow.category}|${detailRow.item}|${detailRow.task}` })}
           onClose={() => setDetailRow(null)}
         />,
         document.body

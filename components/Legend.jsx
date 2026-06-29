@@ -7,8 +7,6 @@ const FREQ_ITEMS = [
   { label: "As needed",          color: "#a8a29c" },
 ];
 
-const SEASON_ITEMS = ["Spring", "Summer", "Fall", "Winter"];
-
 const labelStyle = {
   color: "#a8a29c",
   fontFamily: "monospace",
@@ -18,11 +16,9 @@ const labelStyle = {
   marginRight: "0.25rem",
 };
 
-export default function Legend({ activeColors, onToggle, activeSeasons, onToggleSeason }) {
+export default function Legend({ activeColors, onToggle }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-
-      {/* Frequency filter — left */}
+    <div style={{ display: "flex", alignItems: "center", marginBottom: "1.25rem" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", alignItems: "center" }}>
         <span style={labelStyle}>Frequency:</span>
         {FREQ_ITEMS.map(({ label, color }) => {
@@ -53,35 +49,6 @@ export default function Legend({ activeColors, onToggle, activeSeasons, onToggle
           );
         })}
       </div>
-
-      {/* Season filter — right */}
-      <div style={{ display: "flex", gap: "0.1rem", alignItems: "center", flexShrink: 0 }}>
-        <span style={labelStyle}>Season:</span>
-        {SEASON_ITEMS.map(season => {
-          const active = activeSeasons.has(season.toLowerCase());
-          return (
-            <span
-              key={season}
-              onClick={() => onToggleSeason(season.toLowerCase())}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#1a1f2e"; }}
-              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
-              style={{
-                background: "transparent",
-                borderRadius: "3px",
-                color: active ? "#c9a96e" : "#6a6070",
-                cursor: "pointer",
-                fontFamily: "monospace",
-                fontSize: "0.68rem",
-                padding: "0.2rem 0.3rem",
-                transition: "background 0.15s, color 0.15s",
-              }}
-            >
-              {season}
-            </span>
-          );
-        })}
-      </div>
-
     </div>
   );
 }
