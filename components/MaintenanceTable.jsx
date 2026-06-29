@@ -244,9 +244,11 @@ export default function MaintenanceTable({
         </thead>
         <tbody>
           {groupedRows.map((row, idx) => {
-            const isEven  = idx % 2 === 0;
-            const baseBg  = isEven ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)";
-            const key     = `${row.category}|${row.item}|${row.task}`;
+            const isEven    = idx % 2 === 0;
+            const isTaskless = row._isTaskless;
+            const baseBg    = isTaskless ? "rgba(201,169,110,0.06)" : (isEven ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)");
+            const hoverBg   = isTaskless ? "rgba(201,169,110,0.12)" : "var(--fm-bg-panel)";
+            const key       = `${row.category}|${row.item}|${row.task}`;
             const status  = computeStatus(key, nextDates, loggedRows);
             const sysTag  = getSysTag(row.category);
             const hasNote = !!(notes[key] || "").trim();
@@ -257,11 +259,12 @@ export default function MaintenanceTable({
             return (
               <tr
                 key={row._id || key}
-                style={{ background: baseBg, borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", transition: "background 0.1s" }}
-                onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
+                style={{ background: baseBg, borderBottom: "1px solid var(--fm-hairline)", boxShadow: isTaskless ? "inset 3px 0 0 var(--fm-brass)" : "none", cursor: "pointer", transition: "background 0.1s" }}
+                onMouseEnter={e => e.currentTarget.style.background = hoverBg}
                 onMouseLeave={e => e.currentTarget.style.background = baseBg}
                 onClick={e => {
                   if (e.target.closest("button,input,select,textarea")) return;
+                  if (isTaskless) return; // placeholder rows are edit-in-place, no detail modal
                   setDetailRow(row);
                 }}
               >

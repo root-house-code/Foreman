@@ -9,7 +9,6 @@ import {
   loadReminderModes, saveReminderModes,
   REMINDER_MODES,
 } from "./lib/reminders.js";
-import { SEASON_OPTIONS } from "./lib/scheduleOptions.js";
 import { computeNextDate, parseMonths } from "./lib/scheduleInterval.js";
 import { getScheduleColor } from "./lib/scheduleColor.js";
 import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
@@ -25,91 +24,6 @@ import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
 
 const DEFAULT_CAT_SET = new Set(defaultData.map(d => d.category));
 const DEFAULT_CAT_ORDER = Array.from(new Set(defaultData.map(r => r.category)));
-
-const TASKLESS_SCHEDULES = [
-  "Monthly", "Every 3 months", "Every 6 months", "Twice a year", "Annually",
-  "Every 2–3 years", "Every 3–5 years", "Every 5–7 years", "Every 5–10 years",
-  "Every 10 years", "As needed",
-];
-
-function TasklessItemRow({ category, item, onSave }) {
-  const [editing, setEditing] = useState(false);
-  const [task, setTask]       = useState("");
-  const [schedule, setSchedule] = useState("Annually");
-  const [season, setSeason]   = useState(null);
-
-  function handleSave() {
-    if (!task.trim()) return;
-    onSave({ category, item, task: task.trim(), schedule, season });
-    setTask(""); setSchedule("Annually"); setSeason(null); setEditing(false);
-  }
-
-  const td = { fontFamily: "monospace", fontSize: "0.72rem", padding: "0.45rem 0.75rem 0.45rem 0" };
-  const inBase = {
-    background: "#0a0c11", border: "1px solid #2b3140", borderRadius: "3px",
-    boxSizing: "border-box", color: "#e8e4dd", fontFamily: "monospace",
-    fontSize: "0.72rem", outline: "none", padding: "0.2rem 0.4rem", width: "100%",
-  };
-
-  if (!editing) {
-    return (
-      <tr
-        style={{ borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer" }}
-        onClick={() => setEditing(true)}
-        onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
-        onMouseLeave={e => e.currentTarget.style.background = ""}
-      >
-        <td style={{ ...td, color: "var(--fm-ink-mute)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>{category}</td>
-        <td style={{ ...td, color: "var(--fm-ink)" }}>{item}</td>
-        <td colSpan={3} style={{ ...td, color: "var(--fm-ink-mute)", fontStyle: "italic" }}>No tasks — click to add one</td>
-        <td />
-      </tr>
-    );
-  }
-
-  return (
-    <tr style={{ borderBottom: "1px solid var(--fm-hairline)", background: "var(--fm-bg-panel)" }}>
-      <td style={{ ...td, color: "var(--fm-ink-mute)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>{category}</td>
-      <td style={{ ...td, color: "var(--fm-ink)" }}>{item}</td>
-      <td style={{ padding: "0.35rem 0.75rem 0.35rem 0", minWidth: "160px" }}>
-        <input
-          autoFocus
-          value={task}
-          onChange={e => setTask(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setEditing(false); setTask(""); } }}
-          placeholder="Task description…"
-          style={inBase}
-        />
-      </td>
-      <td style={{ padding: "0.35rem 0.75rem 0.35rem 0", minWidth: "120px" }}>
-        <select value={schedule} onChange={e => setSchedule(e.target.value)}
-          style={{ ...inBase, appearance: "none", cursor: "pointer" }}>
-          {TASKLESS_SCHEDULES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </td>
-      <td style={{ padding: "0.35rem 0.75rem 0.35rem 0", minWidth: "80px" }}>
-        <select value={season ?? ""} onChange={e => setSeason(e.target.value || null)}
-          style={{ ...inBase, appearance: "none", cursor: "pointer" }}>
-          {SEASON_OPTIONS.map(({ value, label }) => (
-            <option key={label} value={value ?? ""}>{label}</option>
-          ))}
-        </select>
-      </td>
-      <td style={{ padding: "0.35rem 0", whiteSpace: "nowrap" }}>
-        <button
-          onClick={handleSave}
-          disabled={!task.trim()}
-          style={{ background: task.trim() ? "#c9a96e" : "transparent", border: "none", borderRadius: "3px", color: task.trim() ? "#0f1117" : "var(--fm-ink-mute)", cursor: task.trim() ? "pointer" : "default", fontFamily: "monospace", fontSize: "0.68rem", marginRight: "0.3rem", padding: "0.2rem 0.55rem" }}
-        >✓ Save</button>
-        <button
-          onClick={() => { setEditing(false); setTask(""); }}
-          style={{ background: "transparent", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "monospace", fontSize: "0.68rem", padding: "0.2rem 0.4rem" }}
-        >Cancel</button>
-      </td>
-    </tr>
-  );
-}
-
 
 function loadDates(key) {
   try {
@@ -142,6 +56,9 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   const [activeFrequencies, setActiveFrequencies] = useState(new Set());
   const [activeSeason, setActiveSeason] = useState("ALL");
   const [tasklessMode, setTasklessMode] = useState("none"); // "none" | "only" | "mixed"
+  // Inline edits buffered on a taskless placeholder row before it has a task name.
+  // Keyed by `${category}|${item}`; merged into the synthetic row, committed on task entry.
+  const [tasklessDrafts, setTasklessDrafts] = useState({});
   const [addRowHovered, setAddRowHovered] = useState(false);
   const [addTaskModalOpen, setAddTaskModalOpen] = useState(false);
   const [sortCols, setSortCols] = useState([]);
@@ -358,7 +275,32 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     setAddTaskModalOpen(false);
   }
 
+  // Edit handler for synthetic taskless placeholder rows. Entering a non-empty
+  // task name commits the row as a real custom task (carrying any buffered
+  // schedule/season); other edits are buffered until then.
+  function handleTasklessEdit(rowId, field, value) {
+    const ident = tasklessById[rowId];
+    if (!ident) return;
+    const draftKey = `${ident.category}|${ident.item}`;
+
+    if (field === "task" && value && value.trim()) {
+      const draft = tasklessDrafts[draftKey] || {};
+      handleSaveNewTask({
+        category: ident.category,
+        item:     draft.item ?? ident.item,
+        task:     value.trim(),
+        schedule: draft.schedule ?? null,
+        season:   draft.season ?? null,
+      });
+      setTasklessDrafts(prev => { const n = { ...prev }; delete n[draftKey]; return n; });
+      return;
+    }
+
+    setTasklessDrafts(prev => ({ ...prev, [draftKey]: { ...prev[draftKey], [field]: value } }));
+  }
+
   function handleRowEdit(rowId, field, value) {
+    if (tasklessById[rowId]) { handleTasklessEdit(rowId, field, value); return; }
     setRows(prev => {
       const updated = prev.map(r => r._id === rowId ? { ...r, [field]: value } : r);
       const row = updated.find(r => r._id === rowId);
@@ -442,6 +384,11 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
 
   function handleDeleteRow(row) {
+    // Taskless placeholder: nothing persisted yet — just discard any buffered edits.
+    if (row._isTaskless) {
+      setTasklessDrafts(prev => { const n = { ...prev }; delete n[`${row.category}|${row.item}`]; return n; });
+      return;
+    }
     const key = `${row.category}|${row.item}|${row.task}`;
     if (row._isCustom) {
       setRows(prev => {
@@ -609,6 +556,39 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     allItems.forEach((item, key) => { if (!withTasks.has(key)) result.push(item); });
     return result.sort((a, b) => a.category.localeCompare(b.category) || a.item.localeCompare(b.item));
   }, [rows, deletedRows, deletedCategories, deletedItems]);
+
+  // Synthetic placeholder rows for taskless items, rendered inside the main table.
+  // Only category/item are filled; task/schedule/season are empty (or buffered drafts)
+  // and editable inline. Entering a task name promotes the row to a real custom task.
+  const tasklessRows = useMemo(() => tasklessItems.map(({ category, item }) => {
+    const draft = tasklessDrafts[`${category}|${item}`] || {};
+    return {
+      _id: `taskless::${category}::${item}`,
+      _isCustom: true,
+      _isTaskless: true,
+      _defaultKey: null,
+      category,
+      item,
+      task: "",
+      schedule: null,
+      season: null,
+      ...draft,
+    };
+  }), [tasklessItems, tasklessDrafts]);
+
+  const tasklessById = useMemo(() => {
+    const map = {};
+    tasklessItems.forEach(({ category, item }) => {
+      map[`taskless::${category}::${item}`] = { category, item };
+    });
+    return map;
+  }, [tasklessItems]);
+
+  // If every taskless item gets a task while viewing them, the toggle button
+  // disappears — drop back to the normal view so it can't get stuck.
+  useEffect(() => {
+    if (tasklessItems.length === 0 && tasklessMode !== "none") setTasklessMode("none");
+  }, [tasklessItems, tasklessMode]);
 
   const historyEntries = useMemo(() => {
     return Object.entries(completionRecords)
@@ -847,65 +827,41 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
         </div>
 
         <Legend activeColors={activeFrequencies} onToggle={handleToggleFrequency} />
-        {/* Taskless items table */}
+
+        {/* Taskless-mode banner: placeholder rows for items without tasks are
+            woven into the table below; fill in a Task to create the task. */}
         {tasklessMode !== "none" && tasklessItems.length > 0 && (
-          <div style={{ marginBottom: tasklessMode === "mixed" ? "1.5rem" : 0 }}>
-            <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.6rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                Items without tasks
-              </span>
-              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>
-                {tasklessItems.length} {tasklessItems.length === 1 ? "item" : "items"} — click a row to add a maintenance task
-              </span>
-            </div>
-            <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-brass-dim)", borderRadius: "var(--fm-radius)", overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "600px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    {["Category", "Item", "Task", "Schedule", "Season", ""].map(h => (
-                      <th key={h} style={{ background: "var(--fm-bg-raised)", borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0.6rem 0.75rem 0.6rem 0", position: "sticky", textAlign: "left", textTransform: "uppercase", top: 0 }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {tasklessItems.map(({ category, item }) => (
-                    <TasklessItemRow
-                      key={`${category}|${item}`}
-                      category={category}
-                      item={item}
-                      onSave={handleSaveNewTask}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.6rem" }}>
+            <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              {tasklessMode === "only" ? "Items without tasks" : "Items without tasks + scheduled"}
+            </span>
+            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>
+              {tasklessItems.length} {tasklessItems.length === 1 ? "item has" : "items have"} no task — fill in the Task field on a highlighted row to create one
+            </span>
           </div>
         )}
 
-        {/* Normal maintenance table — hidden in "only" mode */}
-        {tasklessMode !== "only" && (
-          <MaintenanceTable
-            rows={filtered}
-            allRows={rows}
-            completedDates={completedDates}
-            onDateChange={handleDateChange}
-            nextDates={nextDates}
-            onNextDateChange={handleNextDateChange}
-            followSchedule={followSchedule}
-            onToggleFollow={handleToggleFollow}
-            reminderModes={reminderModes}
-            onCycleReminderMode={handleCycleReminderMode}
-            notes={notes}
-            onNoteChange={handleNoteChange}
-            onRowEdit={handleRowEdit}
-            onDeleteRow={handleDeleteRow}
-            sortCols={sortCols}
-            onHeaderClick={handleHeaderClick}
-            stickyTop={0}
-          />
-        )}
+        <MaintenanceTable
+          rows={tasklessMode === "only"  ? tasklessRows
+              : tasklessMode === "mixed" ? [...tasklessRows, ...filtered]
+              : filtered}
+          allRows={rows}
+          completedDates={completedDates}
+          onDateChange={handleDateChange}
+          nextDates={nextDates}
+          onNextDateChange={handleNextDateChange}
+          followSchedule={followSchedule}
+          onToggleFollow={handleToggleFollow}
+          reminderModes={reminderModes}
+          onCycleReminderMode={handleCycleReminderMode}
+          notes={notes}
+          onNoteChange={handleNoteChange}
+          onRowEdit={handleRowEdit}
+          onDeleteRow={handleDeleteRow}
+          sortCols={sortCols}
+          onHeaderClick={handleHeaderClick}
+          stickyTop={0}
+        />
       </div>}
 
       {addTaskModalOpen && (
