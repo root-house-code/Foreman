@@ -1,841 +1,842 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
-import AssigneeInput from "./components/AssigneeInput.jsx";
-import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
 import { useForemanStore } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
-import { buildSessionCandidates, orderByRoom, createSession, createSessionItem, candidateKey, loadEstimateOverrides, setEstimateOverride, clearEstimateOverride } from "./lib/sessions.js";
-import { saveMaintenanceCompletionRecord, loadMaintenanceCompletionRecords, maintenanceKey } from "./lib/maintenance.js";
-import { computeNextDate } from "./lib/scheduleInterval.js";
-import { toggleChoreCompletion, saveChoreCompletions, loadChoreCompletions, saveChoreCompletionRecord } from "./lib/choreCompletions.js";
-import { loadChoreNextDates, saveChoreNextDates, computeChoreNextDate } from "./lib/chores.js";
-import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
-import { consumingTaskInfo, composeSpec, SUPPLY_CATALOG } from "./lib/supplies.js";
 import { loadData } from "./lib/data.js";
+import { loadDeletedCategories } from "./lib/deletedCategories.js";
+import { loadDeletedItems } from "./lib/deletedItems.js";
+import { getEffectiveRowState } from "./lib/inventory.js";
+import { getItemStableKey } from "./lib/itemKeys.js";
+import { maintenanceKey, saveMaintenanceCompletionRecord } from "./lib/maintenance.js";
+import { computeNextDate } from "./lib/scheduleInterval.js";
+import { loadChoreNextDates, saveChoreNextDates, computeChoreNextDate } from "./lib/chores.js";
+import { toggleChoreCompletion, saveChoreCompletions, loadChoreCompletions, saveChoreCompletionRecord } from "./lib/choreCompletions.js";
+import { loadTodos, saveTodos } from "./lib/todos.js";
+import { loadRooms } from "./lib/rooms.js";
+import {
+  loadSessions, saveSessions, addSession, updateSession, deleteSession,
+  createWorkSession, createSessionItem, computeSessionEstimate,
+  startSession, completeSession, reorderSessions, addItemToSession,
+  migrateSessionShape,
+} from "./lib/sessions.js";
+import MaintenanceCompleteModal from "./components/MaintenanceCompleteModal.jsx";
+import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-const KIND_META = {
-  maintenance: { label: "MAINT", color: "var(--fm-brass)" },
-  chore:       { label: "CHORE", color: "var(--fm-green)" },
-  todo:        { label: "TODO",  color: "var(--fm-cyan)" },
+const TYPE_META = {
+  maintenance: { label: "MAINT", color: "var(--fm-brass)"   },
+  chore:       { label: "CHORE", color: "var(--fm-green)"   },
+  todo:        { label: "TODO",  color: "var(--fm-cyan)"    },
+  project:     { label: "PROJ",  color: "var(--fm-ink-dim)" },
 };
 
-const candKey = candidateKey;
+const STATUS_META = {
+  planned:     { label: "Planned",     color: "var(--fm-ink-dim)" },
+  "in-progress": { label: "In Progress", color: "var(--fm-amber)" },
+  complete:    { label: "Complete",    color: "var(--fm-green)"  },
+};
 
-function dueLabel(dueDate, today) {
-  const days = Math.round((dueDate - today) / 86400000);
-  if (days < 0)  return { text: `${-days}d late`, color: "var(--fm-red)" };
-  if (days === 0) return { text: "today", color: "var(--fm-amber)" };
-  return { text: `in ${days}d`, color: "var(--fm-ink-mute)" };
-}
+const SEV_BAR_COLOR = {
+  overdue:  "var(--fm-red)",
+  soon:     "var(--fm-amber)",
+  upcoming: "transparent",
+  none:     "transparent",
+};
 
-function fmtElapsed(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+const TYPE_FILTER_KEYS = {
+  Maintenance: "maintenance",
+  Chores:      "chore",
+  "To Dos":    "todo",
+  Projects:    "project",
+};
+
+const STATUS_FILTER_KEYS = {
+  Overdue:    "overdue",
+  "Due Soon": "soon",
+  Upcoming:   "upcoming",
+  "No Date":  "none",
+};
+
+const SEV_ORDER = { overdue: 0, soon: 1, upcoming: 2, none: 3 };
+
+const TABS = ["Queue", "History"];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function dueLabel(days) {
+  if (days === null) return { text: "—",           color: "var(--fm-ink-mute)" };
+  if (days < 0)      return { text: `${-days}d late`, color: "var(--fm-red)"   };
+  if (days === 0)    return { text: "today",        color: "var(--fm-amber)"  };
+  if (days === 1)    return { text: "tomorrow",     color: "var(--fm-amber)"  };
+  if (days <= 7)     return { text: `in ${days}d`,  color: "var(--fm-amber)"  };
+  return               { text: `in ${days}d`,  color: "var(--fm-ink-mute)" };
 }
 
 function fmtMinutes(min) {
-  if (min >= 60) {
-    const h = Math.floor(min / 60), m = min % 60;
-    return m ? `${h}h ${m}m` : `${h}h`;
-  }
+  if (!min) return "—";
+  if (min >= 60) { const h = Math.floor(min / 60), m = min % 60; return m ? `${h}h ${m}m` : `${h}h`; }
   return `${min}m`;
 }
 
-function fmtDateTime(iso) {
+function fmtDate(iso) {
   if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-// ── Styles ───────────────────────────────────────────────────────────────────
+function fmtTimeBlock(tb) {
+  if (!tb || (!tb.start && !tb.end)) return null;
+  if (tb.start && tb.end) return `${tb.start} – ${tb.end}`;
+  return tb.start || tb.end;
+}
 
-const card = {
-  background: "var(--fm-bg-panel)",
-  border: "var(--fm-border)",
-  borderRadius: "var(--fm-radius-lg)",
-  padding: "1.25rem 1.5rem",
-};
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-const sectionTitle = {
-  color: "var(--fm-ink-mute)",
-  fontFamily: "var(--fm-mono)",
-  fontSize: "0.6rem",
-  letterSpacing: "0.16em",
-  textTransform: "uppercase",
-};
-
-const btnPrimary = {
-  background: "var(--fm-brass-bg)",
-  border: "1px solid var(--fm-brass)",
-  borderRadius: "var(--fm-radius)",
-  color: "var(--fm-brass)",
-  cursor: "pointer",
-  fontFamily: "var(--fm-mono)",
-  fontSize: "0.72rem",
-  letterSpacing: "0.06em",
-  padding: "0.4rem 0.9rem",
-};
-
-const btnGhost = {
+const actionBtnStyle = {
   background: "transparent",
   border: "1px solid var(--fm-hairline2)",
   borderRadius: "var(--fm-radius)",
   color: "var(--fm-ink-dim)",
   cursor: "pointer",
+  flexShrink: 0,
   fontFamily: "var(--fm-mono)",
-  fontSize: "0.72rem",
-  padding: "0.4rem 0.9rem",
+  fontSize: "0.6rem",
+  letterSpacing: "0.06em",
+  padding: "0.2rem 0.6rem",
+  transition: "all 0.12s",
 };
 
-const fieldInput = {
+const pillStyle = (active, color = "var(--fm-brass)") => ({
+  background: active ? color + "18" : "var(--fm-bg-sunk)",
+  border: `1px solid ${active ? color : "var(--fm-hairline)"}`,
+  borderRadius: "var(--fm-radius)",
+  color: active ? color : "var(--fm-ink-dim)",
+  cursor: "pointer",
+  fontFamily: "var(--fm-mono)",
+  fontSize: "0.6rem",
+  letterSpacing: "0.08em",
+  padding: "0.25rem 0.6rem",
+  textTransform: "uppercase",
+  transition: "all 0.12s",
+  whiteSpace: "nowrap",
+});
+
+const statusPillStyle = (active) => ({
+  background: active ? "var(--fm-bg-panel)" : "transparent",
+  border: `1px solid ${active ? "var(--fm-hairline2)" : "transparent"}`,
+  borderRadius: "var(--fm-radius)",
+  color: active ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)",
+  cursor: "pointer",
+  fontFamily: "var(--fm-mono)",
+  fontSize: "0.6rem",
+  letterSpacing: "0.08em",
+  padding: "0.25rem 0.5rem",
+  textTransform: "uppercase",
+  transition: "all 0.12s",
+});
+
+const inputStyle = {
   background: "var(--fm-bg-sunk)",
-  border: "var(--fm-border-2)",
+  border: "1px solid var(--fm-hairline2)",
   borderRadius: "var(--fm-radius)",
   boxSizing: "border-box",
   color: "var(--fm-ink)",
-  fontFamily: "var(--fm-sans)",
-  fontSize: "0.82rem",
+  fontFamily: "var(--fm-mono)",
+  fontSize: "0.72rem",
   outline: "none",
-  padding: "0.4rem 0.6rem",
+  padding: "0.3rem 0.5rem",
+  transition: "border-color 0.12s",
   width: "100%",
 };
 
-const estLabel = {
-  borderRadius: "var(--fm-radius)",
-  cursor: "pointer",
+const labelStyle = {
+  color: "var(--fm-ink-mute)",
   flexShrink: 0,
   fontFamily: "var(--fm-mono)",
   fontSize: "0.6rem",
-  padding: "0.05rem 0.2rem",
+  letterSpacing: "0.08em",
+  minWidth: "4.5rem",
+  paddingTop: "0.35rem",
+  textTransform: "uppercase",
 };
 
-const estInput = {
+const segInputStyle = {
   background: "var(--fm-bg-sunk)",
-  border: "1px solid var(--fm-brass)",
+  border: "1px solid var(--fm-hairline2)",
   borderRadius: "var(--fm-radius)",
   color: "var(--fm-ink)",
-  flexShrink: 0,
   fontFamily: "var(--fm-mono)",
-  fontSize: "0.6rem",
+  fontSize: "0.82rem",
   outline: "none",
-  padding: "0.05rem 0.15rem",
-  textAlign: "right",
-  width: 42,
+  padding: "0.28rem 0",
+  textAlign: "center",
+  transition: "border-color 0.12s",
+  width: "2.5rem",
 };
 
-const kindTag = (kind) => ({
-  background: "var(--fm-bg-sunk)",
-  border: `1px solid ${KIND_META[kind].color}`,
-  borderRadius: "var(--fm-radius)",
-  color: KIND_META[kind].color,
-  flexShrink: 0,
-  fontFamily: "var(--fm-mono)",
-  fontSize: "0.52rem",
-  letterSpacing: "0.06em",
-  minWidth: 44,
-  padding: "0.1rem 0.35rem",
-  textAlign: "center",
-});
+// ── QueueRow ──────────────────────────────────────────────────────────────────
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+function QueueRow({ item, sessions, onMaintLog, onChoreLog, onTodoDone, onProjectOpen, onAddToSession }) {
+  const [hovered, setHovered] = useState(false);
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
+  const meta = TYPE_META[item.type];
+  const due  = dueLabel(item.days);
 
-export default function WorkbenchPage({ navigate, navState }) {
-  const chores             = useForemanStore(s => s.chores);
-  const inventory          = useForemanStore(s => s.inventory);
-  const spatialAssignments = useForemanStore(s => s.spatialAssignments);
-  const itemFieldValues    = useForemanStore(s => s.itemFieldValues);
-  const supplies           = useForemanStore(s => s.supplies);
-  const setSupplyState     = useForemanStore(s => s.setSupplyState);
-  const sessions           = useForemanStore(s => s.sessions);
-  const addSession         = useForemanStore(s => s.addSession);
-  const updateSession      = useForemanStore(s => s.updateSession);
-
-  const [tab, setTab] = useState(navState?.tab === "History" ? "History" : "Workbench");
-  const [screen, setScreen] = useState("builder"); // builder | runner | wrapup
-  const [sessionId, setSessionId] = useState(null);
-
-  const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
-
-  // ── Resume / Abandon an interrupted active session ───────────────────────────
-  const activeSession = useMemo(
-    () => Object.values(sessions || {}).find(s => s.status === "active" && s.id !== sessionId),
-    [sessions, sessionId]
-  );
-  const [resumeDismissed, setResumeDismissed] = useState(false);
-
-  function resumeActive() {
-    setSessionId(activeSession.id);
-    setScreen("runner");
-    setResumeDismissed(true);
-  }
-  function abandonActive() {
-    updateSession(activeSession.id, { status: "abandoned", endedAt: new Date().toISOString() });
-    setResumeDismissed(true);
-  }
-
-  // ── Builder state ─────────────────────────────────────────────────────────────
-  const [title, setTitle] = useState("Work session");
-  const [assignee, setAssignee] = useState("");
-  const [roomFilter, setRoomFilter] = useState("ALL");
-  const [catFilter, setCatFilter] = useState("ALL");
-  const [windowFilter, setWindowFilter] = useState("WEEK"); // OVERDUE | WEEK | MONTH
-  const [budget, setBudget] = useState(null); // minutes | null
-  const [selected, setSelected] = useState(() => new Set());
-
-  // Per-task estimate overrides (double-click a row's estimate to set one).
-  const [estOverrides, setEstOverrides] = useState(() => loadEstimateOverrides());
-  const [editingEstKey, setEditingEstKey] = useState(null);
-  const [editEstVal, setEditEstVal] = useState("");
-  const estBlurSkip = useRef(false);
-
-  const rawCandidates = useMemo(
-    () => buildSessionCandidates({ chores, inventory, spatialAssignments, now: today, todoWindowDays: 30 }),
-    [chores, inventory, spatialAssignments, today]
-  );
-
-  // Layer manual estimates on top so every consumer — selection total, budget
-  // readout, and the started session — sees the user's number, not the heuristic.
-  // Chores own their duration on the chore record (shared with the Chores page);
-  // it already flows into estMinutes via buildSessionCandidates, so we only flag
-  // it as set. Maintenance/to-dos use the separate per-session override map.
-  const candidates = useMemo(
-    () => rawCandidates.map(c => {
-      if (c.kind === "chore") {
-        return c.chore?.duration != null ? { ...c, estOverridden: true } : c;
-      }
-      const ov = estOverrides[candKey(c)];
-      return ov != null ? { ...c, estMinutes: ov, estOverridden: true } : c;
-    }),
-    [rawCandidates, estOverrides]
-  );
-
-  function startEditEst(c) {
-    estBlurSkip.current = false;
-    setEditEstVal(String(c.estMinutes ?? ""));
-    setEditingEstKey(candKey(c));
-  }
-  function commitEstEdit(c) {
-    if (estBlurSkip.current) { estBlurSkip.current = false; setEditingEstKey(null); return; }
-    const trimmed = editEstVal.trim();
-    const n = trimmed ? Math.round(Number(trimmed)) : NaN;
-    const valid = !isNaN(n) && n > 0;
-    if (c.kind === "chore") {
-      // Persist on the chore so the Chores page sees the same number; empty or
-      // invalid clears it → reverts to the heuristic.
-      const duration = valid ? n : null;
-      useForemanStore.getState().setChores(chores.map(x => x.id === c.ref ? { ...x, duration } : x));
-    } else {
-      const key = candKey(c);
-      if (!trimmed) setEstOverrides(clearEstimateOverride(key)); // empty → revert to the heuristic
-      else if (valid) setEstOverrides(setEstimateOverride(key, n));
-    }
-    estBlurSkip.current = true; // swallow the blur fired by unmounting the input
-    setEditingEstKey(null);
-  }
-  function cancelEstEdit() {
-    estBlurSkip.current = true;
-    setEditingEstKey(null);
-  }
-
-  const windowEnd = useMemo(() => {
-    const d = new Date(today);
-    if (windowFilter === "OVERDUE") return today;
-    d.setDate(d.getDate() + (windowFilter === "WEEK" ? 7 : 30));
-    return d;
-  }, [today, windowFilter]);
-
-  const visible = useMemo(() => candidates.filter(c => {
-    if (windowFilter === "OVERDUE" ? c.dueDate >= today : c.dueDate > windowEnd) return false;
-    if (roomFilter !== "ALL" && c.room !== roomFilter) return false;
-    if (catFilter !== "ALL" && c.category !== catFilter) return false;
-    return true;
-  }), [candidates, windowFilter, windowEnd, roomFilter, catFilter, today]);
-
-  const rooms = useMemo(() => [...new Set(candidates.map(c => c.room))].sort(), [candidates]);
-  const cats  = useMemo(() => [...new Set(candidates.map(c => c.category))].sort(), [candidates]);
-
-  // Seed from the Dashboard Triage: preselect overdue + due this week.
-  useEffect(() => {
-    if (navState?.seed !== "triage") return;
-    const wk = new Date(today); wk.setDate(wk.getDate() + 7);
-    setSelected(new Set(candidates.filter(c => c.dueDate <= wk).map(candKey)));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const selectedCands = useMemo(() => candidates.filter(c => selected.has(candKey(c))), [candidates, selected]);
-  const estTotal = selectedCands.reduce((s, c) => s + (c.estMinutes || 0), 0);
-
-  function toggleSel(c) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      const k = candKey(c);
-      next.has(k) ? next.delete(k) : next.add(k);
-      return next;
-    });
-  }
-
-  function startSession() {
-    if (selectedCands.length === 0) return;
-    const ordered = orderByRoom(selectedCands);
-    const items = ordered.map(c => createSessionItem({
-      kind: c.kind, ref: c.ref, choreDate: c.choreDate,
-      label: c.label, sublabel: c.sublabel, room: c.room, estMinutes: c.estMinutes,
-    }));
-    const session = createSession({ title: title.trim() || "Work session", assignee: assignee.trim(), items });
-    addSession(session);
-    setSessionId(session.id);
-    setIdx(0);
-    setScreen("runner");
-  }
-
-  // ── Runner state ──────────────────────────────────────────────────────────────
-  const session = sessionId ? sessions?.[sessionId] : null;
-  const [idx, setIdx] = useState(0);
-  const [note, setNote] = useState("");
-  const [useSupply, setUseSupply] = useState(true);
-  const [blockerOpen, setBlockerOpen] = useState(false);
-  const [blockerText, setBlockerText] = useState("");
-  const [elapsed, setElapsed] = useState(0);
-
-  // Live lookups the snapshots can't carry: maintenance row (schedule/season),
-  // chore object, last-completion notes. Rebuilt on session change (incl. resume).
-  const runtime = useMemo(() => {
-    if (!session) return {};
-    const rows = loadData();
-    const records = loadMaintenanceCompletionRecords();
-    const map = {};
-    session.items.forEach(si => {
-      if (si.kind === "maintenance") {
-        const row = rows.find(r => maintenanceKey(r) === si.ref) || null;
-        map[si.id] = { row, lastNote: records[si.ref]?.notes || "" };
-      } else if (si.kind === "chore") {
-        map[si.id] = { chore: chores.find(c => c.id === si.ref) || null };
-      } else {
-        map[si.id] = {};
-      }
-    });
-    return map;
-  }, [session?.id, chores]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // On resume, land on the first unresolved card.
-  useEffect(() => {
-    if (screen === "runner" && session) {
-      const first = session.items.findIndex(i => i.result === null);
-      setIdx(first === -1 ? Math.max(0, session.items.length - 1) : first);
-    }
-  }, [screen, session?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Elapsed timer.
-  useEffect(() => {
-    if (screen !== "runner" || !session?.startedAt) return;
-    const tick = () => setElapsed(Date.now() - new Date(session.startedAt).getTime());
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [screen, session?.startedAt]);
-
-  // Reset per-card state when the card changes.
-  useEffect(() => { setNote(""); setUseSupply(true); setBlockerOpen(false); setBlockerText(""); }, [idx, sessionId]);
-
-  const item = session?.items?.[idx] || null;
-  const rt = item ? (runtime[item.id] || {}) : {};
-
-  const supplyInfo = useMemo(() => {
-    if (!item || item.kind !== "maintenance" || !rt.row) return null;
-    return consumingTaskInfo(rt.row.category, rt.row.item, rt.row.task, supplies);
-  }, [item, rt.row, supplies]);
-
-  const spec = useMemo(() => {
-    if (!item || item.kind !== "maintenance" || !rt.row) return "";
-    const def = SUPPLY_CATALOG[rt.row.item];
-    if (!def || !item) return "";
-    const stableKey = rt.row._isCustom ? rt.row._id : `default:${rt.row.category}|${rt.row.item}`;
-    return composeSpec(def.specFields, itemFieldValues?.[stableKey]);
-  }, [item, rt.row, itemFieldValues]);
-
-  function patchItem(patch) {
-    const items = session.items.map(i => i.id === item.id ? { ...i, ...patch } : i);
-    updateSession(session.id, { items });
-    return items;
-  }
-
-  function advance(items) {
-    const next = items.findIndex((i, j) => j > idx && i.result === null);
-    if (next !== -1) { setIdx(next); return; }
-    const anyBefore = items.findIndex(i => i.result === null);
-    if (anyBefore !== -1) { setIdx(anyBefore); return; }
-    finishSession(items);
-  }
-
-  function finishSession(items) {
-    updateSession(session.id, {
-      items: (items || session.items).map(i => i.result === null ? { ...i, result: "skipped" } : i),
-      status: "done",
-      endedAt: new Date().toISOString(),
-    });
-    setScreen("wrapup");
-  }
-
-  // ── Completion write paths (mirror calendar-page.jsx:548-600) ─────────────────
-  function completeMaintenance(si, row, notes) {
-    const now = new Date();
-    const key = si.ref;
-    saveMaintenanceCompletionRecord(key, { completedAt: now.toISOString(), assignee: session.assignee, notes });
-    const dates = storageGet("maintenance-dates") ?? {};
-    storageSet("maintenance-dates", { ...dates, [key]: now.toISOString() });
-    if (row) {
-      const next = computeNextDate(now, row.schedule, row.season); // season-snapped
-      if (next) {
-        const nextDates = storageGet("maintenance-next-dates") ?? {};
-        storageSet("maintenance-next-dates", { ...nextDates, [key]: next.toISOString() });
-      }
-    }
-    if (supplyInfo && supplyInfo.qtyOnHand > 0 && useSupply) {
-      setSupplyState(supplyInfo.taskKey, { qtyOnHand: Math.max(0, supplyInfo.qtyOnHand - 1) });
-    }
-  }
-
-  function completeChore(si, chore, notes) {
-    const d = new Date(si.choreDate + "T00:00:00"); d.setHours(0, 0, 0, 0);
-    saveChoreCompletions(toggleChoreCompletion(loadChoreCompletions(), si.ref, d));
-    saveChoreCompletionRecord(si.ref, d, {
-      completedAt: new Date().toISOString(),
-      assignee: session.assignee,
-      room: chore?.room || si.room,
-      roomId: chore?.roomId || null,
-      item: chore?.item || "",
-      notes,
-    });
-    if (chore) {
-      const nextOcc = computeChoreNextDate(d, chore.schedule, chore.dayOfWeek, chore.timeOfDay);
-      saveChoreNextDates({ ...loadChoreNextDates(), [si.ref]: nextOcc.toISOString() });
-    }
-  }
-
-  function completeTodo(si) {
-    saveTodos(loadTodos().map(t => t.id === si.ref
-      ? { ...t, status: "done", completedDate: new Date().toISOString() }
-      : t));
-  }
-
-  function handleDone() {
-    const notes = note.trim();
-    if (item.kind === "maintenance") completeMaintenance(item, rt.row, notes);
-    else if (item.kind === "chore")  completeChore(item, rt.chore, notes);
-    else                             completeTodo(item);
-    advance(patchItem({ result: "done", resultNotes: notes, completedAt: new Date().toISOString() }));
-  }
-
-  function handleSkip() {
-    advance(patchItem({ result: "skipped" })); // no data writes — item stays due
-  }
-
-  function handleBlocked() {
-    const blocker = blockerText.trim();
-    let linkedCategory = null, linkedItem = null;
-    if (item.kind === "maintenance" && rt.row) { linkedCategory = rt.row.category; linkedItem = rt.row.item; }
-    const todo = createTodo({
-      title: `Blocked: ${item.label}`,
-      linkedCategory, linkedItem,
-      linkedRoom: item.room !== "General" ? item.room : null,
-    });
-    todo.description = blocker;
-    saveTodos([...loadTodos(), todo]);
-    advance(patchItem({ result: "blocked", resultNotes: blocker, spawnedTodoId: todo.id }));
-  }
-
-  // ── History ───────────────────────────────────────────────────────────────────
-  const doneSessions = useMemo(
-    () => Object.values(sessions || {})
-      .filter(s => s.status === "done")
-      .sort((a, b) => (b.endedAt || "").localeCompare(a.endedAt || "")),
+  const plannedSessions = useMemo(
+    () => Object.values(sessions).filter(s => s.status === "planned" || s.status === "in-progress").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)),
     [sessions]
   );
-  const [expandedHist, setExpandedHist] = useState(null);
 
-  function counts(s) {
-    const c = { done: 0, skipped: 0, blocked: 0 };
-    s.items.forEach(i => { if (c[i.result] !== undefined) c[i.result] += 1; });
-    return c;
+  let action;
+  if (item.type === "maintenance") {
+    action = <button onClick={e => { e.stopPropagation(); onMaintLog(); }} style={actionBtnStyle} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>Log</button>;
+  } else if (item.type === "chore") {
+    action = <button onClick={e => { e.stopPropagation(); onChoreLog(); }} style={actionBtnStyle} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>Log</button>;
+  } else if (item.type === "todo") {
+    action = <button onClick={e => { e.stopPropagation(); onTodoDone(); }} style={{ ...actionBtnStyle, borderColor: "var(--fm-green)55", color: "var(--fm-green)" }} onMouseEnter={e => e.currentTarget.style.background = "var(--fm-green)12"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>✓ Done</button>;
+  } else if (item.type === "project") {
+    action = <button onClick={e => { e.stopPropagation(); onProjectOpen(); }} style={actionBtnStyle} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>Open →</button>;
   }
 
-  function duration(s) {
-    if (!s.startedAt || !s.endedAt) return "—";
-    return fmtElapsed(new Date(s.endedAt) - new Date(s.startedAt));
-  }
-
-  function resetToBuilder() {
-    setSessionId(null);
-    setScreen("builder");
-    setSelected(new Set());
-    setTitle("Work session");
-  }
-
-  // ── Subnav stats ──────────────────────────────────────────────────────────────
-  const doneCount = session ? session.items.filter(i => i.result === "done").length : 0;
-  const stats = tab === "History"
-    ? [{ value: doneSessions.length, label: "sessions" }]
-    : screen === "runner" && session
-      ? [{ value: `${doneCount}/${session.items.length}`, label: "done", color: "var(--fm-green)" }, { value: fmtElapsed(elapsed), label: "elapsed", color: "var(--fm-brass)" }]
-      : [{ value: selectedCands.length, label: "selected" }, { value: fmtMinutes(estTotal), label: "est", color: "var(--fm-cyan)" }];
-
-  // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
-      <FmHeader active="Workbench" tagline="get more shit done" />
-      <FmSubnav tabs={["Workbench", "History"]} active={tab} onTabChange={setTab} stats={stats} />
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); setSessionPickerOpen(false); }}
+      style={{
+        alignItems: "center",
+        background: hovered ? "var(--fm-bg-panel)" : "transparent",
+        borderBottom: "1px solid var(--fm-hairline)",
+        borderLeft: `2px solid ${SEV_BAR_COLOR[item.severity]}`,
+        display: "flex",
+        gap: "0.65rem",
+        padding: "0.55rem 0.75rem 0.55rem 0.85rem",
+        position: "relative",
+        transition: "background 0.1s",
+      }}
+    >
+      {/* Type badge */}
+      <span style={{ background: meta.color + "18", border: `1px solid ${meta.color}44`, borderRadius: 2, color: meta.color, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.06em", minWidth: 36, padding: "2px 5px", textAlign: "center" }}>
+        {meta.label}
+      </span>
 
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        {tab === "Workbench" && (
-          <div style={{ margin: "0 auto", maxWidth: screen === "runner" ? 560 : 880, padding: "1.75rem 1.5rem" }}>
-
-            {/* Resume / abandon prompt for an interrupted session */}
-            {activeSession && !resumeDismissed && screen === "builder" && (
-              <div style={{ ...card, alignItems: "center", display: "flex", gap: "1rem", marginBottom: "1.25rem" }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", marginBottom: "0.2rem" }}>
-                    Session in progress: <span style={{ color: "var(--fm-brass)" }}>{activeSession.title}</span>
-                  </div>
-                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>
-                    {activeSession.items.filter(i => i.result !== null).length} of {activeSession.items.length} handled · started {fmtDateTime(activeSession.startedAt)}
-                  </div>
-                </div>
-                <button style={btnPrimary} onClick={resumeActive}>Resume</button>
-                <button style={btnGhost} onClick={abandonActive}>Abandon</button>
-              </div>
-            )}
-
-            {/* ── Builder ── */}
-            {screen === "builder" && (
-              <>
-                <div style={{ ...card, marginBottom: "1rem" }}>
-                  <div style={{ display: "flex", gap: "0.75rem", marginBottom: "0.85rem" }}>
-                    <div style={{ flex: 2 }}>
-                      <label style={{ ...sectionTitle, display: "block", marginBottom: "0.3rem" }}>Session title</label>
-                      <input style={fieldInput} value={title} onChange={e => setTitle(e.target.value)} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ ...sectionTitle, display: "block", marginBottom: "0.3rem" }}>Assignee</label>
-                      <AssigneeInput value={assignee} onChange={setAssignee} style={fieldInput} />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                    <FilterRow label="Window" labelWidth="56px">
-                      <FilterDropdown
-                        value={windowFilter}
-                        onChange={setWindowFilter}
-                        defaultValue="WEEK"
-                        options={[
-                          { value: "OVERDUE", label: "Overdue only" },
-                          { value: "WEEK", label: "Due this week" },
-                          { value: "MONTH", label: "Due this month" },
-                        ]}
-                      />
-                    </FilterRow>
-                    <FilterRow label="Room" labelWidth="56px" hidden={rooms.length === 0}>
-                      <FilterDropdown
-                        value={roomFilter}
-                        onChange={setRoomFilter}
-                        options={[{ value: "ALL", label: "All" }, ...rooms.map(r => ({ value: r, label: r }))]}
-                      />
-                    </FilterRow>
-                    <FilterRow label="System" labelWidth="56px" hidden={cats.length === 0}>
-                      <FilterDropdown
-                        value={catFilter}
-                        onChange={setCatFilter}
-                        options={[{ value: "ALL", label: "All" }, ...cats.map(c => ({ value: c, label: c }))]}
-                      />
-                    </FilterRow>
-                  </div>
-                </div>
-
-                {/* Candidate list */}
-                <div style={{ ...card, marginBottom: "1rem", padding: "0.75rem 1rem" }}>
-                  <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.35rem 0.5rem 0.6rem" }}>
-                    <span style={sectionTitle}>Due &amp; overdue ({visible.length})</span>
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
-                      <button style={{ ...btnGhost, fontSize: "0.6rem", padding: "0.2rem 0.55rem" }}
-                        onClick={() => setSelected(new Set(visible.map(candKey)))}>Select all</button>
-                      <button style={{ ...btnGhost, fontSize: "0.6rem", padding: "0.2rem 0.55rem" }}
-                        onClick={() => setSelected(new Set())}>Clear</button>
-                    </div>
-                  </div>
-
-                  {visible.length === 0 ? (
-                    <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.75rem 0.5rem" }}>
-                      Nothing due in this window — adjust the filters, or enjoy the afternoon.
-                    </div>
-                  ) : visible.map(c => {
-                    const isSel = selected.has(candKey(c));
-                    const due = dueLabel(c.dueDate, today);
-                    const sup = c.kind === "maintenance" && c.row ? consumingTaskInfo(c.row.category, c.row.item, c.row.task, supplies) : null;
-                    return (
-                      <div key={candKey(c)}
-                        onClick={() => toggleSel(c)}
-                        style={{ alignItems: "center", background: isSel ? "var(--fm-bg-raised)" : "transparent", borderBottom: "1px solid var(--fm-hairline)", borderRadius: "var(--fm-radius)", cursor: "pointer", display: "flex", gap: "0.65rem", padding: "0.5rem" }}>
-                        <input type="checkbox" readOnly checked={isSel} style={{ accentColor: "var(--fm-brass)", cursor: "pointer", flexShrink: 0 }} />
-                        <span style={kindTag(c.kind)}>{KIND_META[c.kind].label}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ color: "var(--fm-ink)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</div>
-                          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", marginTop: "0.1rem" }}>
-                            {c.room}
-                            {sup && sup.qtyOnHand === null && (
-                              <span> · {sup.name.toLowerCase()} untracked
-                                <button style={{ background: "none", border: "none", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", padding: "0 0 0 0.3rem", textDecoration: "underline" }}
-                                  onClick={e => { e.stopPropagation(); setSupplyState(sup.taskKey, { qtyOnHand: 0 }); }}>mark as out</button>
-                              </span>
-                            )}
-                            {sup && sup.qtyOnHand !== null && sup.qtyOnHand > 0 && <span style={{ color: "var(--fm-green)" }}> · {sup.name} · {sup.qtyOnHand} on hand</span>}
-                            {sup && sup.qtyOnHand === 0 && <span style={{ color: "var(--fm-red)" }}> · {sup.name} · out — on Shopping List</span>}
-                          </div>
-                        </div>
-                        {editingEstKey === candKey(c) ? (
-                          <input
-                            type="number" min="1" autoFocus
-                            value={editEstVal}
-                            onClick={e => e.stopPropagation()}
-                            onChange={e => setEditEstVal(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === "Enter") commitEstEdit(c);
-                              else if (e.key === "Escape") cancelEstEdit();
-                            }}
-                            onBlur={() => commitEstEdit(c)}
-                            style={estInput}
-                          />
-                        ) : (
-                          <span
-                            title="Double-click to edit estimate (clear to reset)"
-                            onClick={e => e.stopPropagation()}
-                            onDoubleClick={e => { e.stopPropagation(); startEditEst(c); }}
-                            style={{ ...estLabel, color: c.estOverridden ? "var(--fm-brass)" : "var(--fm-ink-mute)" }}
-                          >{fmtMinutes(c.estMinutes)}{c.estOverridden ? "*" : ""}</span>
-                        )}
-                        <span style={{ color: due.color, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", minWidth: 52, textAlign: "right" }}>{due.text}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Footer: budget + start */}
-                <div style={{ ...card, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-                  <span style={sectionTitle}>Budget</span>
-                  <FilterDropdown
-                    value={budget}
-                    onChange={setBudget}
-                    options={[
-                      { value: null, label: "Any" },
-                      { value: 30, label: "30m" },
-                      { value: 60, label: "1h" },
-                      { value: 120, label: "2h" },
-                      { value: 240, label: "Half day" },
-                    ]}
-                  />
-                  <div style={{ flex: 1 }} />
-                  <span style={{ color: budget && estTotal > budget ? "var(--fm-amber)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
-                    {selectedCands.length} item{selectedCands.length !== 1 ? "s" : ""} · ~{fmtMinutes(estTotal)}{budget ? ` / ${fmtMinutes(budget)}` : ""}
-                  </span>
-                  <button
-                    style={{ ...btnPrimary, fontSize: "0.8rem", opacity: selectedCands.length === 0 ? 0.4 : 1, padding: "0.55rem 1.4rem" }}
-                    disabled={selectedCands.length === 0}
-                    onClick={startSession}
-                  >Start session</button>
-                </div>
-              </>
-            )}
-
-            {/* ── Runner ── */}
-            {screen === "runner" && session && item && (
-              <>
-                {/* Progress rail */}
-                <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginBottom: "0.85rem" }}>
-                  <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.08em" }}>
-                    {idx + 1} of {session.items.length} · {item.room}
-                  </span>
-                  <div style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: 2, flex: 1, height: 5, overflow: "hidden" }}>
-                    <div style={{ background: "var(--fm-green)", height: "100%", transition: "width 0.25s", width: `${(session.items.filter(i => i.result !== null).length / session.items.length) * 100}%` }} />
-                  </div>
-                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem" }}>{fmtElapsed(elapsed)}</span>
-                </div>
-
-                {/* Card */}
-                <div style={{ ...card, padding: "1.5rem 1.6rem" }}>
-                  <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.5rem" }}>
-                    <span style={kindTag(item.kind)}>{KIND_META[item.kind].label}</span>
-                    <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>{item.room}</span>
-                    {item.result && (
-                      <span style={{ color: item.result === "done" ? "var(--fm-green)" : item.result === "blocked" ? "var(--fm-amber)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", textTransform: "uppercase" }}>{item.result}</span>
-                    )}
-                  </div>
-
-                  <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.3rem", marginBottom: "0.25rem" }}>{item.label}</div>
-                  <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", marginBottom: "0.85rem" }}>{item.sublabel}</div>
-
-                  {spec && (
-                    <div style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline)", borderRadius: "var(--fm-radius)", color: "var(--fm-cyan)", display: "inline-block", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", marginBottom: "0.85rem", padding: "0.3rem 0.6rem" }}>
-                      {spec}
-                    </div>
-                  )}
-
-                  {rt.lastNote && (
-                    <div style={{ borderLeft: "2px solid var(--fm-hairline2)", color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.75rem", fontStyle: "italic", marginBottom: "0.85rem", paddingLeft: "0.7rem" }}>
-                      Last time: “{rt.lastNote}”
-                    </div>
-                  )}
-
-                  <input
-                    style={{ ...fieldInput, marginBottom: "0.85rem" }}
-                    placeholder="Quick note (optional)…"
-                    value={note}
-                    onChange={e => setNote(e.target.value)}
-                  />
-
-                  {supplyInfo && supplyInfo.qtyOnHand > 0 && (
-                    <label style={{ alignItems: "center", color: "var(--fm-ink-dim)", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", gap: "0.45rem", marginBottom: "0.85rem" }}>
-                      <input type="checkbox" checked={useSupply} onChange={e => setUseSupply(e.target.checked)} style={{ accentColor: "var(--fm-green)" }} />
-                      Use one from supplies ({supplyInfo.name} · {supplyInfo.qtyOnHand} on hand)
-                    </label>
-                  )}
-                  {supplyInfo && supplyInfo.qtyOnHand === 0 && (
-                    <div style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginBottom: "0.85rem" }}>
-                      {supplyInfo.name} is out of stock — it's on the Shopping List.
-                    </div>
-                  )}
-
-                  {!blockerOpen ? (
-                    <div style={{ display: "flex", gap: "0.6rem" }}>
-                      <button onClick={handleDone}
-                        style={{ background: "rgba(127,176,135,0.12)", border: "1px solid var(--fm-green)", borderRadius: "var(--fm-radius)", color: "var(--fm-green)", cursor: "pointer", flex: 2, fontFamily: "var(--fm-mono)", fontSize: "0.85rem", letterSpacing: "0.06em", padding: "0.75rem" }}>
-                        ✓ Done
-                      </button>
-                      <button onClick={handleSkip} style={{ ...btnGhost, flex: 1, fontSize: "0.78rem", padding: "0.75rem" }}>Skip</button>
-                      <button onClick={() => setBlockerOpen(true)}
-                        style={{ background: "transparent", border: "1px solid var(--fm-amber)", borderRadius: "var(--fm-radius)", color: "var(--fm-amber)", cursor: "pointer", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.78rem", padding: "0.75rem" }}>
-                        Can't
-                      </button>
-                    </div>
-                  ) : (
-                    <div>
-                      <input autoFocus style={{ ...fieldInput, marginBottom: "0.6rem" }} placeholder="What's blocking?"
-                        value={blockerText} onChange={e => setBlockerText(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Enter") handleBlocked(); if (e.key === "Escape") setBlockerOpen(false); }} />
-                      <div style={{ display: "flex", gap: "0.6rem" }}>
-                        <button onClick={handleBlocked} style={{ ...btnPrimary, flex: 1 }}>Log blocker → To Do</button>
-                        <button onClick={() => setBlockerOpen(false)} style={btnGhost}>Back</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Card nav + end */}
-                <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginTop: "0.85rem" }}>
-                  <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <button style={{ ...btnGhost, opacity: idx === 0 ? 0.35 : 1 }} disabled={idx === 0} onClick={() => setIdx(idx - 1)}>← Prev</button>
-                    <button style={{ ...btnGhost, opacity: idx >= session.items.length - 1 ? 0.35 : 1 }} disabled={idx >= session.items.length - 1} onClick={() => setIdx(idx + 1)}>Next →</button>
-                  </div>
-                  <button style={{ ...btnGhost, color: "var(--fm-ink-mute)" }} onClick={() => finishSession()}>End session</button>
-                </div>
-              </>
-            )}
-
-            {/* ── Wrap-up ── */}
-            {screen === "wrapup" && session && (() => {
-              const c = counts(session);
-              const spawned = session.items.filter(i => i.spawnedTodoId);
-              return (
-                <>
-                  <div style={{ ...card, marginBottom: "1rem", textAlign: "center" }}>
-                    <div style={{ ...sectionTitle, marginBottom: "0.5rem" }}>Session complete</div>
-                    <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.5rem", marginBottom: "0.35rem" }}>{session.title}</div>
-                    <div style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>
-                      <span style={{ color: "var(--fm-green)" }}>{c.done} done</span>
-                      <span style={{ color: "var(--fm-ink-mute)" }}> · {c.skipped} skipped · </span>
-                      <span style={{ color: "var(--fm-amber)" }}>{c.blocked} blocked</span>
-                      <span style={{ color: "var(--fm-ink-mute)" }}> · {duration(session)}</span>
-                    </div>
-                  </div>
-
-                  <div style={{ ...card, marginBottom: "1rem", padding: "0.75rem 1rem" }}>
-                    {session.items.map(i => (
-                      <div key={i.id} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.65rem", padding: "0.45rem 0.4rem" }}>
-                        <span style={{ color: i.result === "done" ? "var(--fm-green)" : i.result === "blocked" ? "var(--fm-amber)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", width: 16 }}>
-                          {i.result === "done" ? "✓" : i.result === "blocked" ? "⚑" : "—"}
-                        </span>
-                        <span style={kindTag(i.kind)}>{KIND_META[i.kind].label}</span>
-                        <span style={{ color: "var(--fm-ink)", flex: 1, fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.label}</span>
-                        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{i.room}</span>
-                      </div>
-                    ))}
-                    {spawned.length > 0 && (
-                      <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.6rem 0.4rem 0.2rem" }}>
-                        {spawned.length} blocker to-do{spawned.length !== 1 ? "s" : ""} created —{" "}
-                        <button style={{ background: "none", border: "none", color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: 0, textDecoration: "underline" }}
-                          onClick={() => navigate("board")}>view on the board</button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: "flex", gap: "0.6rem", justifyContent: "center" }}>
-                    <button style={btnPrimary} onClick={() => { setTab("History"); resetToBuilder(); }}>Done</button>
-                    <button style={btnGhost} onClick={resetToBuilder}>Plan another</button>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* ── History tab ── */}
-        {tab === "History" && (
-          <div style={{ margin: "0 auto", maxWidth: 880, padding: "1.75rem 1.5rem" }}>
-            {doneSessions.length === 0 ? (
-              <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>
-                No completed sessions yet. Plan one on the Workbench tab and knock out the list.
-              </p>
-            ) : doneSessions.map(s => {
-              const c = counts(s);
-              const isExp = expandedHist === s.id;
-              return (
-                <div key={s.id} style={{ ...card, cursor: "pointer", marginBottom: "0.75rem", padding: "1rem 1.25rem" }}
-                  onClick={() => setExpandedHist(isExp ? null : s.id)}>
-                  <div style={{ alignItems: "center", display: "flex", gap: "0.85rem" }}>
-                    <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}>{isExp ? "▾" : "▸"}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ color: "var(--fm-ink)", fontSize: "0.85rem" }}>{s.title}</div>
-                      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginTop: "0.15rem" }}>
-                        {fmtDateTime(s.endedAt)}{s.assignee ? ` · ${s.assignee}` : ""} · {duration(s)}
-                      </div>
-                    </div>
-                    <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.68rem", whiteSpace: "nowrap" }}>
-                      <span style={{ color: "var(--fm-green)" }}>{c.done}✓</span>
-                      <span style={{ color: "var(--fm-ink-mute)" }}> {c.skipped}—</span>
-                      <span style={{ color: "var(--fm-amber)" }}> {c.blocked}⚑</span>
-                    </span>
-                  </div>
-                  {isExp && (
-                    <div style={{ borderTop: "1px solid var(--fm-hairline)", marginTop: "0.75rem", paddingTop: "0.5rem" }}>
-                      {s.items.map(i => (
-                        <div key={i.id} style={{ alignItems: "center", display: "flex", gap: "0.6rem", padding: "0.3rem 0" }}>
-                          <span style={{ color: i.result === "done" ? "var(--fm-green)" : i.result === "blocked" ? "var(--fm-amber)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", width: 14 }}>
-                            {i.result === "done" ? "✓" : i.result === "blocked" ? "⚑" : "—"}
-                          </span>
-                          <span style={kindTag(i.kind)}>{KIND_META[i.kind].label}</span>
-                          <span style={{ color: "var(--fm-ink-dim)", flex: 1, fontSize: "0.75rem" }}>{i.label}</span>
-                          {i.resultNotes && <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", fontStyle: "italic", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>“{i.resultNotes}”</span>}
-                          <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>{i.room}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+      {/* Title + sub */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {item.title}
+        </div>
+        {(item.sub || (item.room && item.room !== "General")) && (
+          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginTop: "0.08rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {[item.sub, item.room && item.room !== "General" ? item.room : null].filter(Boolean).join(" · ")}
           </div>
         )}
       </div>
+
+      {/* Due label */}
+      <span style={{ color: due.color, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", minWidth: 60, textAlign: "right" }}>
+        {due.text}
+      </span>
+
+      {/* Add to session */}
+      {hovered && plannedSessions.length > 0 && (
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={e => { e.stopPropagation(); setSessionPickerOpen(o => !o); }}
+            style={{ ...actionBtnStyle, color: "var(--fm-brass-dim)", borderColor: "var(--fm-brass)44" }}
+            title="Add to session"
+          >
+            + Session
+          </button>
+          {sessionPickerOpen && (
+            <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline2)", borderRadius: 4, boxShadow: "0 6px 20px #00000055", display: "flex", flexDirection: "column", gap: 1, minWidth: 180, padding: 4, position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 50 }}>
+              {plannedSessions.map(s => (
+                <button
+                  key={s.id}
+                  onClick={e => { e.stopPropagation(); onAddToSession(s.id, item); setSessionPickerOpen(false); }}
+                  style={{ background: "transparent", border: "none", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.4rem 0.6rem", textAlign: "left" }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "var(--fm-bg-panel)"; e.currentTarget.style.color = "var(--fm-ink)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+                >
+                  {s.title || "Untitled Session"}
+                  {s.date && <span style={{ color: "var(--fm-ink-mute)", marginLeft: "0.4rem" }}>{fmtDate(s.date)}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Primary action */}
+      {action}
+    </div>
+  );
+}
+
+// ── NewSessionModal ───────────────────────────────────────────────────────────
+
+function NewSessionModal({ onSave, onClose }) {
+  const [title, setTitle] = useState("Work Session");
+  const [date, setDate]   = useState("");
+  const [startHH, setStartHH] = useState("");
+  const [startMM, setStartMM] = useState("");
+  const [endHH,   setEndHH]   = useState("");
+  const [endMM,   setEndMM]   = useState("");
+  const [notes,   setNotes]   = useState("");
+  const [assignees, setAssignees] = useState("");
+
+  const startMMRef = useState(null);
+  const endHHRef   = useState(null);
+  const endMMRef   = useState(null);
+
+  function handleSave() {
+    const timeBlock = (startHH || startMM || endHH || endMM) ? {
+      start: (startHH || endHH) ? `${(startHH || "0").padStart(2,"0")}:${(startMM || "0").padStart(2,"0")}` : null,
+      end:   (endHH || endMM)   ? `${(endHH   || "0").padStart(2,"0")}:${(endMM   || "0").padStart(2,"0")}` : null,
+    } : null;
+    onSave({
+      title:     title.trim() || "Work Session",
+      date:      date || null,
+      timeBlock: timeBlock?.start || timeBlock?.end ? timeBlock : null,
+      assignees: assignees.split(",").map(a => a.trim()).filter(Boolean),
+      notes:     notes.trim(),
+    });
+  }
+
+  function onDigit(val, setVal, nextRef, max) {
+    const v = val.replace(/\D/g, "").slice(0, 2);
+    if (v.length === 2 && parseInt(v, 10) > max) return max === 59 ? "59" : v.slice(0, 1);
+    setVal(v);
+    if (v.length === 2 && nextRef?.[0]) nextRef[0].focus?.();
+    return v;
+  }
+
+  const fieldRow = (label, children) => (
+    <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", marginBottom: "0.65rem" }}>
+      <span style={labelStyle}>{label}</span>
+      <div style={{ flex: 1 }}>{children}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300 }}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: 6, maxWidth: 420, padding: "1.75rem 2rem", width: "90%" }}>
+        <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.14em", marginBottom: "1rem", textTransform: "uppercase" }}>New Work Session</div>
+
+        {fieldRow("Title",
+          <input type="text" value={title} onChange={e => setTitle(e.target.value)} style={inputStyle}
+            onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+            onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+        )}
+        {fieldRow("Date",
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle}
+            onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+            onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+        )}
+        {fieldRow("Time block",
+          <div style={{ alignItems: "center", display: "flex", gap: "0.35rem" }}>
+            <input type="text" inputMode="numeric" value={startHH} placeholder="HH" maxLength={2} style={segInputStyle}
+              onChange={e => { const v = e.target.value.replace(/\D/g,"").slice(0,2); setStartHH(v); if(v.length===2 && startMMRef[0]) startMMRef[0].focus?.(); }}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)" }}>:</span>
+            <input ref={el => startMMRef[0] = el} type="text" inputMode="numeric" value={startMM} placeholder="MM" maxLength={2} style={segInputStyle}
+              onChange={e => { let v = e.target.value.replace(/\D/g,"").slice(0,2); if(v.length===2&&parseInt(v)>59)v="59"; setStartMM(v); if(v.length===2&&endHHRef[0]) endHHRef[0].focus?.(); }}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", margin: "0 0.2rem" }}>–</span>
+            <input ref={el => endHHRef[0] = el} type="text" inputMode="numeric" value={endHH} placeholder="HH" maxLength={2} style={segInputStyle}
+              onChange={e => { const v = e.target.value.replace(/\D/g,"").slice(0,2); setEndHH(v); if(v.length===2&&endMMRef[0]) endMMRef[0].focus?.(); }}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)" }}>:</span>
+            <input ref={el => endMMRef[0] = el} type="text" inputMode="numeric" value={endMM} placeholder="MM" maxLength={2} style={segInputStyle}
+              onChange={e => { let v = e.target.value.replace(/\D/g,"").slice(0,2); if(v.length===2&&parseInt(v)>59)v="59"; setEndMM(v); }}
+              onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+              onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+            <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "0.25rem" }}>optional</span>
+          </div>
+        )}
+        {fieldRow("Assignees",
+          <input type="text" value={assignees} onChange={e => setAssignees(e.target.value)} placeholder="Spencer, Alex…" style={inputStyle}
+            onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+            onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+        )}
+        {fieldRow("Notes",
+          <input type="text" value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle}
+            onFocus={e => e.currentTarget.style.borderColor = "var(--fm-brass)"}
+            onBlur={e => e.currentTarget.style.borderColor = "var(--fm-hairline2)"} />
+        )}
+
+        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.25rem" }}>
+          <button onClick={onClose} style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.4rem 1rem" }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fm-ink)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>Cancel</button>
+          <button onClick={handleSave} style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: 3, color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.4rem 1.25rem" }}
+            onMouseEnter={e => e.currentTarget.style.background = "var(--fm-brass)22"}
+            onMouseLeave={e => e.currentTarget.style.background = "var(--fm-brass-bg)"}>Create Session</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SessionCard ───────────────────────────────────────────────────────────────
+
+function SessionCard({ session, onStart, onComplete, onDelete }) {
+  const [hovered, setHovered] = useState(false);
+  const sm = STATUS_META[session.status] || STATUS_META.planned;
+  const tb = fmtTimeBlock(session.timeBlock);
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: hovered ? "var(--fm-bg-raised)" : "var(--fm-bg-sunk)",
+        border: "1px solid var(--fm-hairline)",
+        borderRadius: "var(--fm-radius-lg)",
+        marginBottom: "0.5rem",
+        padding: "0.75rem 0.85rem",
+        transition: "background 0.12s",
+      }}
+    >
+      {/* Title row */}
+      <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>
+        <div style={{ color: "var(--fm-ink)", flex: 1, fontFamily: "var(--fm-serif)", fontSize: "0.88rem" }}>
+          {session.title || "Untitled Session"}
+        </div>
+        <span style={{ background: sm.color + "18", border: `1px solid ${sm.color}44`, borderRadius: 2, color: sm.color, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.06em", padding: "2px 6px" }}>
+          {sm.label}
+        </span>
+      </div>
+
+      {/* Meta row */}
+      <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginBottom: "0.5rem" }}>
+        {[
+          session.date && fmtDate(session.date),
+          tb,
+          session.estimatedDuration ? fmtMinutes(session.estimatedDuration) + " est." : null,
+          session.items?.length ? `${session.items.length} item${session.items.length !== 1 ? "s" : ""}` : "No items",
+        ].filter(Boolean).join(" · ")}
+      </div>
+
+      {/* Item list */}
+      {session.items?.length > 0 && (
+        <div style={{ borderTop: "1px solid var(--fm-hairline)", marginBottom: "0.5rem", paddingTop: "0.4rem" }}>
+          {session.items.slice(0, 4).map(item => (
+            <div key={item.id} style={{ alignItems: "center", color: item.result === "done" ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", gap: "0.4rem", padding: "0.12rem 0", textDecoration: item.result === "done" ? "line-through" : "none" }}>
+              <span style={{ color: item.result === "done" ? "var(--fm-green)" : "var(--fm-hairline2)" }}>
+                {item.result === "done" ? "✓" : "○"}
+              </span>
+              {item.label}
+            </div>
+          ))}
+          {session.items.length > 4 && (
+            <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", paddingTop: "0.1rem" }}>+{session.items.length - 4} more</div>
+          )}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: "0.4rem" }}>
+        {session.status === "planned" && (
+          <button onClick={onStart} style={{ ...actionBtnStyle, color: "var(--fm-amber)", borderColor: "var(--fm-amber)55" }}
+            onMouseEnter={e => e.currentTarget.style.background = "var(--fm-amber)12"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>Start</button>
+        )}
+        {session.status === "in-progress" && (
+          <button onClick={onComplete} style={{ ...actionBtnStyle, color: "var(--fm-green)", borderColor: "var(--fm-green)55" }}
+            onMouseEnter={e => e.currentTarget.style.background = "var(--fm-green)12"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>Complete</button>
+        )}
+        <div style={{ flex: 1 }} />
+        {hovered && (
+          <button onClick={onDelete} style={{ ...actionBtnStyle, color: "var(--fm-red-dim, #7a2020)", borderColor: "transparent" }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fm-red-dim, #7a2020)"}>Remove</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+export default function WorkbenchPage({ navigate, navState }) {
+  const chores          = useForemanStore(s => s.chores);
+  const projects        = useForemanStore(s => s.projects);
+  const inventory       = useForemanStore(s => s.inventory);
+  const spatialAssignments = useForemanStore(s => s.spatialAssignments);
+
+  const [activeTab,    setActiveTab]    = useState("Queue");
+  const [typeFilter,   setTypeFilter]   = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+
+  const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
+  const [choreNextDates,   setChoreNextDates]   = useState(() => loadChoreNextDates());
+  const [nextDatesMap,     setNextDatesMap]     = useState(() => storageGet("maintenance-next-dates") ?? {});
+  const [todos,            setTodos]            = useState(() => loadTodos());
+
+  // Sessions state
+  const [sessionsMap, setSessionsMap] = useState(() => {
+    const raw = loadSessions();
+    const migrated = {};
+    Object.values(raw).forEach(s => { const m = migrateSessionShape(s); migrated[m.id] = m; });
+    return migrated;
+  });
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+
+  const [completingMaint, setCompletingMaint] = useState(null);
+  const [completingChore, setCompletingChore] = useState(null);
+
+  const rows              = useMemo(() => loadData(), []);
+  const deletedCategories = useMemo(() => loadDeletedCategories(), []);
+  const deletedItems      = useMemo(() => loadDeletedItems(), []);
+  const rooms             = useMemo(() => loadRooms(), []);
+
+  const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+
+  const roomItemsMap = useMemo(() => {
+    const map = {};
+    Object.values(rooms).forEach(r => { map[r.label] = []; });
+    return map;
+  }, [rooms]);
+
+  // ── Unified queue ──────────────────────────────────────────────────────────
+
+  const allItems = useMemo(() => {
+    const items = [];
+
+    rows.forEach(row => {
+      if (row._isBlankCategory || !row.category || !row.item || !row.task) return;
+      if (deletedCategories.has(row.category)) return;
+      if (deletedItems.has(`${row.category}|${row.item}`)) return;
+      if (getEffectiveRowState(inventory, row) !== "included") return;
+      const key = maintenanceKey(row);
+      const d = nextDatesMap[key];
+      if (!d) return;
+      const due = new Date(d);
+      if (isNaN(due)) return;
+      const days = Math.round((due - today) / 86400000);
+      const stableKey = getItemStableKey(row);
+      const spatial = spatialAssignments[stableKey] || {};
+      items.push({
+        type: "maintenance", id: key, key,
+        title: row.task,
+        sub:   `${row.category} · ${row.item}`,
+        room:  spatial.roomLabel || spatial.exteriorLabel || "General",
+        due, days,
+        severity: days < 0 ? "overdue" : days <= 7 ? "soon" : "upcoming",
+        row,
+      });
+    });
+
+    chores.forEach(c => {
+      const d = choreNextDates[c.id];
+      const due  = d ? new Date(d) : null;
+      const days = due ? Math.round((due - today) / 86400000) : null;
+      items.push({
+        type: "chore", id: c.id,
+        title: c.title,
+        sub:   c.item || c.room || "Chore",
+        room:  c.room || "General",
+        due, days,
+        severity: days === null ? "none" : days < 0 ? "overdue" : days <= 7 ? "soon" : "upcoming",
+        chore: c,
+      });
+    });
+
+    todos.filter(t => t.status !== "done").forEach(t => {
+      const due  = t.dueDate ? new Date(t.dueDate + "T00:00:00") : null;
+      const days = due ? Math.round((due - today) / 86400000) : null;
+      items.push({
+        type: "todo", id: t.id,
+        title: t.title,
+        sub:   t.linkedItem || t.linkedCategory || "To Do",
+        room:  t.linkedRoom || t.linkedExterior || "General",
+        due, days,
+        severity: days === null ? "none" : days < 0 ? "overdue" : days <= 7 ? "soon" : "upcoming",
+        todo: t,
+      });
+    });
+
+    (Array.isArray(projects) ? projects : []).filter(p => p.status !== "done" && p.status !== "complete").forEach(p => {
+      const dateStr = p.dueDate || p.targetDate;
+      const due  = dateStr ? new Date(dateStr + "T00:00:00") : null;
+      const days = due ? Math.round((due - today) / 86400000) : null;
+      items.push({
+        type: "project", id: p.id,
+        title: p.name || p.title || "Untitled Project",
+        sub:   p.linkedCategory || p.category || "Project",
+        room:  p.linkedRoom || "General",
+        due, days,
+        severity: days === null ? "none" : days < 0 ? "overdue" : days <= 7 ? "soon" : "upcoming",
+        project: p,
+      });
+    });
+
+    const s = SEV_ORDER;
+    return items.sort((a, b) => {
+      const sd = s[a.severity] - s[b.severity];
+      if (sd !== 0) return sd;
+      if (a.due && b.due) return a.due - b.due;
+      if (a.due) return -1; if (b.due) return 1;
+      return 0;
+    });
+  }, [rows, chores, todos, projects, deletedCategories, deletedItems, inventory, spatialAssignments, choreNextDates, nextDatesMap, today]);
+
+  const filteredItems = useMemo(() => allItems.filter(item => {
+    if (typeFilter !== "All" && item.type !== TYPE_FILTER_KEYS[typeFilter]) return false;
+    if (statusFilter !== "All" && item.severity !== STATUS_FILTER_KEYS[statusFilter]) return false;
+    return true;
+  }), [allItems, typeFilter, statusFilter]);
+
+  const counts = useMemo(() => {
+    const c = { All: allItems.length, Maintenance: 0, Chores: 0, "To Dos": 0, Projects: 0 };
+    allItems.forEach(i => { if (i.type === "maintenance") c.Maintenance++; else if (i.type === "chore") c.Chores++; else if (i.type === "todo") c["To Dos"]++; else if (i.type === "project") c.Projects++; });
+    return c;
+  }, [allItems]);
+
+  const overdueCnt = useMemo(() => allItems.filter(i => i.severity === "overdue").length, [allItems]);
+  const soonCnt    = useMemo(() => allItems.filter(i => i.severity === "soon").length,    [allItems]);
+
+  // ── Session helpers ────────────────────────────────────────────────────────
+
+  const upcomingSessions = useMemo(
+    () => Object.values(sessionsMap).filter(s => s.status === "planned" || s.status === "in-progress").sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)),
+    [sessionsMap]
+  );
+
+  const completedSessions = useMemo(
+    () => Object.values(sessionsMap).filter(s => s.status === "complete").sort((a, b) => new Date(b.completedAt ?? b.endedAt ?? 0) - new Date(a.completedAt ?? a.endedAt ?? 0)),
+    [sessionsMap]
+  );
+
+  function persistSessions(map) { setSessionsMap(map); saveSessions(map); }
+
+  function handleCreateSession(fields) {
+    const session = createWorkSession(fields);
+    const next = { ...sessionsMap, [session.id]: session };
+    persistSessions(next);
+    setNewSessionOpen(false);
+  }
+
+  function handleStartSession(id) {
+    persistSessions(startSession(id));
+  }
+
+  function handleCompleteSession(id) {
+    persistSessions(completeSession(id));
+  }
+
+  function handleDeleteSession(id) {
+    const next = { ...sessionsMap };
+    delete next[id];
+    persistSessions(next);
+  }
+
+  function handleAddToSession(sessionId, item) {
+    const si = createSessionItem({
+      kind:       item.type,
+      ref:        item.key || item.id,
+      choreDate:  item.type === "chore" ? item.due?.toISOString().slice(0, 10) : null,
+      label:      item.title,
+      sublabel:   item.sub || "",
+      room:       item.room || "General",
+      estMinutes: item.type === "maintenance" ? 20 : item.type === "chore" ? (item.chore?.duration ?? 15) : 15,
+    });
+    persistSessions(addItemToSession(sessionId, si));
+  }
+
+  // ── Completion handlers ────────────────────────────────────────────────────
+
+  function handleMaintDone(form) {
+    const { key, row } = completingMaint;
+    saveMaintenanceCompletionRecord(key, form);
+    if (form.nextDate) {
+      const updated = { ...nextDatesMap, [key]: new Date(form.nextDate + "T12:00:00").toISOString() };
+      storageSet("maintenance-next-dates", updated);
+      setNextDatesMap(updated);
+    } else if (form.completedAt && (form.schedule || row.schedule)) {
+      const next = computeNextDate(new Date(form.completedAt + "T12:00:00"), form.schedule || row.schedule, form.season ?? row.season ?? null);
+      if (next) {
+        const updated = { ...nextDatesMap, [key]: next.toISOString() };
+        storageSet("maintenance-next-dates", updated);
+        setNextDatesMap(updated);
+      }
+    }
+    setCompletingMaint(null);
+  }
+
+  function handleChoreMarkDone(details) {
+    const { chore, date } = completingChore;
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
+    const updatedCompletions = toggleChoreCompletion(choreCompletions, chore.id, d);
+    saveChoreCompletions(updatedCompletions);
+    setChoreCompletions(updatedCompletions);
+    saveChoreCompletionRecord(chore.id, d, details);
+    const nextOcc = computeChoreNextDate(d, chore.schedule, chore.dayOfWeek, chore.timeOfDay);
+    const updated = { ...choreNextDates, [chore.id]: nextOcc.toISOString() };
+    saveChoreNextDates(updated);
+    setChoreNextDates(updated);
+    setCompletingChore(null);
+  }
+
+  function handleTodoDone(item) {
+    const updated = todos.map(t => t.id === item.id ? { ...t, status: "done", completedAt: new Date().toISOString() } : t);
+    saveTodos(updated);
+    setTodos(updated);
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+      <FmHeader active="Workbench" tagline="Workbench" />
+
+      <FmSubnav
+        tabs={TABS}
+        active={activeTab}
+        onTabChange={setActiveTab}
+        stats={[
+          { value: overdueCnt, label: "overdue",  color: overdueCnt > 0 ? "var(--fm-red)"   : "var(--fm-green)" },
+          { value: soonCnt,    label: "due soon", color: soonCnt    > 0 ? "var(--fm-amber)" : "var(--fm-ink)"   },
+          { value: allItems.length, label: "total" },
+        ]}
+      />
+
+      {/* ── Queue tab ── */}
+      {activeTab === "Queue" && (
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+
+          {/* Work Queue */}
+          <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflowY: "auto", padding: "1.25rem 1.5rem 3rem" }}>
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "1rem" }}>
+              {["All", "Maintenance", "Chores", "To Dos", "Projects"].map(t => (
+                <button key={t} onClick={() => setTypeFilter(t)} style={pillStyle(typeFilter === t)}>
+                  {t}{counts[t] !== undefined ? ` · ${counts[t]}` : ""}
+                </button>
+              ))}
+              <span style={{ background: "var(--fm-hairline)", height: 14, margin: "0 0.15rem", width: 1 }} />
+              {["All", "Overdue", "Due Soon", "Upcoming", "No Date"].map(s => (
+                <button key={s} onClick={() => setStatusFilter(s)} style={statusPillStyle(statusFilter === s)}>{s}</button>
+              ))}
+            </div>
+
+            {filteredItems.length === 0 ? (
+              <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", paddingTop: "4rem", textAlign: "center" }}>
+                {allItems.length === 0 ? "Nothing due. You're all caught up." : "No items match this filter."}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {filteredItems.map(item => (
+                  <QueueRow
+                    key={`${item.type}-${item.id}`}
+                    item={item}
+                    sessions={sessionsMap}
+                    onMaintLog={() => setCompletingMaint({ row: item.row, key: item.key, nextDue: item.due })}
+                    onChoreLog={() => setCompletingChore({ chore: item.chore, date: item.due || today })}
+                    onTodoDone={() => handleTodoDone(item)}
+                    onProjectOpen={() => navigate("Projects", { projectId: item.id })}
+                    onAddToSession={handleAddToSession}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Session Planner */}
+          <div style={{ background: "var(--fm-bg-panel)", borderLeft: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflowY: "auto", padding: "1.25rem 1.25rem 2rem", width: "28%" }}>
+            <div style={{ alignItems: "center", display: "flex", marginBottom: "0.85rem" }}>
+              <div style={{ color: "var(--fm-brass-dim)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>Work Sessions</div>
+              <button
+                onClick={() => setNewSessionOpen(true)}
+                style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.06em", padding: "0.2rem 0.6rem" }}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--fm-brass)22"}
+                onMouseLeave={e => e.currentTarget.style.background = "var(--fm-brass-bg)"}
+              >+ New</button>
+            </div>
+
+            {upcomingSessions.length === 0 ? (
+              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", lineHeight: 1.55 }}>
+                No sessions planned yet. Create a session, then add items from the queue using the "+ Session" button on any row.
+              </div>
+            ) : (
+              upcomingSessions.map(s => (
+                <SessionCard
+                  key={s.id}
+                  session={s}
+                  onStart={() => handleStartSession(s.id)}
+                  onComplete={() => handleCompleteSession(s.id)}
+                  onDelete={() => handleDeleteSession(s.id)}
+                />
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── History tab ── */}
+      {activeTab === "History" && (
+        <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem 3rem" }}>
+          {completedSessions.length === 0 ? (
+            <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
+              No completed sessions yet. Complete a work session to start your history.
+            </p>
+          ) : (
+            <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <thead>
+                <tr>
+                  {["Date", "Session", "Items", "Est. Time", "Actual Time", "Assignees"].map(h => (
+                    <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {completedSessions.map(s => {
+                  const doneCount = (s.items ?? []).filter(i => i.result === "done").length;
+                  return (
+                    <tr key={s.id} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
+                      <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{fmtDate(s.completedAt || s.endedAt)}</td>
+                      <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{s.title || "Untitled Session"}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{doneCount} / {(s.items ?? []).length}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{fmtMinutes(s.estimatedDuration)}</td>
+                      <td style={{ color: s.actualDuration ? "var(--fm-ink)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{fmtMinutes(s.actualDuration)}</td>
+                      <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{(s.assignees ?? []).join(", ") || s.assignee || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ── Modals ── */}
+      {newSessionOpen && <NewSessionModal onSave={handleCreateSession} onClose={() => setNewSessionOpen(false)} />}
+
+      {completingMaint && (
+        <MaintenanceCompleteModal
+          row={completingMaint.row}
+          date={completingMaint.nextDue || today}
+          isCompleted={false}
+          lastDate={null}
+          onMarkDone={handleMaintDone}
+          onClose={() => setCompletingMaint(null)}
+        />
+      )}
+      {completingChore && (
+        <ChoreDetailModal
+          chore={completingChore.chore}
+          date={completingChore.date}
+          isDone={false}
+          roomItemsMap={roomItemsMap}
+          onToggleDone={() => setCompletingChore(null)}
+          onMarkDone={handleChoreMarkDone}
+          onClose={() => setCompletingChore(null)}
+        />
+      )}
     </div>
   );
 }

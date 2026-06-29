@@ -135,6 +135,13 @@ function fmtMinutes(min) {
   return `${min}m`;
 }
 
+// Parse a logged "HH:MM" duration string into total minutes (0 if blank/invalid).
+function parseHHMM(str) {
+  if (!str || typeof str !== "string") return 0;
+  const [h, m] = str.split(":").map(n => parseInt(n, 10) || 0);
+  return h * 60 + m;
+}
+
 function formatTimeOfDay(t) {
   if (!t) return "";
   const [h, m] = t.split(":").map(Number);
@@ -1322,7 +1329,7 @@ export default function ChoresPage({ navigate, navState }) {
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
                 <thead>
                   <tr>
-                    {["Date", "Chore", "Location", "Who", "Notes"].map(h => (
+                    {["Date", "Chore", "Location", "Who", "Time", "Notes"].map(h => (
                       <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -1331,12 +1338,21 @@ export default function ChoresPage({ navigate, navState }) {
                   {filteredHistoryEntries.map(e => {
                     const d = new Date(e.completedAt);
                     const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    const assigneeCount = (e.assignees?.length) || (e.assignee ? 1 : 0);
+                    const totalMin = parseHHMM(e.duration);
+                    const perPerson = assigneeCount > 1 && totalMin > 0 ? totalMin / assigneeCount : null;
                     return (
                       <tr key={e.key} style={{ borderBottom: "1px solid var(--fm-hairline)" }}>
                         <td style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{dateStr}</td>
                         <td style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0" }}>{e.chore?.title || e.choreId}</td>
                         <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.room || "—"}</td>
                         <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>{e.assignee || "—"}</td>
+                        <td style={{ color: e.duration ? "var(--fm-brass-dim)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0.75rem 0.55rem 0", whiteSpace: "nowrap" }}>
+                          {e.duration || "—"}
+                          {perPerson != null && (
+                            <span style={{ color: "var(--fm-ink-mute)", marginLeft: "0.4rem" }}>({fmtMinutes(Math.round(perPerson))} ea)</span>
+                          )}
+                        </td>
                         <td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}>{e.notes || "—"}</td>
                       </tr>
                     );

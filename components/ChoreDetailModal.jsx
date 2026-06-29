@@ -1,7 +1,18 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { getScheduleColor } from "../lib/scheduleColor.js";
-import AssigneeInput from "./AssigneeInput.jsx";
+import MultiAssigneeInput from "./MultiAssigneeInput.jsx";
 import ComboInput from "./ComboInput.jsx";
+
+// Format a whole/partial minute count as "H:MM" (>= 60) or "Mm" (< 60).
+function fmtSplit(mins) {
+  const rounded = Math.round(mins);
+  if (rounded >= 60) {
+    const h = Math.floor(rounded / 60);
+    const m = rounded % 60;
+    return `${h}:${String(m).padStart(2, "0")}`;
+  }
+  return `${rounded}m`;
+}
 
 const CAL_DOWS_LONG  = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const CAL_MONTHS_LONG = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -45,16 +56,35 @@ const labelStyle = {
   flexShrink: 0,
 };
 
+const segInputStyle = {
+  background: "#0a0c11",
+  border: "1px solid #2b3140",
+  borderRadius: "3px",
+  color: "#e8e4dd",
+  fontFamily: "monospace",
+  fontSize: "0.85rem",
+  outline: "none",
+  padding: "0.3rem 0",
+  textAlign: "center",
+  width: "2.6rem",
+  boxSizing: "border-box",
+  transition: "border-color 0.12s",
+};
+
 export default function ChoreDetailModal({ chore, date, isDone, onToggleDone, onMarkDone, roomItemsMap = {}, onClose }) {
   const [hovered, setHovered] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     completedAt: toISODate(date),
-    assignee:    chore.assignee || "",
+    assignees:   chore.assignee ? [chore.assignee] : [],
     room:        chore.room     || "",
     item:        "",
     notes:       "",
+    durHH:       "",
+    durMM:       "",
   });
+
+  const mmRef = useRef(null);
 
   const color = getScheduleColor(chore.schedule);
   const dateLabel = formatDate(date);
@@ -77,8 +107,31 @@ export default function ChoreDetailModal({ chore, date, isDone, onToggleDone, on
   }
 
   function handleConfirm() {
-    onMarkDone?.(form);
+    const { durHH, durMM, ...rest } = form;
+    const duration = (durHH || durMM)
+      ? `${(durHH || "0").padStart(2, "0")}:${(durMM || "0").padStart(2, "0")}`
+      : "";
+    onMarkDone?.({ ...rest, duration });
     onClose();
+  }
+
+  // Live per-person split: total time divided equally across assignees.
+  const totalMinutes = (parseInt(form.durHH, 10) || 0) * 60 + (parseInt(form.durMM, 10) || 0);
+  const numAssignees = form.assignees.length;
+  const perPersonLabel = totalMinutes > 0 && numAssignees > 1
+    ? `${fmtSplit(totalMinutes / numAssignees)} each · ${numAssignees} people`
+    : null;
+
+  function handleHHChange(e) {
+    const v = e.target.value.replace(/\D/g, "").slice(0, 2);
+    setForm(f => ({ ...f, durHH: v }));
+    if (v.length === 2) mmRef.current?.focus();
+  }
+
+  function handleMMChange(e) {
+    let v = e.target.value.replace(/\D/g, "").slice(0, 2);
+    if (v.length === 2 && parseInt(v, 10) > 59) v = "59";
+    setForm(f => ({ ...f, durMM: v }));
   }
 
   return (
@@ -193,16 +246,57 @@ export default function ChoreDetailModal({ chore, date, isDone, onToggleDone, on
                 </div>
               </div>
               <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem" }}>
-                <span style={labelStyle}>Assignee</span>
+                <span style={labelStyle}>Assignees</span>
                 <div style={{ flex: 1 }}>
-                  <AssigneeInput
-                    value={form.assignee}
-                    onChange={v => setForm(f => ({ ...f, assignee: v }))}
+                  <MultiAssigneeInput
+                    value={form.assignees}
+                    onChange={vals => setForm(f => ({ ...f, assignees: vals }))}
                     placeholder="Who completed this?"
                     style={{ ...inputStyle, padding: "0.3rem 0.5rem", fontSize: "0.75rem" }}
                   />
                 </div>
               </div>
+
+              {/* Time tracking — structured HH : MM entry */}
+              <div style={{ alignItems: "center", display: "flex", gap: "0.75rem" }}>
+                <span style={{ ...labelStyle, paddingTop: 0 }}>Time</span>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={form.durHH}
+                    onChange={handleHHChange}
+                    placeholder="HH"
+                    maxLength={2}
+                    style={segInputStyle}
+                    onFocus={e => e.currentTarget.style.borderColor = "#c9a96e"}
+                    onBlur={e => e.currentTarget.style.borderColor = "#2b3140"}
+                  />
+                  <span style={{ color: "#a8a29c", fontFamily: "monospace", fontSize: "0.9rem", lineHeight: 1, userSelect: "none" }}>:</span>
+                  <input
+                    ref={mmRef}
+                    type="text"
+                    inputMode="numeric"
+                    value={form.durMM}
+                    onChange={handleMMChange}
+                    placeholder="MM"
+                    maxLength={2}
+                    style={segInputStyle}
+                    onFocus={e => e.currentTarget.style.borderColor = "#c9a96e"}
+                    onBlur={e => e.currentTarget.style.borderColor = "#2b3140"}
+                  />
+                  <span style={{ color: "#6b6560", fontFamily: "monospace", fontSize: "0.6rem", letterSpacing: "0.08em", marginLeft: "0.25rem", textTransform: "uppercase" }}>optional</span>
+                </div>
+              </div>
+
+              {perPersonLabel && (
+                <div style={{ alignItems: "center", display: "flex", gap: "0.75rem" }}>
+                  <span style={{ ...labelStyle, paddingTop: 0 }} />
+                  <span style={{ color: "#c9a96e", fontFamily: "monospace", fontSize: "0.65rem", letterSpacing: "0.04em" }}>
+                    ↳ {perPersonLabel}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Form actions */}

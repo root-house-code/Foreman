@@ -64,38 +64,59 @@ function useToc(sections) {
   return { activeSection, sectionRefs, scrollTo };
 }
 
+function TocButton({ id, label, activeSection, onSelect }) {
+  const isActive = activeSection === id;
+  return (
+    <button
+      onClick={() => onSelect(id)}
+      style={{
+        background: "transparent",
+        border: "none",
+        borderBottom: isActive ? "1px solid var(--fm-brass)" : "1px solid transparent",
+        color: isActive ? "var(--fm-brass)" : "var(--fm-ink-mute)",
+        cursor: "pointer",
+        fontFamily: "var(--fm-mono)",
+        fontSize: "0.65rem",
+        letterSpacing: "0.08em",
+        padding: "0.15rem 0",
+        textTransform: "uppercase",
+        transition: "color 0.15s, border-color 0.15s",
+      }}
+      onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+      onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function TocNav({ sections, activeSection, onSelect }) {
+  const tocLabel = { color: "var(--fm-brass-dim)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.18em", textTransform: "uppercase" };
+
+  // Grouped TOC: one row per group, each prefixed by its name (used by the roadmap).
+  if (sections.some(s => s.group)) {
+    const groups = [];
+    for (const s of sections) {
+      let g = groups.find(g => g.name === s.group);
+      if (!g) { g = { name: s.group, items: [] }; groups.push(g); }
+      g.items.push(s);
+    }
+    return (
+      <nav style={{ display: "flex", flexDirection: "column", gap: "0.7rem", marginBottom: "2.25rem" }}>
+        {groups.map(g => (
+          <div key={g.name} style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>
+            <span style={{ ...tocLabel, minWidth: "8.5rem" }}>{g.name}</span>
+            {g.items.map(s => <TocButton key={s.id} {...s} activeSection={activeSection} onSelect={onSelect} />)}
+          </div>
+        ))}
+      </nav>
+    );
+  }
+
   return (
     <nav style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", marginBottom: "2.25rem" }}>
-      <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.18em", marginRight: "0.25rem", textTransform: "uppercase" }}>
-        Contents
-      </span>
-      {sections.map(({ id, label }) => {
-        const isActive = activeSection === id;
-        return (
-          <button
-            key={id}
-            onClick={() => onSelect(id)}
-            style={{
-              background: "transparent",
-              border: "none",
-              borderBottom: isActive ? "1px solid var(--fm-brass)" : "1px solid transparent",
-              color: isActive ? "var(--fm-brass)" : "var(--fm-ink-mute)",
-              cursor: "pointer",
-              fontFamily: "var(--fm-mono)",
-              fontSize: "0.65rem",
-              letterSpacing: "0.08em",
-              padding: "0.15rem 0",
-              textTransform: "uppercase",
-              transition: "color 0.15s, border-color 0.15s",
-            }}
-            onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-            onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = "var(--fm-ink-mute)"; }}
-          >
-            {label}
-          </button>
-        );
-      })}
+      <span style={{ ...tocLabel, marginRight: "0.25rem" }}>Contents</span>
+      {sections.map(s => <TocButton key={s.id} {...s} activeSection={activeSection} onSelect={onSelect} />)}
     </nav>
   );
 }
@@ -224,6 +245,25 @@ function ArchSection({ id, label, heading, sectionRefs, first, children }) {
   );
 }
 
+// Priority tier header dividing the roadmap into Top / Medium / Low sections.
+function RoadGroupHeader({ label, first }) {
+  return (
+    <div style={{
+      borderTop: first ? "none" : "2px solid var(--fm-brass-dim)",
+      color: "var(--fm-brass)",
+      fontFamily: "var(--fm-mono)",
+      fontSize: "0.72rem",
+      fontWeight: 600,
+      letterSpacing: "0.2em",
+      marginTop: first ? 0 : "2.75rem",
+      paddingTop: first ? 0 : "1.1rem",
+      textTransform: "uppercase",
+    }}>
+      {label}
+    </div>
+  );
+}
+
 function ArchTab() {
   const { activeSection, sectionRefs, scrollTo } = useToc(ARCH_SECTIONS);
 
@@ -314,7 +354,7 @@ function ArchTab() {
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Floor plan</div>
-            <p style={bodyText}>The home's spatial structure spans three stores. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Levels</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-floors</span>) are an ordered list, each with a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>kind</span> — floor, basement, attic, roof, or yard — that sets its sort position and uniqueness (only one basement, attic, roof, or yard; floors are numbered and repeatable). <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Rooms</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-rooms</span>) are the zones placed on those levels — each carries a label, its level, the items inside it, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>use</span> (room type: bedroom, full / ¾ / half bath, kitchen, …) that drives the bed/bath and finished-area rollups in the Property Details panel. The drawn zone polygons and on-canvas item markers persist under the historical <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data</span> key. Only zones whose category resolves to the spatial room class count toward finished living area; exteriors — garages, basements, attics, and yards — are tracked but excluded. Zones can be created four ways, all producing the same polygon record: clicking to place a <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>parametric shape</span> (rectangle, L, or U, sized in feet at 20 canvas units per foot); <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>dimension entry</span>, which auto-arranges a typed room into the first free spot; tracing on the canvas; or <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>address import</span> (opt-in, Online Mode), which geocodes via OpenStreetMap and projects the returned building footprint into canvas units as an exterior outline. While a room or vertex is dragged, its edges magnetically snap to neighboring zones' edges so rooms share walls cleanly.</p>
+            <p style={bodyText}>The home's spatial structure spans three stores. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Levels</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-floors</span>) are an ordered list, each with a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>kind</span> — floor, basement, attic, roof, or yard — that sets its sort position and uniqueness (only one basement, attic, roof, or yard; floors are numbered and repeatable). <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Rooms</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-rooms</span>) are the zones placed on those levels — each carries a label, its level, the items inside it, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>use</span> (room type: bedroom, full / ¾ / half bath, kitchen, …) that drives the bed/bath and finished-area rollups in the Property Details panel. The drawn zone polygons and on-canvas item markers persist under the historical <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data</span> key. Only zones whose category resolves to the spatial room class count toward finished living area; exteriors — garages, basements, attics, and yards — are tracked but excluded. Zones can be created four ways, all producing the same polygon record: clicking to place a <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>parametric shape</span> (rectangle, L, or U, sized in feet at 20 canvas units per foot); <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>dimension entry</span>, which auto-arranges a typed room into the first free spot; tracing on the canvas; or <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>address import</span> (opt-in, Online Mode), which geocodes via OpenStreetMap and projects the returned building footprint into canvas units. The footprint is stored not as a zone but as the plan's single <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>outline</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data.outline</span>) — a floor-plan-only scaffold drawn on every floor as a neutral white border, never a room or category and never counted toward area; it's toggled by the Outline layer filter. While a room or vertex is dragged, its edges magnetically snap to neighboring zones' edges so rooms share walls cleanly.</p>
           </div>
           <div>
             <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Chores</div>
@@ -408,22 +448,25 @@ function ArchTab() {
 // ─── Development Roadmap tab ───────────────────────────────────────────────────
 
 const ROADMAP_SECTIONS = [
-  { id: "road-mobile",   label: "Mobile App" },
-  { id: "road-setup",    label: "Home Setup Wizard" },
-  { id: "road-qr",       label: "QR Labels" },
-  { id: "road-ha",       label: "Home Assistant" },
-  { id: "road-gcal",     label: "Google Calendar" },
-  { id: "road-vault",     label: "Document Vault" },
-  { id: "road-handoff",   label: "Handoff Export" },
-  { id: "road-electron",  label: "Windows App" },
-  { id: "road-furniture", label: "Furniture Planning" },
-  { id: "road-gla",       label: "GLA Measurements" },
-  { id: "road-household", label: "Household & Assignments" },
-  { id: "road-emergency", label: "Emergency Reference" },
-  { id: "road-seasonal",  label: "Seasonal Playbooks" },
-  { id: "road-alerts",    label: "Alerts Inbox" },
-  { id: "road-advisor",   label: "AI Advisor" },
-  { id: "road-nav-state", label: "Page State" },
+  // Top Priority — gate adoption/shipping or are pervasive, high-leverage wins.
+  { id: "road-setup",     label: "Home Setup Wizard",      group: "Top Priority" },
+  { id: "road-electron",  label: "Windows App",            group: "Top Priority" },
+  { id: "road-alerts",    label: "Alerts Inbox",           group: "Top Priority" },
+  { id: "road-nav-state", label: "Page State",             group: "Top Priority" },
+  // Medium Priority — clear value, build on existing foundations, not gating.
+  { id: "road-gcal",      label: "Google Calendar",        group: "Medium Priority" },
+  { id: "road-vault",     label: "Document Vault",         group: "Medium Priority" },
+  { id: "road-handoff",   label: "Handoff Export",         group: "Medium Priority" },
+  { id: "road-emergency", label: "Emergency Reference",    group: "Medium Priority" },
+  { id: "road-seasonal",  label: "Seasonal Playbooks",     group: "Medium Priority" },
+  { id: "road-household", label: "Household & Assignments", group: "Medium Priority" },
+  { id: "road-qr",        label: "QR Labels",              group: "Medium Priority" },
+  { id: "road-mobile",    label: "Mobile App",             group: "Medium Priority" },
+  // Low Priority — niche, advanced, or heavy/speculative builds.
+  { id: "road-advisor",   label: "AI Advisor",             group: "Low Priority" },
+  { id: "road-ha",        label: "Home Assistant",         group: "Low Priority" },
+  { id: "road-gla",       label: "GLA Measurements",       group: "Low Priority" },
+  { id: "road-furniture", label: "Furniture Planning",     group: "Low Priority" },
 ];
 
 function RoadmapTab() {
@@ -433,28 +476,9 @@ function RoadmapTab() {
     <div>
       <TocNav sections={ROADMAP_SECTIONS} activeSection={activeSection} onSelect={scrollTo} />
 
-      <ArchSection id="road-mobile" label="Mobile" heading="Mobile App" sectionRefs={sectionRefs} first>
-        <p style={bodyText}>
-          A native mobile companion app is planned for the major mobile platforms. The mobile experience is designed around the moments when you're standing in front of the thing, not sitting at a desk. Three core workflows drive the design:
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["Photo to project / to do", "Point your camera at something that needs attention, take a photo, and Foreman creates a draft project or to-do with the image attached. Add a note and you're done in under a minute."],
-            ["AI-powered inspection mode", "Grant Foreman temporary access to your camera. Walk through your home as if doing a routine walk-through. Foreman captures images, analyzes them with an AI model, and returns a structured report of potential issues and maintenance recommendations. Projects and to-dos are auto-generated from the findings. Camera access is session-scoped and not stored between sessions."],
-            ["Floorplan generation mode", "Grant Foreman temporary access to your camera and location. Walk each room and Foreman builds your floorplan and inventory as you go, using spatial estimation and image recognition. Camera and location data are used only during the active session to initialize your home's structure in Foreman."],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
+      <RoadGroupHeader label="Top Priority" first />
 
-      <ArchSection id="road-setup" label="Onboarding" heading="Home Setup Wizard" sectionRefs={sectionRefs}>
+      <ArchSection id="road-setup" label="Onboarding" heading="Home Setup Wizard" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
           Foreman ships with 421 default maintenance tasks, a ~90-type expected-lifespan table, and a deep category tree — but a new home starts empty, and populating inventory, the floor plan, and the right schedule is the steepest cliff in the app. The Setup Wizard turns that cold start into a guided ten-minute pass, drawing on the defaults already in the codebase rather than asking you to build from scratch.
         </p>
@@ -476,16 +500,15 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="road-qr" label="Inventory" heading="QR Labels for Inventory" sectionRefs={sectionRefs}>
+      <ArchSection id="road-electron" label="Distribution" heading="Windows Desktop App" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Every inventory item already carries the record you want when you're standing in front of it — model number, install date, warranty status, manual, and full maintenance history. QR labels close the last few feet between the physical thing and its data, so the answer is a phone-camera scan away instead of a search.
+          The core Electron work is shipped. Foreman runs as a native Windows desktop app: data lives in Documents\Foreman\data.json (written via atomic temp+rename), rolling backups land in Documents\Foreman\backups\ on an hourly/daily/weekly retention schedule, and the system tray, native file dialogs, OS notification bridge, and foreman:// protocol handler are all wired up. The browser dev build (npm run dev) continues to use IndexedDB unchanged — the file backend only activates when window.foreman.isElectron is true, detected at module load in lib/storage.js. Three items remain before this is fully distributable.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
           {[
-            ["Print a label per item", "Generate a compact QR sticker for any inventory item — the water heater, the furnace, the panel — sized for a label printer or a sheet of address labels, with the item name printed alongside the code so it's legible without scanning."],
-            ["Scan to the record", "Point any phone camera at the sticker to open that item straight to its Foreman page — specs, manual, warranty, and maintenance log — with no searching or menu diving. This depends on the deep-link routing also introduced for the mobile app, since the app runs at a single URL today."],
-            ["Log from the thing", "The deep link lands with the item's actions in reach — log a completed task, add an expense, attach a photo — so the record gets updated at the moment and place the work actually happens, not later from memory at a desk."],
-            ["Built on the catalog", "Reuses each item's existing stable key as the link target and the specs already on file for the printed label — a thin physical bridge over data that's already there, generated locally with no external service."],
+            [`NSIS installer (blocked by OneDrive)`, `The electron-builder config is in place — the “build” field in package.json targets win/nsis and the electron:build script runs vite build then electron-builder. The build currently fails with EPERM: operation not permitted on a temp-to-final rename because OneDrive's sync process locks files mid-write inside the project directory. Fix option A: pause OneDrive sync before running npm run electron:build. Fix option B: set the output directory outside OneDrive by adding “directories”: { “output”: “C:/Temp/foreman-build” } to the build config in package.json. Also needed before release: a proper app icon at assets/icon.ico (256x256 minimum, referenced as “icon”: “assets/icon.ico” in the win block of the build config) to replace the current placeholder PNG. A code-signing certificate (DigiCert, Sectigo, or equivalent) is needed to suppress the Windows Defender SmartScreen warning on first install — without it users see “Windows protected your PC” on every fresh install. The electron-builder win block accepts certificateFile and certificatePassword fields, or use the electron-windows-sign package for PKCS#12 or Azure Key Vault signing.`],
+            [`Auto-update`, `Not yet implemented. The bridge is already stubbed: preload.cjs exposes onUpdateStatus(cb) for the renderer to subscribe to, and the comment in preload.cjs marks it as a Phase 4 item. Implementation: add electron-updater as a runtime dependency (npm install electron-updater — note: runtime, not devDependency). In electron/main.cjs, require autoUpdater from electron-updater and call autoUpdater.checkForUpdatesAndNotify() inside app.whenReady() after the window is created. Add a publish block to the build config in package.json: { “provider”: “github”, “owner”: “root-house-code”, “repo”: “Foreman” }. Push a GitHub Release with the built installer and its .yml manifest attached; electron-updater compares the installed version string against the latest.yml on GitHub on every startup. Wire autoUpdater events (update-available, update-downloaded, error) through ipcMain to the renderer via ipcRenderer.on(“update-status”) and surface them as a dismissible banner. Important: auto-update on Windows requires the installer to be code-signed — unsigned builds silently fail the update check.`],
+            [`Item-level deep links for QR scanning`, `The foreman:// protocol is registered and page-level routing works — foreman://inventory opens the Inventory page. What is missing is sub-page routing for specific records, which is the useful case for QR code labels printed on appliances or rooms. The handleDeepLink function in electron/main.cjs already forwards the full URL string to the renderer via mainWindow.webContents.send(“deep-link”, url). The onDeepLink effect in src/App.jsx currently extracts only parsed.hostname as the page key. Extend it to also read the pathname: for a URL like foreman://inventory/item-id-abc, hostname is “inventory” and pathname is “/item-id-abc” — pass { deepLinkId: “item-id-abc” } as navState to navigate(). Each page that supports deep linking then reads navState?.deepLinkId on mount and selects the matching record, opening its detail panel. InventoryPage already accepts navState for similar pre-selection patterns. The same pattern extends to maintenance tasks, chores, rooms, or any entity with a stable string id.`],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
@@ -498,19 +521,56 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="road-ha" label="Integrations" heading="Home Assistant Integration" sectionRefs={sectionRefs}>
+      <ArchSection id="road-alerts" label="Alerts" heading="Alerts Inbox" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Home Assistant is the leading open-source home automation platform, running locally in hundreds of thousands of households. The planned integration connects Foreman's maintenance and inventory data with Home Assistant's device registry and automation engine.
+          Foreman already generates many signals — overdue tasks, warranties expiring, supplies running low, bills due, contract renewals — but they're scattered across Dashboard cards and individual pages. The Alerts Inbox gathers them into one prioritized place. It can stand on its own as a dedicated surface and, at the same time, extend and revamp the Dashboard's Triage panel rather than living entirely apart from it.
         </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          In practice: when a smart device in Home Assistant registers an anomaly — an HVAC unit drawing more current than usual, a water sensor triggering, a filter indicator firing — Foreman can receive that signal and automatically create a maintenance task or to-do. In the other direction, completing a maintenance task in Foreman can trigger Home Assistant automations: resetting a filter timer, updating a device's service record, or notifying household members.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The integration is designed to work with the existing Home Assistant webhook and REST API system. No custom Home Assistant add-on is required.
-        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["One inbox, every signal", "Overdue maintenance and chores, warranties expiring, low or out-of-stock supplies, upcoming bill due dates, and service renewals — all in a single prioritized, filterable list instead of six separate corners of the app."],
+            ["Standalone, and a Triage revamp", "Lives as its own surface while the Dashboard Triage panel becomes the inbox's at-a-glance preview — the two share one engine rather than computing overlapping lists independently."],
+            ["Triage and dismiss", "Snooze, dismiss, or act on each alert inline — log it, reorder, pay — and carry an unread count in the header so nothing quietly slips."],
+            ["Built from existing derivations", "Reuses the overdue, warranty, low-supply, and renewal logic already computed across the Dashboard, Lifecycle, Supplies, Services, and Utilities pages — consolidation, not new calculation."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
       </ArchSection>
 
-      <ArchSection id="road-gcal" label="Google Calendar" heading="Google Calendar Integration" sectionRefs={sectionRefs}>
+      <ArchSection id="road-nav-state" label="Page State" heading="Navigation State Persistence" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Today, every page resets to its default configuration when you navigate away and return. Sort column, active tab, filter selections, expanded sections — all lost. If you had the Inventory sorted by install date with the HVAC category expanded, navigated to Maintenance to check something, and returned, you find the page as if you had never been there. This entry covers the work required to make pages remember how you left them.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          The critical design distinction is between configuration and transient state. Configuration is how the user has customized their view: which tab is active, which column they are sorting by, which filters are applied, which grouping mode is selected. This should persist. Transient state is what the user was doing in the moment: which item's detail panel is open, what they had typed in a search field, which row was hovered. This should not — restoring it tends to be disorienting rather than helpful. A page that remembers its filters but not that you had scrolled to the middle is the right balance.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Implementation approach", "The correct tool in this codebase is a pageUIState slice in the existing Zustand store (lib/store.js): a plain object keyed by page identifier, where each page reads its configuration from the store on mount instead of from useState defaults, and writes back on change. This is in-memory, so it survives navigation within a session but resets on full page reload. For truly sticky preferences — view modes or groupings where a user would be annoyed if a reload forgot them — those specific keys can be persisted to storage on write. The key principle: most configuration should survive within a session; a small set of high-value preferences should also survive reloads."],
+            ["What to persist per page", "Inventory: active tab (All / By Room / By Category), sort column and direction, active filter chips, expanded category list. Maintenance: active tab (Schedule / History), active filters, sort state, expanded category state. Notebook: grouping mode (Category / System / Custom), onlyDocumented toggle. Lifecycle: active tab (Forecast / Chores / Budget), forecast horizon setting. Workbench: active tab. Chores: sort column, sort direction. The floor plan, preferences, and read-me pages have no meaningful ephemeral state to restore."],
+            ["What not to persist", "Search queries should not persist — a user who left mid-search has usually finished the task that required it; returning to a filtered view with two visible items is more confusing than starting fresh. Selected items and open detail panels should not persist — the panel being open when you return to a page is context-free without the activity that opened it. Scroll position is not worth the implementation complexity: if filters and sort are restored, the user can quickly reorient."],
+            ["Scope and sequencing", "This is a wide refactor, not a complex one. Each page requires identifying its relevant state variables, adding a pageUIState key to the Zustand store for the page, replacing the useState initializers with store reads, and replacing setters with store writes. A single page can be done in under an hour. The recommended sequencing is highest-friction pages first: Inventory has the most state variables and the most user-visible reset problem. Maintenance and Notebook follow. Low-state pages (Workbench, Chores) are last. Do not attempt all pages in one pass — each page can be migrated independently without affecting the others."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <RoadGroupHeader label="Medium Priority" />
+
+      <ArchSection id="road-gcal" label="Google Calendar" heading="Google Calendar Integration" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
           A Google Calendar integration is planned so that your maintenance schedule, chore due dates, and project deadlines appear alongside your existing calendar events — without requiring you to copy anything manually.
         </p>
@@ -554,74 +614,6 @@ function RoadmapTab() {
             ["Two formats", "A polished PDF report for a person (buyer, agent, insurer) and a structured JSON export for importing into another Foreman instance, so a new owner inherits the live registry rather than a static printout."],
             ["Scoped and redactable", "Choose what leaves the device. A buyer gets maintenance history and specs; an insurer gets one item's purchase price, warranty, and receipts; a contractor gets the relevant system. You decide the scope per export."],
             ["Inherited knowledge", "The new owner imports the dossier and starts with decades of structured home knowledge already in place, instead of guessing when the water heater was installed."],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
-
-      <ArchSection id="road-electron" label="Distribution" heading="Windows Desktop App" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          The core Electron work is shipped. Foreman runs as a native Windows desktop app: data lives in Documents\Foreman\data.json (written via atomic temp+rename), rolling backups land in Documents\Foreman\backups\ on an hourly/daily/weekly retention schedule, and the system tray, native file dialogs, OS notification bridge, and foreman:// protocol handler are all wired up. The browser dev build (npm run dev) continues to use IndexedDB unchanged — the file backend only activates when window.foreman.isElectron is true, detected at module load in lib/storage.js. Three items remain before this is fully distributable.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            [`NSIS installer (blocked by OneDrive)`, `The electron-builder config is in place — the “build” field in package.json targets win/nsis and the electron:build script runs vite build then electron-builder. The build currently fails with EPERM: operation not permitted on a temp-to-final rename because OneDrive's sync process locks files mid-write inside the project directory. Fix option A: pause OneDrive sync before running npm run electron:build. Fix option B: set the output directory outside OneDrive by adding “directories”: { “output”: “C:/Temp/foreman-build” } to the build config in package.json. Also needed before release: a proper app icon at assets/icon.ico (256x256 minimum, referenced as “icon”: “assets/icon.ico” in the win block of the build config) to replace the current placeholder PNG. A code-signing certificate (DigiCert, Sectigo, or equivalent) is needed to suppress the Windows Defender SmartScreen warning on first install — without it users see “Windows protected your PC” on every fresh install. The electron-builder win block accepts certificateFile and certificatePassword fields, or use the electron-windows-sign package for PKCS#12 or Azure Key Vault signing.`],
-            [`Auto-update`, `Not yet implemented. The bridge is already stubbed: preload.cjs exposes onUpdateStatus(cb) for the renderer to subscribe to, and the comment in preload.cjs marks it as a Phase 4 item. Implementation: add electron-updater as a runtime dependency (npm install electron-updater — note: runtime, not devDependency). In electron/main.cjs, require autoUpdater from electron-updater and call autoUpdater.checkForUpdatesAndNotify() inside app.whenReady() after the window is created. Add a publish block to the build config in package.json: { “provider”: “github”, “owner”: “root-house-code”, “repo”: “Foreman” }. Push a GitHub Release with the built installer and its .yml manifest attached; electron-updater compares the installed version string against the latest.yml on GitHub on every startup. Wire autoUpdater events (update-available, update-downloaded, error) through ipcMain to the renderer via ipcRenderer.on(“update-status”) and surface them as a dismissible banner. Important: auto-update on Windows requires the installer to be code-signed — unsigned builds silently fail the update check.`],
-            [`Item-level deep links for QR scanning`, `The foreman:// protocol is registered and page-level routing works — foreman://inventory opens the Inventory page. What is missing is sub-page routing for specific records, which is the useful case for QR code labels printed on appliances or rooms. The handleDeepLink function in electron/main.cjs already forwards the full URL string to the renderer via mainWindow.webContents.send(“deep-link”, url). The onDeepLink effect in src/App.jsx currently extracts only parsed.hostname as the page key. Extend it to also read the pathname: for a URL like foreman://inventory/item-id-abc, hostname is “inventory” and pathname is “/item-id-abc” — pass { deepLinkId: “item-id-abc” } as navState to navigate(). Each page that supports deep linking then reads navState?.deepLinkId on mount and selects the matching record, opening its detail panel. InventoryPage already accepts navState for similar pre-selection patterns. The same pattern extends to maintenance tasks, chores, rooms, or any entity with a stable string id.`],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
-
-      <ArchSection id="road-furniture" label="Furniture" heading="Furniture Planning" sectionRefs={sectionRefs}>
-      </ArchSection>
-
-      <ArchSection id="road-gla" label="GLA" heading="GLA Measurement Mode" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          Foreman's spatial model already separates areas that contribute to square footage (Rooms) from those that don't (Exteriors — garages, basements, attics, and outdoor areas), and surfaces the total as the “Finished area” in the floor plan's Property Details panel. That figure is an honest approximation, not an appraisal-grade measurement. This adds an opt-in mode, for advanced users, that brings the calculation in line with the real estate industry's Gross Living Area (GLA) standard — the same basis an appraiser or listing agent uses.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["Opt-in toggle", "GLA mode is off by default. A single switch in Preferences turns on the stricter measurement and display system, so the everyday experience stays simple while advanced users get appraisal-grade rigor when they want it."],
-            ["ANSI Z765 rules", "Finished, heated, above-grade living space counts toward GLA; below-grade space (basements), garages, and unfinished areas (most attics) are measured and reported separately rather than folded into the headline number — matching how living area is defined for appraisals and listings."],
-            ["Measured to standard", "Area is computed from exterior wall dimensions with ceiling-height minimums applied, and finished vs. unfinished status tracked per space, so the total is defensible against a real appraisal."],
-            ["Honest display", "When enabled, the floor plan reports Gross Living Area alongside separate above-grade, below-grade, and garage subtotals, instead of a single summed figure — the breakdown a buyer or appraiser expects to see."],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
-
-      <ArchSection id="road-household" label="Household" heading="Household & Assignments" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          Foreman is single-user today, but a home is run by a household. Chores and maintenance already record who completed the work — this builds that latent data into a first-class people model so the load can be shared and seen.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["Household roster", "Define the people in your home, then assign chores, maintenance tasks, and to-dos to them. Assignment becomes a real relationship rather than a free-text name."],
-            ["Per-person workload", "See what each member owns and has completed, so the work can be balanced rather than silently falling on one person."],
-            ["Rotations", "Round-robin schedules for shared recurring chores — whose turn it is to take out the trash or clean the bathroom, advanced automatically as each occurrence is logged."],
-            ["Accountability log", "The existing “who completed it” records on chores and maintenance roll up into a per-person history of contributions."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
@@ -678,16 +670,16 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="road-alerts" label="Alerts" heading="Alerts Inbox" sectionRefs={sectionRefs}>
+      <ArchSection id="road-household" label="Household" heading="Household & Assignments" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Foreman already generates many signals — overdue tasks, warranties expiring, supplies running low, bills due, contract renewals — but they're scattered across Dashboard cards and individual pages. The Alerts Inbox gathers them into one prioritized place. It can stand on its own as a dedicated surface and, at the same time, extend and revamp the Dashboard's Triage panel rather than living entirely apart from it.
+          Foreman is single-user today, but a home is run by a household. Chores and maintenance already record who completed the work — this builds that latent data into a first-class people model so the load can be shared and seen.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
           {[
-            ["One inbox, every signal", "Overdue maintenance and chores, warranties expiring, low or out-of-stock supplies, upcoming bill due dates, and service renewals — all in a single prioritized, filterable list instead of six separate corners of the app."],
-            ["Standalone, and a Triage revamp", "Lives as its own surface while the Dashboard Triage panel becomes the inbox's at-a-glance preview — the two share one engine rather than computing overlapping lists independently."],
-            ["Triage and dismiss", "Snooze, dismiss, or act on each alert inline — log it, reorder, pay — and carry an unread count in the header so nothing quietly slips."],
-            ["Built from existing derivations", "Reuses the overdue, warranty, low-supply, and renewal logic already computed across the Dashboard, Lifecycle, Supplies, Services, and Utilities pages — consolidation, not new calculation."],
+            ["Household roster", "Define the people in your home, then assign chores, maintenance tasks, and to-dos to them. Assignment becomes a real relationship rather than a free-text name."],
+            ["Per-person workload", "See what each member owns and has completed, so the work can be balanced rather than silently falling on one person."],
+            ["Rotations", "Round-robin schedules for shared recurring chores — whose turn it is to take out the trash or clean the bathroom, advanced automatically as each occurrence is logged."],
+            ["Accountability log", "The existing “who completed it” records on chores and maintenance roll up into a per-person history of contributions."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
@@ -700,7 +692,52 @@ function RoadmapTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="road-advisor" label="AI" heading="AI-Powered Home Advisor" sectionRefs={sectionRefs}>
+      <ArchSection id="road-qr" label="Inventory" heading="QR Labels for Inventory" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Every inventory item already carries the record you want when you're standing in front of it — model number, install date, warranty status, manual, and full maintenance history. QR labels close the last few feet between the physical thing and its data, so the answer is a phone-camera scan away instead of a search.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Print a label per item", "Generate a compact QR sticker for any inventory item — the water heater, the furnace, the panel — sized for a label printer or a sheet of address labels, with the item name printed alongside the code so it's legible without scanning."],
+            ["Scan to the record", "Point any phone camera at the sticker to open that item straight to its Foreman page — specs, manual, warranty, and maintenance log — with no searching or menu diving. This depends on the deep-link routing also introduced for the mobile app, since the app runs at a single URL today."],
+            ["Log from the thing", "The deep link lands with the item's actions in reach — log a completed task, add an expense, attach a photo — so the record gets updated at the moment and place the work actually happens, not later from memory at a desk."],
+            ["Built on the catalog", "Reuses each item's existing stable key as the link target and the specs already on file for the printed label — a thin physical bridge over data that's already there, generated locally with no external service."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-mobile" label="Mobile" heading="Mobile App" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          A native mobile companion app is planned for the major mobile platforms. The mobile experience is designed around the moments when you're standing in front of the thing, not sitting at a desk. Three core workflows drive the design:
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Photo to project / to do", "Point your camera at something that needs attention, take a photo, and Foreman creates a draft project or to-do with the image attached. Add a note and you're done in under a minute."],
+            ["AI-powered inspection mode", "Grant Foreman temporary access to your camera. Walk through your home as if doing a routine walk-through. Foreman captures images, analyzes them with an AI model, and returns a structured report of potential issues and maintenance recommendations. Projects and to-dos are auto-generated from the findings. Camera access is session-scoped and not stored between sessions."],
+            ["Floorplan generation mode", "Grant Foreman temporary access to your camera and location. Walk each room and Foreman builds your floorplan and inventory as you go, using spatial estimation and image recognition. Camera and location data are used only during the active session to initialize your home's structure in Foreman."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <RoadGroupHeader label="Low Priority" />
+
+      <ArchSection id="road-advisor" label="AI" heading="AI-Powered Home Advisor" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
           A conversational AI advisor is planned as a dedicated page in Foreman, trained on trade knowledge across the major disciplines of residential construction and systems: HVAC, plumbing, electrical, roofing, structural, insulation, and finish work. The advisor is current on applicable building codes and standard maintenance intervals.
         </p>
@@ -712,19 +749,28 @@ function RoadmapTab() {
         </p>
       </ArchSection>
 
-      <ArchSection id="road-nav-state" label="Page State" heading="Navigation State Persistence" sectionRefs={sectionRefs}>
+      <ArchSection id="road-ha" label="Integrations" heading="Home Assistant Integration" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Today, every page resets to its default configuration when you navigate away and return. Sort column, active tab, filter selections, expanded sections — all lost. If you had the Inventory sorted by install date with the HVAC category expanded, navigated to Maintenance to check something, and returned, you find the page as if you had never been there. This entry covers the work required to make pages remember how you left them.
+          Home Assistant is the leading open-source home automation platform, running locally in hundreds of thousands of households. The planned integration connects Foreman's maintenance and inventory data with Home Assistant's device registry and automation engine.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The critical design distinction is between configuration and transient state. Configuration is how the user has customized their view: which tab is active, which column they are sorting by, which filters are applied, which grouping mode is selected. This should persist. Transient state is what the user was doing in the moment: which item's detail panel is open, what they had typed in a search field, which row was hovered. This should not — restoring it tends to be disorienting rather than helpful. A page that remembers its filters but not that you had scrolled to the middle is the right balance.
+          In practice: when a smart device in Home Assistant registers an anomaly — an HVAC unit drawing more current than usual, a water sensor triggering, a filter indicator firing — Foreman can receive that signal and automatically create a maintenance task or to-do. In the other direction, completing a maintenance task in Foreman can trigger Home Assistant automations: resetting a filter timer, updating a device's service record, or notifying household members.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          The integration is designed to work with the existing Home Assistant webhook and REST API system. No custom Home Assistant add-on is required.
+        </p>
+      </ArchSection>
+
+      <ArchSection id="road-gla" label="GLA" heading="GLA Measurement Mode" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman's spatial model already separates areas that contribute to square footage (Rooms) from those that don't (Exteriors — garages, basements, attics, and outdoor areas), and surfaces the total as the “Finished area” in the floor plan's Property Details panel. That figure is an honest approximation, not an appraisal-grade measurement. This adds an opt-in mode, for advanced users, that brings the calculation in line with the real estate industry's Gross Living Area (GLA) standard — the same basis an appraiser or listing agent uses.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
           {[
-            ["Implementation approach", "The correct tool in this codebase is a pageUIState slice in the existing Zustand store (lib/store.js): a plain object keyed by page identifier, where each page reads its configuration from the store on mount instead of from useState defaults, and writes back on change. This is in-memory, so it survives navigation within a session but resets on full page reload. For truly sticky preferences — view modes or groupings where a user would be annoyed if a reload forgot them — those specific keys can be persisted to storage on write. The key principle: most configuration should survive within a session; a small set of high-value preferences should also survive reloads."],
-            ["What to persist per page", "Inventory: active tab (All / By Room / By Category), sort column and direction, active filter chips, expanded category list. Maintenance: active tab (Schedule / History), active filters, sort state, expanded category state. Notebook: grouping mode (Category / System / Custom), onlyDocumented toggle. Lifecycle: active tab (Forecast / Chores / Budget), forecast horizon setting. Workbench: active tab. Chores: sort column, sort direction. The floor plan, preferences, and read-me pages have no meaningful ephemeral state to restore."],
-            ["What not to persist", "Search queries should not persist — a user who left mid-search has usually finished the task that required it; returning to a filtered view with two visible items is more confusing than starting fresh. Selected items and open detail panels should not persist — the panel being open when you return to a page is context-free without the activity that opened it. Scroll position is not worth the implementation complexity: if filters and sort are restored, the user can quickly reorient."],
-            ["Scope and sequencing", "This is a wide refactor, not a complex one. Each page requires identifying its relevant state variables, adding a pageUIState key to the Zustand store for the page, replacing the useState initializers with store reads, and replacing setters with store writes. A single page can be done in under an hour. The recommended sequencing is highest-friction pages first: Inventory has the most state variables and the most user-visible reset problem. Maintenance and Notebook follow. Low-state pages (Workbench, Chores) are last. Do not attempt all pages in one pass — each page can be migrated independently without affecting the others."],
+            ["Opt-in toggle", "GLA mode is off by default. A single switch in Preferences turns on the stricter measurement and display system, so the everyday experience stays simple while advanced users get appraisal-grade rigor when they want it."],
+            ["ANSI Z765 rules", "Finished, heated, above-grade living space counts toward GLA; below-grade space (basements), garages, and unfinished areas (most attics) are measured and reported separately rather than folded into the headline number — matching how living area is defined for appraisals and listings."],
+            ["Measured to standard", "Area is computed from exterior wall dimensions with ceiling-height minimums applied, and finished vs. unfinished status tracked per space, so the total is defensible against a real appraisal."],
+            ["Honest display", "When enabled, the floor plan reports Gross Living Area alongside separate above-grade, below-grade, and garage subtotals, instead of a single summed figure — the breakdown a buyer or appraiser expects to see."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
@@ -736,6 +782,9 @@ function RoadmapTab() {
           ))}
         </div>
       </ArchSection>
+
+      <ArchSection id="road-furniture" label="Furniture" heading="Furniture Planning" sectionRefs={sectionRefs}>
+      </ArchSection>
     </div>
   );
 }
@@ -744,13 +793,53 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
+    date: "June 28, 2026",
+    heading: "Chores: Multi-Assignee Completion",
+    bullets: [
+      ["Log multiple people at once", "The completion form now accepts more than one assignee — select any combination from your household roster using the new chip picker. Names not on the roster can be typed in and committed with Enter."],
+      ["Time split automatically", "Total duration entered is divided equally across assignees. A live hint below the Time field shows the per-person share as you pick people: \"30m each · 2 people\". The dashboard query engine expands each completion into one row per person, so a chart grouped by Assignee attributes the fair share of time to each."],
+      ["History reflects the split", "The History tab shows all assignees in the Who column and displays both the total time and the per-person share in the Time column: \"01:00 (30m ea)\"."],
+      ["Backward compatible", "Existing single-assignee records are read as a one-person completion automatically. No migration needed."],
+    ],
+  },
+  {
+    date: "June 28, 2026",
+    heading: "Dashboard: Custom Panels & Arrange Mode",
+    bullets: [
+      ["Build your own charts", "A new "+ Add Visualization" button opens an 8-step builder: pick a chart type (bar, line, area, pie), a data source (chore completions, maintenance completions, spending, utilities, services, or inventory), a group-by field, a measure (count, sum, or average), optional filters, and a date range. A live preview updates as you configure each step. Name it and save, and it lands on the dashboard as a draggable panel."],
+      ["Edit or delete any custom panel", "Custom panels show a ⋯ menu with Edit and Delete. Edit reopens the builder with the panel's current config pre-filled so you can refine it."],
+      ["Arrange panels freely", "A new "⊞ Arrange Panels" button puts the dashboard into edit mode: all panels get a dashed brass border and a grab cursor; resize handles appear in the corner. Drag any panel to reorder it; drag the corner to resize. Escape or "✓ Done" exits. A Reset button restores the default layout. The arrangement persists across reloads."],
+    ],
+  },
+  {
+    date: "June 27, 2026",
+    heading: "Floor Plan: Building Outline",
+    bullets: [
+      ["A real Outline type", "The building footprint you import from your address is now its own Outline — a neutral white border with no fill, distinct from rooms and exteriors. It shows on every floor as scaffolding to trace against and is never counted toward square footage. On import it is auto-squared to the grid, so the snapping room tools line up with it."],
+      ["Select and edit it like a zone", "Click the outline to select it: its side lengths appear on each wall and a detail panel opens with its size and options. Drag the border to move the whole outline, drag a corner to reshape it, click a corner to remove it, or click the border to add one — the same editing as a room or exterior zone."],
+      ["Calibrate its size", "Set the outline's width or length in feet and it scales proportionally from its corner. Rooms you have already scaffolded onto it reflow with the change, so they stay aligned to the walls instead of drifting out of place."],
+      ["Per-floor visibility and delete", "Show or hide the outline on individual floors, toggle it everywhere with the Outline filter, or delete it — all from the detail panel or the filter's options menu. Rooms snap cleanly to its walls as you place them."],
+    ],
+  },
+  {
+    date: "June 27, 2026",
+    heading: "Floor Plan: Edit & Group Zones",
+    bullets: [
+      ["Resize by exact dimensions", "Select any placed zone and type its width and height in feet in the detail panel — a precise alternative to dragging its corners."],
+      ["Change a zone's shape", "Switch a placed zone between rectangle, L, and U at any time, using the same shape selector offered when you add one. The zone keeps its position and footprint."],
+      ["Move a zone to another floor", "Reassign a zone's floor from its panel. It keeps the same position and size on the new floor and brings its item pins along."],
+      ["Group zones", "With the Select tool, group several zones so they move together as a unit and resize proportionally — handy for shifting a wing of the house or scaling a whole floor at once."],
+      ["Labels readable at any zoom", "Zone and drawing labels now scale with the zoom level, staying legible whether you are zoomed far out or all the way in, instead of shrinking until you cannot read them."],
+    ],
+  },
+  {
     date: "June 23, 2026",
     heading: "Floor Plan: Faster Room Building",
     bullets: [
       ["Parametric room shapes", "Adding a room now gives you a shape — rectangle, L, or U — with editable dimensions in feet, right in the toolbar. The placement ghost previews your exact shape and size as you move the cursor; click to drop it. No more dragging a fixed box to resize."],
       ["Walls snap together", "Drag a room next to another and their edges snap flush, so rooms share a wall instead of leaving a sliver gap or overlapping. Dragging a corner snaps it onto a neighbor's edge as well, and a brass guide line marks the moment a snap lands."],
       ["Add rooms by typing", "A new Dimensions mode builds a plan without drawing at all: type a room's name and size, press Add, and it drops into the first open spot automatically. Add several in a row to lay out a floor in seconds, then drag them into position — they'll snap as they meet."],
-      ["Import your building outline from your address", "With Online Mode on, the new Address button looks up your home's real building footprint (via OpenStreetMap) and places it on the floor, pre-scaled to feet, as a “Building” outline you build rooms inside. It's the envelope, not the interior — a scaffold to work against, since a roofline runs slightly larger than the foundation and interior walls aren't included. Gated behind Online Mode and only runs when you click Fetch; nothing is sent until you ask."],
+      ["Import your building outline from your address", "With Online Mode on, the new Address button looks up your home's real building footprint (via OpenStreetMap) and adds it as a scaffold Outline — a neutral white border, pre-scaled to feet, that you drop rooms onto. The footprint is auto-squared to the grid on import (real buildings rarely face true north), so the grid-snapping room tools — and snap-to-wall — align to it cleanly. Drag its border to move it, and use the Outline filter's ⋯ menu to show or hide it per floor or delete it. One Outline per plan (re-importing replaces it). It's the envelope, not the interior — a tracing guide, since a roofline runs slightly larger than the foundation and interior walls aren't included. Gated behind Online Mode and only runs when you click Fetch; nothing is sent until you ask."],
     ],
   },
   {
