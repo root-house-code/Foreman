@@ -531,14 +531,6 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
     return { overdue, soon };
   }, [rows, deletedCategories, deletedItems, deletedRows, nextDates]);
 
-  const hasSeasonalTasks = useMemo(() => rows.some(row => {
-    if (!row.season || !row.task || row._isBlankCategory) return false;
-    if (!row._isCustom && deletedCategories.has(row.category)) return false;
-    if (deletedItems.has(`${row.category}|${row.item}`)) return false;
-    if (deletedRows.has(`${row.category}|${row.item}|${row.task}`)) return false;
-    return true;
-  }), [rows, deletedCategories, deletedItems, deletedRows]);
-
   const tasklessItems = useMemo(() => {
     const withTasks = new Set();
     const allItems  = new Map();
@@ -811,7 +803,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
               options={[{ value: "ALL", label: "All" }, ...typeOptions.map(t => ({ value: t, label: t }))]}
             />
           </FilterRow>
-          <FilterRow label="Season" labelWidth="54px" hidden={!hasSeasonalTasks}>
+          <FilterRow label="Season" labelWidth="54px">
             <FilterDropdown
               value={activeSeason}
               onChange={setActiveSeason}
