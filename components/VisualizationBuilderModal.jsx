@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
-  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList,
+  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, Legend,
 } from "recharts";
 import { DATA_SOURCES, DATE_RANGE_PRESETS, getSourceFields, runQuery } from "../lib/dashboardQuery.js";
 
@@ -98,9 +98,34 @@ export function renderPieValueLabel({ cx, cy, midAngle, innerRadius, outerRadius
   );
 }
 
+// Shared legend styling (pie/donut category key). Kept here so the builder
+// preview and the live dashboard panel render an identical legend.
+export const LEGEND_PROPS = {
+  verticalAlign: "bottom",
+  align: "center",
+  iconSize: 8,
+  iconType: "circle",
+  wrapperStyle: { fontFamily: "var(--fm-mono)", fontSize: "0.62rem", paddingTop: 4 },
+};
+
+// Small pill toggle used for the Display options (labels / legend).
+function ToggleRow({ on, onToggle, label }) {
+  return (
+    <button
+      onClick={onToggle}
+      style={{ alignItems: "center", background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: "0.6rem", marginBottom: "0.55rem", padding: 0 }}
+    >
+      <span style={{ alignItems: "center", background: on ? "var(--fm-brass)" : "var(--fm-bg-sunk)", border: `1px solid ${on ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 999, display: "flex", height: 18, justifyContent: on ? "flex-end" : "flex-start", padding: 2, transition: "all 0.12s", width: 32 }}>
+        <span style={{ background: on ? "var(--fm-bg)" : "var(--fm-ink-mute)", borderRadius: "50%", height: 12, width: 12 }} />
+      </span>
+      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>{label}</span>
+    </button>
+  );
+}
+
 // ── Chart Preview ─────────────────────────────────────────────────────────────
 
-function ChartPreview({ chartType, data, showLabels = false }) {
+function ChartPreview({ chartType, data, showLabels = false, showLegend = false }) {
   if (!data || data.length === 0) {
     return <div style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", height: "100%", justifyContent: "center" }}>No data — adjust settings</div>;
   }
@@ -176,6 +201,7 @@ function ChartPreview({ chartType, data, showLabels = false }) {
             label={showLabels ? renderPieValueLabel : false} labelLine={false}>
             {data.map((_, i) => <Cell key={i} fill={COLORS_HEX[i % COLORS_HEX.length]} fillOpacity={0.8} />)}
           </Pie>
+          {showLegend && <Legend {...LEGEND_PROPS} />}
           <Tooltip contentStyle={tooltipStyle} formatter={(value, name) => [value, name]} />
         </PieChart>
       </ResponsiveContainer>
@@ -224,9 +250,10 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
   const [sortBy,       setSortBy]       = useState(initialConfig?.query?.sortBy ?? "value");
   const [sortDir,      setSortDir]      = useState(initialConfig?.query?.sortDir ?? "desc");
   const [limit,        setLimit]        = useState(initialConfig?.query?.limit ?? 10);
-  // New charts default to labels on; editing a pre-existing panel keeps its
-  // current look (legacy panels with no flag render without labels).
+  // New charts default to labels/legend on; editing a pre-existing panel keeps
+  // its current look (legacy panels with no flag render without them).
   const [showLabels,   setShowLabels]   = useState(initialConfig ? (initialConfig.showLabels ?? false) : true);
+  const [showLegend,   setShowLegend]   = useState(initialConfig ? (initialConfig.showLegend ?? false) : true);
   const [panelTitle,   setPanelTitle]   = useState(initialConfig?.title ?? "");
 
   const sourceFields = useMemo(() => getSourceFields(sourceId), [sourceId]);
@@ -272,6 +299,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
       title:     panelTitle.trim() || "Custom Chart",
       chartType,
       showLabels,
+      showLegend,
       query:     queryConfig,
     });
   }
@@ -338,17 +366,10 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                 {chartType !== "table" && (
                   <div style={{ borderTop: "1px solid var(--fm-hairline)", marginTop: "1.25rem", paddingTop: "1rem" }}>
                     <div style={labelStyle}>Display</div>
-                    <button
-                      onClick={() => setShowLabels(v => !v)}
-                      style={{ alignItems: "center", background: "transparent", border: "none", cursor: "pointer", display: "flex", gap: "0.6rem", padding: 0 }}
-                    >
-                      <span style={{ alignItems: "center", background: showLabels ? "var(--fm-brass)" : "var(--fm-bg-sunk)", border: `1px solid ${showLabels ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 999, display: "flex", height: 18, justifyContent: showLabels ? "flex-end" : "flex-start", padding: 2, transition: "all 0.12s", width: 32 }}>
-                        <span style={{ background: showLabels ? "var(--fm-bg)" : "var(--fm-ink-mute)", borderRadius: "50%", height: 12, width: 12 }} />
-                      </span>
-                      <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem" }}>
-                        Show value labels on the chart
-                      </span>
-                    </button>
+                    <ToggleRow on={showLabels} onToggle={() => setShowLabels(v => !v)} label="Show value labels on the chart" />
+                    {(chartType === "pie" || chartType === "donut") && (
+                      <ToggleRow on={showLegend} onToggle={() => setShowLegend(v => !v)} label="Show legend (category key)" />
+                    )}
                   </div>
                 )}
               </div>
@@ -490,7 +511,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                   {previewData.length} data points — {sourceId ? DATA_SOURCES[sourceId]?.label : "no source"}
                 </div>
                 <div style={{ height: 240 }}>
-                  <ChartPreview chartType={chartType} data={previewData} showLabels={showLabels} />
+                  <ChartPreview chartType={chartType} data={previewData} showLabels={showLabels} showLegend={showLegend} />
                 </div>
               </div>
             )}
@@ -518,6 +539,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                     ["Date",   DATE_RANGE_PRESETS[dateRange]?.label ?? dateRange],
                     ["Filters", filters.length > 0 ? `${filters.length} active` : "None"],
                     ["Labels", chartType === "table" ? "n/a" : showLabels ? "On" : "Off"],
+                    ["Legend", (chartType === "pie" || chartType === "donut") ? (showLegend ? "On" : "Off") : "n/a"],
                   ].map(([k, v]) => (
                     <div key={k} style={{ alignItems: "baseline", color: "var(--fm-ink-dim)", display: "flex", gap: "0.75rem", marginBottom: "0.3rem" }}>
                       <span style={{ color: "var(--fm-ink-mute)", minWidth: "50px", textTransform: "uppercase" }}>{k}</span>
@@ -538,7 +560,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
                   Configure source + group to see preview
                 </div>
               ) : (
-                <ChartPreview chartType={chartType} data={previewData} showLabels={showLabels} />
+                <ChartPreview chartType={chartType} data={previewData} showLabels={showLabels} showLegend={showLegend} />
               )}
             </div>
             <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginTop: "0.5rem" }}>
