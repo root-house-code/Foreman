@@ -280,6 +280,13 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
     return true;
   }
 
+  // The chart is complete enough to save from any step: a renderable query plus
+  // a title. Lets users (especially when editing) flip a toggle and save without
+  // clicking through every remaining step.
+  function canSave() {
+    return !!sourceId && !!groupBy && (measure === "count" || !!measureField) && !!panelTitle.trim();
+  }
+
   // ── Filter helpers ────────────────────────────────────────────────────────────
 
   function addFilter() {
@@ -580,13 +587,23 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
               onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}>&larr; Back</button>
           )}
           {step < STEPS.length - 1 ? (
-            <button
-              onClick={() => canProceed() && setStep(s => s + 1)}
-              disabled={!canProceed()}
-              style={{ ...btnPrimary, opacity: canProceed() ? 1 : 0.4, cursor: canProceed() ? "pointer" : "not-allowed" }}
-              onMouseEnter={e => { if (canProceed()) e.currentTarget.style.background = "var(--fm-brass)22"; }}
-              onMouseLeave={e => e.currentTarget.style.background = "var(--fm-brass-bg)"}
-            >Next &rarr;</button>
+            <>
+              <button
+                onClick={() => canSave() && handleSave()}
+                disabled={!canSave()}
+                title={canSave() ? "Save and close" : "Pick a source, group, measure, and title first"}
+                style={{ background: "transparent", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", cursor: canSave() ? "pointer" : "not-allowed", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", opacity: canSave() ? 1 : 0.4, padding: "0.4rem 1rem", transition: "background 0.12s" }}
+                onMouseEnter={e => { if (canSave()) e.currentTarget.style.background = "var(--fm-brass)22"; }}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+              >Save</button>
+              <button
+                onClick={() => canProceed() && setStep(s => s + 1)}
+                disabled={!canProceed()}
+                style={{ ...btnPrimary, opacity: canProceed() ? 1 : 0.4, cursor: canProceed() ? "pointer" : "not-allowed" }}
+                onMouseEnter={e => { if (canProceed()) e.currentTarget.style.background = "var(--fm-brass)22"; }}
+                onMouseLeave={e => e.currentTarget.style.background = "var(--fm-brass-bg)"}
+              >Next &rarr;</button>
+            </>
           ) : (
             <button
               onClick={handleSave}
@@ -594,7 +611,7 @@ export default function VisualizationBuilderModal({ initialConfig = null, onSave
               style={{ ...btnPrimary, opacity: panelTitle.trim() ? 1 : 0.4, cursor: panelTitle.trim() ? "pointer" : "not-allowed" }}
               onMouseEnter={e => { if (panelTitle.trim()) e.currentTarget.style.background = "var(--fm-brass)22"; }}
               onMouseLeave={e => e.currentTarget.style.background = "var(--fm-brass-bg)"}
-            >Add to Dashboard</button>
+            >{initialConfig ? "Save" : "Add to Dashboard"}</button>
           )}
         </div>
       </div>

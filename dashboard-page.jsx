@@ -381,6 +381,7 @@ export default function DashboardPage({ navigate }) {
   function handleUpdatePanel(config) {
     const updated = customPanels.map(p => p.id === editingPanel ? { ...p, ...config } : p);
     persistCustomPanels(updated);
+    setBuilderOpen(false);
     setEditingPanel(null);
   }
 
