@@ -115,11 +115,11 @@ export default function ChoreDetailModal({ chore, date, isDone, onToggleDone, on
     onClose();
   }
 
-  // Live per-person split: total time divided equally across assignees.
+  // Each assignee is credited the full chore time (not a split).
   const totalMinutes = (parseInt(form.durHH, 10) || 0) * 60 + (parseInt(form.durMM, 10) || 0);
   const numAssignees = form.assignees.length;
   const perPersonLabel = totalMinutes > 0 && numAssignees > 1
-    ? `${fmtSplit(totalMinutes / numAssignees)} each · ${numAssignees} people`
+    ? `${fmtSplit(totalMinutes)} each · ${numAssignees} people`
     : null;
 
   function handleHHChange(e) {

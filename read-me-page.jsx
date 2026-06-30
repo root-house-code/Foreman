@@ -797,8 +797,8 @@ const UPDATES = [
     heading: "Chores: Multi-Assignee Completion",
     bullets: [
       ["Log multiple people at once", "The completion form now accepts more than one assignee — select any combination from your household roster using the new chip picker. Names not on the roster can be typed in and committed with Enter."],
-      ["Time split automatically", "Total duration entered is divided equally across assignees. A live hint below the Time field shows the per-person share as you pick people: \"30m each · 2 people\". The dashboard query engine expands each completion into one row per person, so a chart grouped by Assignee attributes the fair share of time to each."],
-      ["History reflects the split", "The History tab shows all assignees in the Who column and displays both the total time and the per-person share in the Time column: \"01:00 (30m ea)\"."],
+      ["Everyone is credited the full time", "Each assignee is credited the chore's full duration — a 60-minute chore done by two people logs 60 minutes for each, not 30. A live hint below the Time field confirms it as you pick people: \"60m each · 2 people\". The dashboard query engine expands each completion into one row per person, so a chart grouped by Assignee shows each person's full time."],
+      ["History shows every assignee", "The History tab lists all assignees in the Who column; the Time column shows the chore's full duration, which is the time credited to each person."],
       ["Backward compatible", "Existing single-assignee records are read as a one-person completion automatically. No migration needed."],
     ],
   },
