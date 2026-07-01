@@ -707,11 +707,9 @@ export default function ChoresPage({ navigate, navState }) {
 
   const [sortCols, _setSortCols] = useState(() => uiState.sortCols ?? []);
   function setSortCols(updater) {
-    _setSortCols(prev => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      setUIState({ sortCols: next });
-      return next;
-    });
+    const next = typeof updater === "function" ? updater(sortCols) : updater;
+    _setSortCols(next);
+    setUIState({ sortCols: next });
   }
   const [confirmChore, setConfirmChore]   = useState(null);
   const [addChoreModalOpen, setAddChoreModalOpen] = useState(false);

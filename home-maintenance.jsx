@@ -95,11 +95,11 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
   const [sortCols, _setSortCols] = useState(() => uiState.sortCols ?? []);
   function setSortCols(updater) {
-    _setSortCols(prev => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      setUIState({ sortCols: next });
-      return next;
-    });
+    // Compute next outside the React updater so Zustand's set() isn't called
+    // inside React's reconciliation phase (setState-during-render → infinite loop).
+    const next = typeof updater === "function" ? updater(sortCols) : updater;
+    _setSortCols(next);
+    setUIState({ sortCols: next });
   }
   const [deletedRows, setDeletedRows] = useState(() => loadDeletedRows());
   const [deletedCategories] = useState(() => loadDeletedCategories());
