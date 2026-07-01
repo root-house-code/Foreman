@@ -545,10 +545,10 @@ function RoadmapTab() {
 
       <ArchSection id="road-nav-state" label="Page State" heading="Navigation State Persistence" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Today, every page resets to its default configuration when you navigate away and return. Sort column, active tab, filter selections, expanded sections — all lost. If you had the Inventory sorted by install date with the HVAC category expanded, navigated to Maintenance to check something, and returned, you find the page as if you had never been there. This entry covers the work required to make pages remember how you left them.
+          This is shipped. Pages now remember their view configuration — active tab, filter selections, sort column, view mode — when you navigate away and return, and across full page reloads. Maintenance remembers its active tab, all five filter dropdowns, season, and frequency chips. Chores remembers the active room, frequency chips, history room filter, and sort state. Workbench remembers its active tab and both filter dropdowns. Inventory remembers the active view and the filter and sort state in the list view. Lifecycle remembers the ledger subnav tab and forecast horizon. The Notebook remembers the 'Only documented' toggle (grouping was already stored independently).
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The critical design distinction is between configuration and transient state. Configuration is how the user has customized their view: which tab is active, which column they are sorting by, which filters are applied, which grouping mode is selected. This should persist. Transient state is what the user was doing in the moment: which item's detail panel is open, what they had typed in a search field, which row was hovered. This should not — restoring it tends to be disorienting rather than helpful. A page that remembers its filters but not that you had scrolled to the middle is the right balance.
+          The implementation uses a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>pageUIState</span> slice in the Zustand store, backed by <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-page-ui-state</span> in storage. A <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>usePageUIState(pageId)</span> hook exported from <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/store.js</span> returns the stored config and a setter. Each migrated state variable initializes from the store on mount and writes back through a wrapper that calls both the local React setter and the store setter. Search queries, open panels, and selected items are intentionally not restored — returning to a page mid-search or with a detail panel open without the context that led there is more disorienting than starting fresh.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
           {[
@@ -792,6 +792,23 @@ function RoadmapTab() {
 // ─── Updates tab ──────────────────────────────────────────────────────────────
 
 const UPDATES = [
+  {
+    date: "July 1, 2026",
+    heading: "Navigation: Pages Remember Their State",
+    bullets: [
+      ["Filters and sort survive navigation", "Navigating away from a page and returning no longer resets it. Maintenance remembers its active tab, status filter, location, type, season, and frequency chips. Chores remembers the active room and sort column. Workbench remembers which tab (Queue or History). Inventory remembers the view (List, Overview, Outline) and the filters in the list view. Lifecycle remembers the forecast horizon and the Ledger subnav tab. The Notebook remembers the 'Only documented' toggle."],
+      ["Persists across reloads too", "Configuration is written to storage on every change, so it survives a full page reload — not just within-session navigation. The forecast horizon you set stays set the next time you open the app."],
+      ["Transient state is intentionally not restored", "Search queries, open detail panels, and selected items reset on navigation as before. Restoring those would be disorienting without the activity that led to them. Only deliberate view configuration — tab, filters, sort — is remembered."],
+    ],
+  },
+  {
+    date: "July 1, 2026",
+    heading: "All History Tabs: Delete Records",
+    bullets: [
+      ["Delete any history entry", "Every history tab — Maintenance, Chores, Utilities, Services, and Workbench — now has an × button at the end of each row. Click it to remove that completion record permanently."],
+      ["Confirmation before deleting", "Clicking × opens a confirmation dialog before committing the delete, so accidental taps don't wipe records."],
+    ],
+  },
   {
     date: "June 28, 2026",
     heading: "Chores: Multi-Assignee Completion",
