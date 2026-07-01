@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
-import { useForemanStore } from "./lib/store.js";
+import { useForemanStore, usePageUIState } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
@@ -471,10 +471,18 @@ export default function WorkbenchPage({ navigate, navState }) {
   const inventory       = useForemanStore(s => s.inventory);
   const spatialAssignments = useForemanStore(s => s.spatialAssignments);
 
-  const [activeTab,    setActiveTab]    = useState("Queue");
+  const [uiState, setUIState] = usePageUIState("workbench");
+
+  const [activeTab, _setActiveTab] = useState(() => uiState.activeTab ?? "Queue");
+  function setActiveTab(v) { _setActiveTab(v); setUIState({ activeTab: v }); }
+
   const [pendingDeleteSession, setPendingDeleteSession] = useState(null);
-  const [typeFilter,   setTypeFilter]   = useState("All");
-  const [statusFilter, setStatusFilter] = useState("All");
+
+  const [typeFilter, _setTypeFilter] = useState(() => uiState.typeFilter ?? "All");
+  function setTypeFilter(v) { _setTypeFilter(v); setUIState({ typeFilter: v }); }
+
+  const [statusFilter, _setStatusFilter] = useState(() => uiState.statusFilter ?? "All");
+  function setStatusFilter(v) { _setStatusFilter(v); setUIState({ statusFilter: v }); }
 
   const [choreCompletions, setChoreCompletions] = useState(() => loadChoreCompletions());
   const [choreNextDates,   setChoreNextDates]   = useState(() => loadChoreNextDates());

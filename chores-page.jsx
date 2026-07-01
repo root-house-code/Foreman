@@ -30,7 +30,7 @@ import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
-import { useForemanStore } from "./lib/store.js";
+import { useForemanStore, usePageUIState } from "./lib/store.js";
 import {
   loadChoreReminderModes, saveChoreReminderModes,
   loadReminderModes, REMINDER_MODES, syncReminders,
@@ -692,11 +692,27 @@ export default function ChoresPage({ navigate, navState }) {
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [roomOptions]                     = useState(() => buildRoomOptions());
   const [roomItemsMap, setRoomItemsMap]   = useState(() => buildRoomItemsMap());
-  const [activeTab, setActiveTab]         = useState("This week");
-  const [activeRoom, setActiveRoom]       = useState("All");
-  const [activeFrequencies, setActiveFrequencies] = useState(new Set());
-  const [search, setSearch]               = useState("");
-  const [sortCols, setSortCols]           = useState([]);
+  const [uiState, setUIState] = usePageUIState("chores");
+
+  const [activeTab, _setActiveTab] = useState(() => uiState.activeTab ?? "This week");
+  function setActiveTab(v) { _setActiveTab(v); setUIState({ activeTab: v }); }
+
+  const [activeRoom, _setActiveRoom] = useState(() => uiState.activeRoom ?? "All");
+  function setActiveRoom(v) { _setActiveRoom(v); setUIState({ activeRoom: v }); }
+
+  const [activeFrequencies, _setActiveFrequencies] = useState(() => new Set(uiState.activeFrequencies ?? []));
+  function setActiveFrequencies(v) { _setActiveFrequencies(v); setUIState({ activeFrequencies: [...v] }); }
+
+  const [search, setSearch] = useState("");
+
+  const [sortCols, _setSortCols] = useState(() => uiState.sortCols ?? []);
+  function setSortCols(updater) {
+    _setSortCols(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      setUIState({ sortCols: next });
+      return next;
+    });
+  }
   const [confirmChore, setConfirmChore]   = useState(null);
   const [addChoreModalOpen, setAddChoreModalOpen] = useState(false);
   const [createChoreDate, setCreateChoreDate]     = useState(null);
@@ -715,7 +731,9 @@ export default function ChoresPage({ navigate, navState }) {
     setChoreCompletionRecords(deleteChoreCompletionRecord(key));
   }
   const [historySearch, setHistorySearch] = useState("");
-  const [historyRoomFilter, setHistoryRoomFilter] = useState("ALL");
+
+  const [historyRoomFilter, _setHistoryRoomFilter] = useState(() => uiState.historyRoomFilter ?? "ALL");
+  function setHistoryRoomFilter(v) { _setHistoryRoomFilter(v); setUIState({ historyRoomFilter: v }); }
 
   useEffect(() => {
     if (!navState) return;

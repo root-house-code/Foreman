@@ -19,7 +19,7 @@ import { UNIVERSAL_FIELDS, ITEM_FIELDS, TYPE_FIELDS } from "./lib/fieldLibrary.j
 import { FilterDropdown, FilterPill } from "./components/FilterPill.jsx";
 import ModelComboField from "./components/ModelComboField.jsx";
 import { buildSections, loadNotebookGrouping, saveNotebookGrouping, loadNotebookOrder, saveNotebookOrder, NOTEBOOK_GROUPINGS } from "./lib/notebookOrg.js";
-import { useForemanStore } from "./lib/store.js";
+import { useForemanStore, usePageUIState } from "./lib/store.js";
 import { loadGuideNotes, saveGuideNotes } from "./lib/guideNotes.js";
 import { loadStandaloneArticles, saveStandaloneArticles, standaloneNoteKey } from "./lib/standaloneArticles.js";
 import { loadProjects } from "./lib/projects.js";
@@ -256,10 +256,13 @@ export default function GuidePage({ navigate }) {
   const [standaloneArticles, setStandaloneArticles] = useState(() => loadStandaloneArticles());
   const [associations, setAssociations] = useState(() => loadArticleAssociations());
 
+  const [uiState, setUIState] = usePageUIState("notebook");
+
   // Article organization (Part A) + Notebook upgrades (Part C)
   const [grouping, setGrouping]             = useState(() => loadNotebookGrouping());
   const [customOrder, setCustomOrder]       = useState(() => loadNotebookOrder());
-  const [onlyDocumented, setOnlyDocumented] = useState(false);
+  const [onlyDocumented, _setOnlyDocumented] = useState(() => uiState.onlyDocumented ?? false);
+  function setOnlyDocumented(v) { _setOnlyDocumented(v); setUIState({ onlyDocumented: v }); }
   const [dragKey, setDragKey]               = useState(null);
   const [dragOverKey, setDragOverKey]       = useState(null);
   const [confirmDeleteArticle, setConfirmDeleteArticle] = useState(false);

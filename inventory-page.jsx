@@ -68,7 +68,7 @@ import { getModels } from "./lib/models.js";
 import { polygonCentroid } from "./lib/geometry.js";
 import { loadFpData, saveFpData, shapeToPolygon } from "./lib/fpData.js";
 import { fetchBuildingFootprint, addressToQuery } from "./lib/buildingFootprint.js";
-import { useForemanStore, selectZoneItems } from "./lib/store.js";
+import { useForemanStore, selectZoneItems, usePageUIState } from "./lib/store.js";
 import { SEASON_OPTIONS } from "./lib/scheduleOptions.js";
 import FollowButton from "./components/FollowButton.jsx";
 import SchedulePicker from "./components/SchedulePicker.jsx";
@@ -358,6 +358,14 @@ function zoneSnapLines(polys) {
   return { xs, ys };
 }
 
+// Snap lines from the building outline scaffold: every vertex contributes its x and
+// y, so a room edge can snap onto any of the outline's real walls, not just its bbox.
+function outlineSnapLines(outline) {
+  const xs = [], ys = [];
+  for (const p of outline?.points || []) { xs.push(p.x); ys.push(p.y); }
+  return { xs, ys };
+}
+
 // Nearest snap line to value v within WALL_SNAP_DIST, or null.
 function nearestSnapLine(v, lines) {
   let best = null, bd = WALL_SNAP_DIST;
@@ -463,12 +471,13 @@ function LockButton({ x, y, locked, onToggle }) {
 }
 
 const FP_LAYER_KEY = "foreman-fp-layers";
-const DEFAULT_LAYERS = { zones: true, pins: true, drawings: true, todos: true };
+// `outline` toggles the plan-wide building outline scaffold; default visible.
+const DEFAULT_LAYERS = { zones: true, pins: true, drawings: true, todos: true, outline: true };
 const LAYER_PRESETS = {
-  all:         { zones: true,  pins: true,  drawings: true,  todos: true  },
-  rooms:       { zones: true,  pins: false, drawings: false, todos: false },
-  inventory:   { zones: true,  pins: true,  drawings: false, todos: false },
-  maintenance: { zones: true,  pins: false, drawings: false, todos: true  },
+  all:         { zones: true,  pins: true,  drawings: true,  todos: true,  outline: true },
+  rooms:       { zones: true,  pins: false, drawings: false, todos: false, outline: true },
+  inventory:   { zones: true,  pins: true,  drawings: false, todos: false, outline: true },
+  maintenance: { zones: true,  pins: false, drawings: false, todos: true,  outline: true },
 };
 const PRESET_LABELS  = { all: "All", rooms: "Rooms", inventory: "Inventory", maintenance: "Maintenance" };
 const LAYER_TOGGLES  = [
@@ -477,6 +486,8 @@ const LAYER_TOGGLES  = [
   { key: "drawings", label: "Drawings" },
   { key: "todos",    label: "To-dos"   },
 ];
+// Building outline scaffold styling — neutral white border, no fill.
+const FP_OUTLINE_STROKE = "rgba(255,255,255,0.8)";
 
 export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onChangeCategoryType, onAddItem, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem, reverseItemKeyMap, onSelectItem }) {
   const [fpData, setFpData] = useState(() => loadFpData());
@@ -496,6 +507,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const [ghostPin, setGhostPin] = useState(null);
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: FP_W, h: FP_H });
   const [isPanning, setIsPanning] = useState(false);
+  const [svgPxW, setSvgPxW] = useState(0); // rendered SVG width in px, for zoom-invariant label sizing
   const svgRef = useRef(null);
   const draggingRef = useRef(null);
   const vertexDragRef = useRef(null);
@@ -548,11 +560,21 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   const [addrInput, setAddrInput] = useState("");
   const [addrBusy, setAddrBusy] = useState(false);
   const [addrError, setAddrError] = useState(null);
+  const outlineDragRef = useRef(null);
+  const outlineVertexDragRef = useRef(null);
+  const [outlineMenuOpen, setOutlineMenuOpen] = useState(false);
+  const [selectedOutline, setSelectedOutline] = useState(false);
   const [layers, setLayers] = useState(() => {
     try { return { ...DEFAULT_LAYERS, ...(storageGet(FP_LAYER_KEY) || {}) }; }
     catch { return DEFAULT_LAYERS; }
   });
+  const layersRef = useRef(layers); // fresh layer visibility for the []-deps drag handlers
 
+  useEffect(() => { layersRef.current = layers; }, [layers]);
+  // Selecting any other entity deselects the building outline (mutual exclusivity).
+  useEffect(() => {
+    if (selected || selectedPin || selectedDrawingId || selectedTodoMarkerId) setSelectedOutline(false);
+  }, [selected, selectedPin, selectedDrawingId, selectedTodoMarkerId]);
   useEffect(() => { fpDataRef.current = fpData; }, [fpData]);
   useEffect(() => { activeLevelRef.current = activeLevel; }, [activeLevel]);
   useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
@@ -563,6 +585,16 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   useEffect(() => { drawCategoryRef.current = drawCategory; }, [drawCategory]);
   useEffect(() => { markerIsTodoRef.current = markerIsTodo; }, [markerIsTodo]);
   useEffect(() => { ghostZoneRef.current = ghostZone; }, [ghostZone]);
+
+  // Address import is the only network-dependent floor-plan feature; hide it
+  // entirely unless Online Mode is on (re-read on mount, which is when the page
+  // is entered after toggling the setting in Preferences).
+  const onlineMode = storageGet("foreman-online-mode") === true;
+
+  // Canvas units per on-screen pixel at the current zoom. Sizing label fonts in these
+  // units keeps their on-screen size constant (and readable) at any zoom depth.
+  const fpUnitsPerPx = svgPxW > 0 ? viewBox.w / svgPxW : viewBox.w / 1000;
+  const fpFont = px => Math.round(px * fpUnitsPerPx * 10) / 10;
 
   const currentPlaced = fpData.placements[activeLevel] || {};
   // Build roomId ↔ label maps for the active floor
@@ -915,7 +947,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     return { w: u.w, h: u.h, units: u };
   }
 
-  function placeZoneOnCanvas(cat, polygon) {
+  function placeZoneOnCanvas(cat, polygon, shape = "rect") {
     const floorId = activeLevelRef.current;
     const existing = fpDataRef.current.placements[floorId] || {};
     const allRooms = loadRooms();
@@ -932,7 +964,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const d = fpDataRef.current;
     save({
       ...d,
-      placements: { ...d.placements, [floorId]: { ...existing, [roomId]: polygon } },
+      placements: { ...d.placements, [floorId]: { ...existing, [roomId]: { ...polygon, shape } } },
     });
     useForemanStore.getState().reloadAll();
     setSelected(roomId); setEditingPanelName(false);
@@ -965,7 +997,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const allRooms = loadRooms();
     const known = categories.includes(name) || Object.values(allRooms).some(r => r.label === name || r.categoryName === name);
     if (!known) onCreateCategory?.(name, "room");
-    placeZoneOnCanvas(name, polygon);
+    placeZoneOnCanvas(name, polygon, dimShape);
     setDimName("");
   }
 
@@ -977,13 +1009,118 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     setAddrModalOpen(true);
   }
 
-  // Place the imported building outline as an exterior-typed zone (the envelope is
-  // not a room, so it stays out of finished-area sq ft and reads green as a scaffold).
-  function placeBuildingFootprint(label, points) {
-    const allRooms = loadRooms();
-    const known = categories.includes(label) || Object.values(allRooms).some(r => r.label === label || r.categoryName === label);
-    if (!known) onCreateCategory?.(label, "exterior");
-    placeZoneOnCanvas(label, { points });
+  // Store the imported building outline as the plan-wide scaffold (a singleton, not
+  // a room or category). It renders on every floor as a neutral white border and is
+  // never counted toward inventory or finished area. Re-importing replaces it.
+  function placeBuildingFootprint(points) {
+    const d = fpDataRef.current;
+    save({ ...d, outline: { points, hiddenFloors: [] } });
+    setLayers(prev => {
+      if (prev.outline) return prev;
+      const next = { ...prev, outline: true };
+      storageSet(FP_LAYER_KEY, next);
+      return next;
+    });
+  }
+
+  // Begin dragging the whole outline (move mode only) — also selects it, so a plain
+  // click selects and a drag moves. Translation is grid-snapped in the shared
+  // mousemove handler; a click that doesn't move just leaves it selected.
+  function startOutlineDrag(e) {
+    if (drawModeRef.current !== "move") return;
+    e.stopPropagation();
+    setSelected(null);
+    setSelectedPin(null);
+    setSelectedDrawingId(null);
+    setSelectedTodoMarkerId(null);
+    setSelectedOutline(true);
+    const r = svgRef.current.getBoundingClientRect();
+    const vb = viewBoxRef.current;
+    outlineDragRef.current = {
+      startSVGX: vb.x + (e.clientX - r.left) / r.width * vb.w,
+      startSVGY: vb.y + (e.clientY - r.top) / r.height * vb.h,
+      startPoints: fpDataRef.current.outline.points,
+      wasSelected: selectedOutline, // prior selection — a click on an already-selected border inserts a vertex
+    };
+  }
+
+  // Outline vertex editing — exactly like room/exterior zones: drag a corner to move
+  // it, click a corner to remove it (when more than 3 remain), click an edge to insert.
+  function handleOutlineVertexMouseDown(e, vi) {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedOutline(true);
+    outlineVertexDragRef.current = { vi, startX: e.clientX, startY: e.clientY };
+  }
+
+  function handleOutlineEdgeClick(e, edgeStartIdx) {
+    e.preventDefault();
+    e.stopPropagation();
+    const d = fpDataRef.current;
+    if (!d.outline?.points) return;
+    const svgRect = svgRef.current.getBoundingClientRect();
+    const vb = viewBoxRef.current;
+    const newPt = {
+      x: fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) / svgRect.width * vb.w))),
+      y: fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) / svgRect.height * vb.h))),
+    };
+    const newPoints = [...d.outline.points];
+    newPoints.splice(edgeStartIdx + 1, 0, newPt);
+    save({ ...d, outline: { ...d.outline, points: newPoints } });
+  }
+
+  function toggleOutlineFloor(floorId) {
+    const d = fpDataRef.current;
+    if (!d.outline) return;
+    const hidden = new Set(d.outline.hiddenFloors || []);
+    hidden.has(floorId) ? hidden.delete(floorId) : hidden.add(floorId);
+    save({ ...d, outline: { ...d.outline, hiddenFloors: [...hidden] } });
+  }
+
+  function deleteOutline() {
+    save({ ...fpDataRef.current, outline: null });
+    setOutlineMenuOpen(false);
+    setSelectedOutline(false);
+  }
+
+  // Scale the whole outline proportionally from its top-left to a target width or
+  // height (feet) — calibration for when the imported footprint's scale is slightly
+  // off. Grid-snapped and clamped to the canvas; shape and position anchor preserved.
+  // Zones scaffolded onto the outline (centroid inside its footprint, any floor) and
+  // their item pins reflow by the same transform so they stay aligned to the walls;
+  // locked zones and anything outside the footprint are left untouched.
+  function resizeOutline(dim, raw) {
+    const d = fpDataRef.current;
+    if (!d.outline?.points) return;
+    const n = Math.max(1, Math.min(500, Math.round(Number(raw) || 0)));
+    const pts = d.outline.points;
+    const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const oldW = maxX - minX, oldH = maxY - minY;
+    const newW = dim === "w" ? Math.min(n * FP_GRID, FP_W - minX) : oldW;
+    const newH = dim === "h" ? Math.min(n * FP_GRID, FP_H - minY) : oldH;
+    const sx = oldW > 0 ? newW / oldW : 1, sy = oldH > 0 ? newH / oldH : 1;
+    if (sx === 1 && sy === 1) return;
+    const scalePt = p => ({ x: fpSnap(minX + (p.x - minX) * sx), y: fpSnap(minY + (p.y - minY) * sy) });
+    const within = (cx, cy) => cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
+
+    const newPlacements = {};
+    for (const [floorId, zones] of Object.entries(d.placements || {})) {
+      newPlacements[floorId] = {};
+      for (const [rid, zone] of Object.entries(zones)) {
+        const c = zone?.points ? polygonCentroid(zone.points) : null;
+        newPlacements[floorId][rid] = (c && !zone.locked && within(c.cx, c.cy))
+          ? { ...zone, points: zone.points.map(scalePt) }
+          : zone;
+      }
+    }
+    const newPins = {};
+    for (const [floorId, arr] of Object.entries(d.pins || {})) {
+      newPins[floorId] = (arr || []).map(pin =>
+        within(pin.x, pin.y) ? { ...pin, x: Math.round(minX + (pin.x - minX) * sx), y: Math.round(minY + (pin.y - minY) * sy) } : pin
+      );
+    }
+    save({ ...d, outline: { ...d.outline, points: pts.map(scalePt) }, placements: newPlacements, pins: newPins });
   }
 
   async function runAddressImport() {
@@ -997,7 +1134,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         centerX: vb.x + vb.w / 2,
         centerY: vb.y + vb.h / 2,
       });
-      placeBuildingFootprint("Building", points);
+      placeBuildingFootprint(points);
       setAddrModalOpen(false);
     } catch (e) {
       setAddrError(e?.message || "Something went wrong.");
@@ -1012,6 +1149,78 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     const zone = (d.placements[lvl] || {})[roomId];
     if (!zone) return;
     save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { ...zone, locked: !zone.locked } } } });
+  }
+
+  // Resize a placed zone by editing its bounding box (feet). Scales the polygon from
+  // its top-left corner so the shape is preserved; complex shapes (L/U/footprint)
+  // scale proportionally. Grid-snapped and clamped to the canvas.
+  function resizeSelectedZone(dim, raw) {
+    if (!selected) return;
+    const n = Math.max(1, Math.min(500, Math.round(Number(raw) || 0)));
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const zone = (d.placements[lvl] || {})[selected];
+    if (!zone?.points || zone.locked) return;
+    const xs = zone.points.map(p => p.x), ys = zone.points.map(p => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const oldW = maxX - minX, oldH = maxY - minY;
+    const newW = dim === "w" ? Math.min(n * FP_GRID, FP_W - minX) : oldW;
+    const newH = dim === "h" ? Math.min(n * FP_GRID, FP_H - minY) : oldH;
+    const sx = oldW > 0 ? newW / oldW : 1, sy = oldH > 0 ? newH / oldH : 1;
+    const newPoints = zone.points.map(p => ({ x: fpSnap(minX + (p.x - minX) * sx), y: fpSnap(minY + (p.y - minY) * sy) }));
+    save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [selected]: { ...zone, points: newPoints } } } });
+  }
+
+  // Change a placed zone's shape (rect/L/U) in place, keeping its bounding box so
+  // position and overall size are preserved. Notch/gap for L and U are sized as a
+  // proportion of the box. The chosen shape is stored so the selector reflects it.
+  function reshapeSelectedZone(shape) {
+    if (!selected) return;
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const zone = (d.placements[lvl] || {})[selected];
+    if (!zone?.points || zone.locked) return;
+    const xs = zone.points.map(p => p.x), ys = zone.points.map(p => p.y);
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    const w = Math.max(...xs) - minX, h = Math.max(...ys) - minY;
+    let dims;
+    if (shape === "L") dims = { w, h, notchW: Math.min(fpSnap(w * 0.45), w - FP_GRID), notchH: Math.min(fpSnap(h * 0.45), h - FP_GRID) };
+    else if (shape === "U") dims = { w, h, gapW: Math.min(fpSnap(w * 0.4), w - 2 * FP_GRID), gapDepth: Math.min(fpSnap(h * 0.55), h - FP_GRID) };
+    else dims = { w, h };
+    const poly = shapeToPolygon(shape, { x: minX, y: minY }, dims);
+    save({ ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [selected]: { ...zone, points: poly.points, shape } } } });
+  }
+
+  // Reassign the selected zone to a different floor, keeping its exact geometry. The
+  // placement moves between floor buckets, the room entity's floorId updates, and any
+  // item pins inside the zone travel with it. The view follows to the new floor.
+  function moveZoneToFloor(newFloorId) {
+    if (!selected) return;
+    const d = fpDataRef.current;
+    const oldFloor = activeLevelRef.current;
+    if (!newFloorId || newFloorId === oldFloor) return;
+    const zone = (d.placements[oldFloor] || {})[selected];
+    if (!zone) return;
+    const { [selected]: _moved, ...oldRest } = d.placements[oldFloor] || {};
+    const movingPins = (d.pins?.[oldFloor] || []).filter(p => p.zone === selected);
+    const keptPins = (d.pins?.[oldFloor] || []).filter(p => p.zone !== selected);
+    const next = {
+      ...d,
+      placements: {
+        ...d.placements,
+        [oldFloor]: oldRest,
+        [newFloorId]: { ...(d.placements[newFloorId] || {}), [selected]: zone },
+      },
+      pins: {
+        ...(d.pins || {}),
+        [oldFloor]: keptPins,
+        ...(movingPins.length ? { [newFloorId]: [...(d.pins?.[newFloorId] || []), ...movingPins] } : {}),
+      },
+    };
+    save(next);
+    updateRoom(selected, { floorId: newFloorId });
+    useForemanStore.getState().reloadAll();
+    setActiveLevel(newFloorId); // follow the zone to its new floor (stays selected)
   }
 
   function lockSelectedZones(lock) {
@@ -1035,28 +1244,88 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
     setSelectedZones(new Set());
   }
 
+  // All zone ids sharing a zone's group on a floor (just the zone itself if ungrouped).
+  function groupMemberIds(lvlPlacements, roomId) {
+    const gid = lvlPlacements[roomId]?.groupId;
+    if (!gid) return [roomId];
+    return Object.keys(lvlPlacements).filter(rid => lvlPlacements[rid]?.groupId === gid);
+  }
+
+  // Link the selected zones into one group (shared groupId) so they move and resize
+  // together. Whether any are already grouped, a single new id unifies them.
+  function groupSelectedZones() {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const gid = `grp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const lvlP = { ...(d.placements[lvl] || {}) };
+    for (const rid of selectedZones) if (lvlP[rid]) lvlP[rid] = { ...lvlP[rid], groupId: gid };
+    save({ ...d, placements: { ...d.placements, [lvl]: lvlP } });
+  }
+
+  function ungroupSelectedZones() {
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const lvlP = { ...(d.placements[lvl] || {}) };
+    for (const rid of selectedZones) {
+      if (lvlP[rid]?.groupId) { const { groupId, ...rest } = lvlP[rid]; lvlP[rid] = rest; }
+    }
+    save({ ...d, placements: { ...d.placements, [lvl]: lvlP } });
+  }
+
+  // Scale every selected zone proportionally from the selection's combined top-left,
+  // so a group's relative layout is preserved. Grid-snapped; skips locked zones.
+  function resizeSelectedZones(dim, raw) {
+    const ids = [...selectedZones];
+    if (!ids.length) return;
+    const n = Math.max(1, Math.min(500, Math.round(Number(raw) || 0)));
+    const d = fpDataRef.current;
+    const lvl = activeLevelRef.current;
+    const lvlP = d.placements[lvl] || {};
+    const allPts = ids.flatMap(rid => lvlP[rid]?.points || []);
+    if (!allPts.length) return;
+    const xs = allPts.map(p => p.x), ys = allPts.map(p => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const oldW = maxX - minX, oldH = maxY - minY;
+    const newW = dim === "w" ? Math.min(n * FP_GRID, FP_W - minX) : oldW;
+    const newH = dim === "h" ? Math.min(n * FP_GRID, FP_H - minY) : oldH;
+    const sx = oldW > 0 ? newW / oldW : 1, sy = oldH > 0 ? newH / oldH : 1;
+    const newLvl = { ...lvlP };
+    for (const rid of ids) {
+      const z = lvlP[rid];
+      if (z?.points && !z.locked) newLvl[rid] = { ...z, points: z.points.map(p => ({ x: fpSnap(minX + (p.x - minX) * sx), y: fpSnap(minY + (p.y - minY) * sy) })) };
+    }
+    save({ ...d, placements: { ...d.placements, [lvl]: newLvl } });
+  }
+
   function handleRoomMouseDown(e, roomId) {
     e.preventDefault();
     e.stopPropagation();
+    const lvlPlacements = fpDataRef.current.placements[activeLevelRef.current] || {};
+    const memberIds = groupMemberIds(lvlPlacements, roomId);
     if (drawModeRef.current === "select") {
+      // Toggle the whole group together when the clicked zone is grouped.
       setSelectedZones(prev => {
         const next = new Set(prev);
-        if (next.has(roomId)) next.delete(roomId);
-        else next.add(roomId);
+        const has = next.has(roomId);
+        for (const rid of memberIds) { if (has) next.delete(rid); else next.add(rid); }
         return next;
       });
       return;
     }
-    setSelected(roomId); setEditingPanelName(false);
-    const zonePoly = (fpDataRef.current.placements[activeLevelRef.current] || {})[roomId];
+    setSelected(roomId); setSelectedOutline(false); setEditingPanelName(false);
+    const zonePoly = lvlPlacements[roomId];
     if (zonePoly?.locked) return;
     const svgRect = svgRef.current.getBoundingClientRect();
     const vb = viewBoxRef.current;
+    // Drag moves all group members together (just this zone when ungrouped).
+    const members = memberIds
+      .filter(rid => lvlPlacements[rid]?.points)
+      .map(rid => ({ rid, startPoints: lvlPlacements[rid].points.map(p => ({ ...p })) }));
     draggingRef.current = {
       roomId,
       startSVGX: vb.x + (e.clientX - svgRect.left) / svgRect.width * vb.w,
       startSVGY: vb.y + (e.clientY - svgRect.top) / svgRect.height * vb.h,
-      startPoints: zonePoly.points.map(p => ({ ...p })),
+      members,
     };
     setDragging(roomId);
   }
@@ -1109,9 +1378,12 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const zonePoly = (d.placements[lvl] || {})[roomId];
         const rawX = Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) * scaleX));
         const rawY = Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) * scaleY));
-        // Snap the vertex onto a neighboring room's edge line if one is near, else to grid.
+        // Snap the vertex onto a neighboring room's edge — or the building outline's
+        // walls when it's shown — if one is near, else to grid.
         const others = Object.entries(d.placements[lvl] || {}).filter(([rid]) => rid !== roomId).map(([, p]) => p);
-        const { xs, ys } = zoneSnapLines(others);
+        const zl = zoneSnapLines(others);
+        const ol = layersRef.current.outline ? outlineSnapLines(d.outline) : { xs: [], ys: [] };
+        const xs = [...zl.xs, ...ol.xs], ys = [...zl.ys, ...ol.ys];
         const snapX = nearestSnapLine(rawX, xs), snapY = nearestSnapLine(rawY, ys);
         const nx = snapX !== null ? snapX : fpSnap(rawX);
         const ny = snapY !== null ? snapY : fpSnap(rawY);
@@ -1123,19 +1395,55 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         return;
       }
 
+      // Outline vertex drag (grid-snapped).
+      if (outlineVertexDragRef.current) {
+        const { vi } = outlineVertexDragRef.current;
+        const d = fpDataRef.current;
+        if (!d.outline?.points) return;
+        const nx = fpSnap(Math.max(0, Math.min(FP_W, vb.x + (e.clientX - svgRect.left) * scaleX)));
+        const ny = fpSnap(Math.max(0, Math.min(FP_H, vb.y + (e.clientY - svgRect.top) * scaleY)));
+        const newPoints = d.outline.points.map((p, i) => i === vi ? { x: nx, y: ny } : p);
+        const next = { ...d, outline: { ...d.outline, points: newPoints } };
+        fpDataRef.current = next;
+        setFpData({ ...next });
+        return;
+      }
+
+      // Outline whole-body drag (grid-snapped translation, clamped to canvas).
+      if (outlineDragRef.current) {
+        const { startSVGX, startSVGY, startPoints } = outlineDragRef.current;
+        const dx = fpSnap((vb.x + (e.clientX - svgRect.left) * scaleX) - startSVGX);
+        const dy = fpSnap((vb.y + (e.clientY - svgRect.top) * scaleY) - startSVGY);
+        if (dx !== 0 || dy !== 0) outlineDragRef.current.moved = true;
+        const minX = Math.min(...startPoints.map(p => p.x)), maxX = Math.max(...startPoints.map(p => p.x));
+        const minY = Math.min(...startPoints.map(p => p.y)), maxY = Math.max(...startPoints.map(p => p.y));
+        const cdx = Math.max(-minX, Math.min(FP_W - maxX, dx));
+        const cdy = Math.max(-minY, Math.min(FP_H - maxY, dy));
+        const d = fpDataRef.current;
+        const next = { ...d, outline: { ...d.outline, points: startPoints.map(p => ({ x: p.x + cdx, y: p.y + cdy })) } };
+        fpDataRef.current = next;
+        setFpData(next);
+        return;
+      }
+
       if (draggingRef.current) {
-        const { roomId, startSVGX, startSVGY, startPoints } = draggingRef.current;
+        const { startSVGX, startSVGY, members } = draggingRef.current;
         const d = fpDataRef.current;
         const lvl = activeLevelRef.current;
         const svgX = vb.x + (e.clientX - svgRect.left) * scaleX;
         const svgY = vb.y + (e.clientY - svgRect.top) * scaleY;
         const rawDx = svgX - startSVGX;
         const rawDy = svgY - startSVGY;
-        const me = bboxEdges(startPoints);
-        // Snap the room's leading/trailing edges onto neighboring rooms' edge lines
-        // (shared wall / alignment). Falls back to grid snap per-axis when none near.
-        const others = Object.entries(d.placements[lvl] || {}).filter(([rid]) => rid !== roomId).map(([, p]) => p);
-        const { xs, ys } = zoneSnapLines(others);
+        // Combined bounding box of all moving members (one zone, or a whole group).
+        const allStart = members.flatMap(m => m.startPoints);
+        const me = bboxEdges(allStart);
+        const memberSet = new Set(members.map(m => m.rid));
+        // Snap the group's outer edges onto neighboring rooms' edge lines — and the
+        // building outline's walls when shown — for shared walls / alignment.
+        const others = Object.entries(d.placements[lvl] || {}).filter(([rid]) => !memberSet.has(rid)).map(([, p]) => p);
+        const zl = zoneSnapLines(others);
+        const ol = layersRef.current.outline ? outlineSnapLines(d.outline) : { xs: [], ys: [] };
+        const xs = [...zl.xs, ...ol.xs], ys = [...zl.ys, ...ol.ys];
         let corrX = null, bestX = WALL_SNAP_DIST, gX = null;
         for (const edge of [me.l + rawDx, me.r + rawDx]) {
           for (const ln of xs) { const c = ln - edge; if (Math.abs(c) < bestX) { bestX = Math.abs(c); corrX = c; gX = ln; } }
@@ -1147,11 +1455,13 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         const dx = corrX !== null ? rawDx + corrX : fpSnap(rawDx);
         const dy = corrY !== null ? rawDy + corrY : fpSnap(rawDy);
         setSnapGuides(corrX !== null || corrY !== null ? { x: corrX !== null ? gX : null, y: corrY !== null ? gY : null } : null);
-        const minX = me.l, maxX = me.r, minY = me.t, maxY = me.b;
-        const cdx = Math.max(-minX, Math.min(FP_W - maxX, dx));
-        const cdy = Math.max(-minY, Math.min(FP_H - maxY, dy));
-        const newPoints = startPoints.map(p => ({ x: p.x + cdx, y: p.y + cdy }));
-        const next = { ...d, placements: { ...d.placements, [lvl]: { ...(d.placements[lvl] || {}), [roomId]: { points: newPoints } } } };
+        const cdx = Math.max(-me.l, Math.min(FP_W - me.r, dx));
+        const cdy = Math.max(-me.t, Math.min(FP_H - me.b, dy));
+        const newLvl = { ...(d.placements[lvl] || {}) };
+        for (const m of members) {
+          newLvl[m.rid] = { ...newLvl[m.rid], points: m.startPoints.map(p => ({ x: p.x + cdx, y: p.y + cdy })) };
+        }
+        const next = { ...d, placements: { ...d.placements, [lvl]: newLvl } };
         fpDataRef.current = next;
         setFpData({ ...next });
         return;
@@ -1332,6 +1642,41 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         return;
       }
 
+      if (outlineVertexDragRef.current) {
+        const { vi, startX, startY } = outlineVertexDragRef.current;
+        outlineVertexDragRef.current = null;
+        const moved = Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4;
+        const d = fpDataRef.current;
+        if (moved) { saveFpData(d); }
+        else if (d.outline?.points && d.outline.points.length > 3) {
+          save({ ...d, outline: { ...d.outline, points: d.outline.points.filter((_, i) => i !== vi) } });
+        }
+        return;
+      }
+
+      if (outlineDragRef.current) {
+        const { moved, wasSelected, startSVGX, startSVGY } = outlineDragRef.current;
+        outlineDragRef.current = null;
+        if (moved) { saveFpData(fpDataRef.current); return; }
+        // Click on an already-selected border inserts a vertex on the nearest edge.
+        const d = fpDataRef.current;
+        if (wasSelected && d.outline?.points?.length >= 2) {
+          const pts = d.outline.points;
+          let best = 0, bestDist = Infinity;
+          for (let i = 0; i < pts.length; i++) {
+            const j = (i + 1) % pts.length;
+            const dist = ptSegDist(startSVGX, startSVGY, pts[i].x, pts[i].y, pts[j].x, pts[j].y);
+            if (dist < bestDist) { bestDist = dist; best = i; }
+          }
+          if (bestDist < 20) {
+            const np = [...pts];
+            np.splice(best + 1, 0, { x: fpSnap(startSVGX), y: fpSnap(startSVGY) });
+            save({ ...d, outline: { ...d.outline, points: np } });
+          }
+        }
+        return;
+      }
+
       if (draggingRef.current) { saveFpData(fpDataRef.current); draggingRef.current = null; setDragging(null); return; }
 
       // End rubber-band select
@@ -1364,7 +1709,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         panDragRef.current = null;
         setIsPanning(false);
         if (Math.abs(e.clientX - startX) <= 4 && Math.abs(e.clientY - startY) <= 4) {
-          setSelected(null); setSelectedPin(null); setSelectedTodoMarkerId(null); setSelectedDrawingId(null);
+          setSelected(null); setSelectedPin(null); setSelectedTodoMarkerId(null); setSelectedDrawingId(null); setSelectedOutline(false);
         }
         return;
       }
@@ -1430,6 +1775,18 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
+  }, []);
+
+  // Track the SVG's rendered width so labels can be sized in screen pixels
+  // (constant on-screen size regardless of zoom).
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const measure = () => { const w = el.getBoundingClientRect().width; if (w) setSvgPxW(w); };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   // Wheel zoom — must be non-passive to call preventDefault()
@@ -1779,6 +2136,21 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             Add to Floor Plan
           </div>
 
+          {/* Start-from-scratch shortcuts — always visible, no zone needed first */}
+          <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, gap: "0.3rem", padding: "0 0.75rem 0.6rem" }}>
+            {[
+              onlineMode && { label: "⌖ Import from address", title: "Import your building outline from your address (online)", onClick: openAddressImport },
+              { label: "⊞ Add by dimensions",  title: "Add a room by typing its name and size — no drawing",     onClick: () => setDimEntryOpen(true) },
+            ].filter(Boolean).map(b => (
+              <button key={b.label} onClick={b.onClick} title={b.title}
+                style={{ alignItems: "center", background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", gap: "0.4rem", justifyContent: "center", letterSpacing: "0.03em", padding: "0.35rem 0.5rem", transition: "all 0.12s", width: "100%" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}>
+                {b.label}
+              </button>
+            ))}
+          </div>
+
           <div style={{ flex: 1, overflowY: "auto" }}>
             {/* Pending new category input row */}
             {newCatType && (
@@ -2108,10 +2480,12 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.5rem" }}>
                 ⊞ Dimensions
               </button>
-              <button onClick={openAddressImport} title="Import your building outline from your address (online)"
-                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.5rem" }}>
-                ⌖ Address
-              </button>
+              {onlineMode && (
+                <button onClick={openAddressImport} title="Import your building outline from your address (online)"
+                  style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.03em", padding: "0.14rem 0.5rem" }}>
+                  ⌖ Address
+                </button>
+              )}
             </>
           )}
 
@@ -2248,6 +2622,58 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     {label}
                   </button>
                 ))}
+                {fpData.outline?.points?.length > 0 && (
+                  <div style={{ alignItems: "center", display: "flex", gap: "0.15rem", position: "relative" }}>
+                    <button onClick={() => setLayer("outline", !layers.outline)} title="Show/hide building outline everywhere" style={{ background: "transparent", border: `1px solid ${layers.outline ? "var(--fm-hairline2)" : "var(--fm-hairline)"}`, borderRadius: 3, color: layers.outline ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", opacity: layers.outline ? 1 : 0.5, padding: "0.14rem 0.38rem", textDecoration: layers.outline ? "none" : "line-through", transition: "all 0.1s" }}>
+                      Outline
+                    </button>
+                    <button onClick={() => setOutlineMenuOpen(o => !o)} title="Outline options" style={{ background: outlineMenuOpen ? "rgba(201,169,110,0.15)" : "transparent", border: `1px solid ${outlineMenuOpen ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: outlineMenuOpen ? "var(--fm-brass)" : "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", lineHeight: 1, padding: "0.14rem 0.3rem", transition: "all 0.1s" }}>⋯</button>
+                    {outlineMenuOpen && (
+                      <>
+                        <div onClick={() => setOutlineMenuOpen(false)} style={{ bottom: 0, left: 0, position: "fixed", right: 0, top: 0, zIndex: 50 }} />
+                        <div style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: 4, boxShadow: "0 6px 20px rgba(0,0,0,0.4)", minWidth: 150, padding: "0.4rem 0", position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 51 }}>
+                          {(() => {
+                            const pts = fpData.outline.points;
+                            const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+                            const curW = Math.round((Math.max(...xs) - Math.min(...xs)) / FP_GRID);
+                            const curH = Math.round((Math.max(...ys) - Math.min(...ys)) / FP_GRID);
+                            const inp = { background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", outline: "none", padding: "0.15rem 0.2rem", textAlign: "center", width: 40 };
+                            const apply = dim => e => { const v = e.target.value; if (v !== "") resizeOutline(dim, v); };
+                            return (
+                              <>
+                                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.12em", padding: "0.1rem 0.7rem 0.3rem", textTransform: "uppercase" }}>Size (ft)</div>
+                                <div style={{ alignItems: "center", display: "flex", gap: "0.3rem", padding: "0 0.7rem 0.35rem" }}>
+                                  <input key={`ow-${curW}`} type="number" min={1} max={500} defaultValue={curW} onBlur={apply("w")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+                                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>×</span>
+                                  <input key={`oh-${curH}`} type="number" min={1} max={500} defaultValue={curH} onBlur={apply("h")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+                                </div>
+                                <div style={{ background: "var(--fm-hairline)", height: 1, margin: "0.15rem 0 0.35rem" }} />
+                              </>
+                            );
+                          })()}
+                          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.5rem", letterSpacing: "0.12em", padding: "0.1rem 0.7rem 0.35rem", textTransform: "uppercase" }}>Show outline on</div>
+                          {floors.map(f => {
+                            const visible = !(fpData.outline.hiddenFloors || []).includes(f.id);
+                            return (
+                              <div key={f.id} onClick={() => toggleOutlineFloor(f.id)} style={{ alignItems: "center", color: visible ? "var(--fm-ink)" : "var(--fm-ink-mute)", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", gap: "0.45rem", padding: "0.22rem 0.7rem" }}
+                                onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"}
+                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                                <span style={{ color: visible ? "var(--fm-brass)" : "transparent", width: 9 }}>✓</span>
+                                {f.label}
+                              </div>
+                            );
+                          })}
+                          <div style={{ background: "var(--fm-hairline)", height: 1, margin: "0.35rem 0" }} />
+                          <div onClick={deleteOutline} style={{ color: "var(--fm-red)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", padding: "0.22rem 0.7rem" }}
+                            onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                            Delete outline
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -2316,7 +2742,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               const { w: W, h: H, units } = ghostBoundsUnits(gz);
               const x = fpSnap(Math.max(0, Math.min(FP_W - W, rawX - W / 2)));
               const y = fpSnap(Math.max(0, Math.min(FP_H - H, rawY - H / 2)));
-              placeZoneOnCanvas(gz.cat, shapeToPolygon(gz.shape, { x, y }, units));
+              placeZoneOnCanvas(gz.cat, shapeToPolygon(gz.shape, { x, y }, units), gz.shape);
               return;
             }
             if (drawMode !== "move" && drawMode !== "select") handleDrawClick(e);
@@ -2363,6 +2789,53 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           <rect width={FP_W} height={FP_H} fill="var(--fm-bg-sunk)" />
           <rect width={FP_W} height={FP_H} fill="url(#fp-lg)" />
 
+          {/* Building outline scaffold — plan-wide singleton, behind zones, a neutral
+              white border with no fill. Shown per-floor (hidden floors opt out); in
+              move mode the border is grabbable to reposition the whole outline. */}
+          {layers.outline && fpData.outline?.points?.length > 0 && !fpData.outline.hiddenFloors?.includes(activeLevel) && (() => {
+            const opts = fpData.outline.points;
+            const ptStr = opts.map(p => `${p.x},${p.y}`).join(" ");
+            const { cx, cy } = polygonCentroid(opts);
+            return (
+              <g>
+                <polygon points={ptStr} fill="none" stroke={selectedOutline ? "var(--fm-brass)" : FP_OUTLINE_STROKE} strokeWidth={selectedOutline ? 3 : 2} strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+                {drawMode === "move" && !ghostZone && (
+                  <polygon points={ptStr} fill="none" stroke="transparent" strokeWidth={14} strokeLinejoin="round" style={{ cursor: "move", pointerEvents: "stroke" }} onMouseDown={startOutlineDrag} />
+                )}
+                {/* Edge length labels — identical treatment to room/exterior zones */}
+                {selectedOutline && opts.map((p0, vi) => {
+                  const p1 = opts[(vi + 1) % opts.length];
+                  const dx = p1.x - p0.x, dy = p1.y - p0.y;
+                  const edgeLen = Math.hypot(dx, dy);
+                  const feet = edgeLen / FP_GRID;
+                  if (feet < 1) return null;
+                  const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+                  const n1x = -dy / edgeLen, n1y = dx / edgeLen;
+                  const dot = (cx - mx) * n1x + (cy - my) * n1y;
+                  const outNx = dot > 0 ? -n1x : n1x, outNy = dot > 0 ? -n1y : n1y;
+                  const lx = mx + outNx * 14, ly = my + outNy * 14;
+                  const rawAngle = Math.atan2(dy, dx) * 180 / Math.PI;
+                  const textAngle = (rawAngle > 90 || rawAngle < -90) ? rawAngle + 180 : rawAngle;
+                  const label = Number.isInteger(feet) ? `${feet} ft` : `${feet.toFixed(1)} ft`;
+                  return (
+                    <text key={`odim-${vi}`} x={lx} y={ly} textAnchor="middle" dominantBaseline="middle"
+                      fill="var(--fm-brass)" fontSize={fpFont(11)} fontFamily="var(--fm-mono)"
+                      transform={`rotate(${textAngle}, ${lx}, ${ly})`} style={{ pointerEvents: "none" }}>
+                      {label}
+                    </text>
+                  );
+                })}
+                {/* Vertex handles — drag to adjust, click to remove (when >3 remain) */}
+                {selectedOutline && opts.map((p, vi) => (
+                  <circle key={`ovh-${vi}`} cx={p.x} cy={p.y} r={5} fill="var(--fm-bg)" stroke="var(--fm-brass)" strokeWidth={1.5}
+                    style={{ cursor: opts.length > 3 ? "crosshair" : "grab", pointerEvents: "auto" }}
+                    onMouseDown={e => handleOutlineVertexMouseDown(e, vi)}
+                    title={opts.length > 3 ? "Drag to move · Click to remove" : "Drag to move"} />
+                ))}
+              </g>
+            );
+          })()}
+
           {Object.entries(currentPlaced).map(([roomId, zonePoly]) => {
             if (!layers.zones) return null;
             const zoneRoom = rooms[roomId];
@@ -2391,10 +2864,10 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   style={{ cursor: drawMode === "select" ? "pointer" : isLocked ? "default" : "grab" }}
                   onMouseDown={e => handleRoomMouseDown(e, roomId)}
                 />
-                <text x={cx} y={cy + 5} textAnchor="middle" fill={isSel ? "var(--fm-brass)" : "var(--fm-ink)"} fontSize={11} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
+                <text x={cx} y={cy + fpFont(5)} textAnchor="middle" fill={isSel ? "var(--fm-brass)" : "var(--fm-ink)"} fontSize={fpFont(15)} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
                   {zoneRoom.label}
                 </text>
-                <text x={cx} y={cy + 18} textAnchor="middle" fill="var(--fm-ink-dim)" fontSize={9} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
+                <text x={cx} y={cy + fpFont(21)} textAnchor="middle" fill="var(--fm-ink-dim)" fontSize={fpFont(11)} fontFamily="var(--fm-mono)" style={{ pointerEvents: "none" }}>
                   {itemCount} {itemCount === 1 ? "item" : "items"}
                 </text>
                 {/* Lock badge — visible whenever the zone is locked, selected or not */}
@@ -2473,7 +2946,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   const label = Number.isInteger(feet) ? `${feet} ft` : `${feet.toFixed(1)} ft`;
                   return (
                     <text key={`dim-${vi}`} x={lx} y={ly} textAnchor="middle" dominantBaseline="middle"
-                      fill="var(--fm-brass)" fontSize={9} fontFamily="var(--fm-mono)"
+                      fill="var(--fm-brass)" fontSize={fpFont(11)} fontFamily="var(--fm-mono)"
                       transform={`rotate(${textAngle}, ${lx}, ${ly})`} style={{ pointerEvents: "none" }}>
                       {label}
                     </text>
@@ -2668,8 +3141,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     onMouseLeave={onEntityHoverLeave}>
                     <circle cx={dr.x} cy={dr.y} r={8}
                       fill={dr.color} stroke={isTodoSel ? "var(--fm-ink)" : "var(--fm-bg)"} strokeWidth={isTodoSel ? 2 : 1.5} />
-                    <text x={dr.x} y={dr.y - 13} textAnchor="middle"
-                      style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "9px", pointerEvents: "none", userSelect: "none" }}>
+                    <text x={dr.x} y={dr.y - fpFont(13)} textAnchor="middle" fontSize={fpFont(12)}
+                      style={{ fill: dr.color, fontFamily: "var(--fm-mono)", pointerEvents: "none", userSelect: "none" }}>
                       {(dr.label || "").slice(0, 12)}
                     </text>
                   </g>
@@ -2696,8 +3169,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                   onMouseLeave={onEntityHoverLeave}>
                   <circle cx={dr.x} cy={dr.y} r={isSel ? 7 : 5} fill={dr.color}
                     stroke={isSel ? "var(--fm-bg)" : "none"} strokeWidth={1.5} />
-                  <text x={dr.x} y={dr.y - 10} textAnchor="middle"
-                    style={{ fill: dr.color, fontFamily: "var(--fm-mono)", fontSize: "8px", letterSpacing: "0.04em", pointerEvents: "none" }}>
+                  <text x={dr.x} y={dr.y - fpFont(11)} textAnchor="middle" fontSize={fpFont(12)}
+                    style={{ fill: dr.color, fontFamily: "var(--fm-mono)", letterSpacing: "0.04em", pointerEvents: "none" }}>
                     {dr.label || dr.name}
                   </text>
                 </g>
@@ -2779,7 +3252,24 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         </svg>
 
         {/* Multi-zone action float */}
-        {drawMode === "select" && selectedZones.size > 0 && (
+        {drawMode === "select" && selectedZones.size > 0 && (() => {
+          const selIds = [...selectedZones];
+          const lvlP = fpData.placements[activeLevel] || {};
+          const anyGrouped = selIds.some(rid => lvlP[rid]?.groupId);
+          const allPts = selIds.flatMap(rid => lvlP[rid]?.points || []);
+          const gxs = allPts.map(p => p.x), gys = allPts.map(p => p.y);
+          const curW = allPts.length ? Math.round((Math.max(...gxs) - Math.min(...gxs)) / FP_GRID) : 0;
+          const curH = allPts.length ? Math.round((Math.max(...gys) - Math.min(...gys)) / FP_GRID) : 0;
+          const inp = { background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", outline: "none", padding: "0.15rem 0.2rem", textAlign: "center", width: 38 };
+          const applySize = dim => e => { const v = e.target.value; if (v !== "") resizeSelectedZones(dim, v); };
+          const buttons = [
+            ...(selIds.length >= 2 ? [{ label: "Group", action: groupSelectedZones }] : []),
+            ...(anyGrouped ? [{ label: "Ungroup", action: ungroupSelectedZones }] : []),
+            { label: "Lock", action: () => lockSelectedZones(true) },
+            { label: "Unlock", action: () => lockSelectedZones(false) },
+            { label: "Remove", action: removeSelectedFromCanvas, danger: true },
+          ];
+          return (
           <div
             onMouseDown={e => e.stopPropagation()}
             style={{
@@ -2800,18 +3290,21 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             }}
           >
             <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.06em", textAlign: "center" }}>
-              {selectedZones.size} zone{selectedZones.size !== 1 ? "s" : ""} selected
+              {selectedZones.size} zone{selectedZones.size !== 1 ? "s" : ""} selected{anyGrouped ? " · grouped" : ""}
             </span>
+            <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>Size</span>
+              <input key={`gw-${curW}`} type="number" min={1} max={500} defaultValue={curW} onBlur={applySize("w")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem" }}>×</span>
+              <input key={`gh-${curH}`} type="number" min={1} max={500} defaultValue={curH} onBlur={applySize("h")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem" }}>ft</span>
+            </div>
             <div style={{ display: "flex", gap: "0.4rem" }}>
-              {[
-                { label: "Lock", action: () => lockSelectedZones(true), danger: false },
-                { label: "Unlock", action: () => lockSelectedZones(false), danger: false },
-                { label: "Remove", action: removeSelectedFromCanvas, danger: true },
-              ].map(({ label, action, danger }) => (
+              {buttons.map(({ label, action, danger }) => (
                 <button
                   key={label}
                   onClick={action}
-                  style={{ background: "none", border: `1px solid var(--fm-hairline2)`, borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", padding: "0.22rem 0.65rem", transition: "border-color 0.1s, color 0.1s" }}
+                  style={{ background: "none", border: `1px solid var(--fm-hairline2)`, borderRadius: 3, color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", padding: "0.22rem 0.6rem", transition: "border-color 0.1s, color 0.1s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = danger ? "#ef4444" : "var(--fm-brass)"; e.currentTarget.style.color = danger ? "#ef4444" : "var(--fm-brass)"; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
                 >
@@ -2826,7 +3319,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               Clear selection
             </button>
           </div>
-        )}
+          );
+        })()}
 
         {/* Pending marker label input */}
         {pendingMarker && svgRef.current && (() => {
@@ -2932,7 +3426,71 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
       {/* Right detail panel */}
       <div style={{ borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, width: 280 }}>
-        {selected && selRoom ? (
+        {selectedOutline && fpData.outline?.points?.length > 0 ? (() => {
+          const opts = fpData.outline.points;
+          const xs = opts.map(p => p.x), ys = opts.map(p => p.y);
+          const curW = Math.round((Math.max(...xs) - Math.min(...xs)) / FP_GRID);
+          const curH = Math.round((Math.max(...ys) - Math.min(...ys)) / FP_GRID);
+          const area = Math.round(polygonArea(opts) / (FP_GRID * FP_GRID));
+          const inp = { background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", outline: "none", padding: "0.2rem 0.25rem", textAlign: "center", width: 42 };
+          const apply = dim => e => { const v = e.target.value; if (v !== "") resizeOutline(dim, v); };
+          const rowLabel = { color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" };
+          return (
+            <>
+              {/* Header */}
+              <div style={{ padding: "0.85rem 1rem 0.7rem" }}>
+                <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.57rem", letterSpacing: "0.12em", marginBottom: "0.35rem", textTransform: "uppercase" }}>Scaffold</div>
+                <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.15rem" }}>Building Outline</div>
+              </div>
+              <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+              {/* Stats */}
+              <div style={{ display: "flex" }}>
+                {[{ label: "Area", value: `${area.toLocaleString()} sq ft` }, { label: "Sides", value: opts.length }].map(({ label, value }, i) => (
+                  <div key={label} style={{ borderRight: i < 1 ? "1px solid var(--fm-hairline)" : "none", flex: 1, padding: "0.6rem 0.75rem" }}>
+                    <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.54rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>{label}</div>
+                    <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.3rem", fontWeight: 400 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+              {/* Size editor */}
+              <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.55rem 1rem" }}>
+                <span style={rowLabel}>Size (ft)</span>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.3rem" }}>
+                  <input key={`ow-${curW}`} type="number" min={1} max={500} defaultValue={curW} onBlur={apply("w")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+                  <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>×</span>
+                  <input key={`oh-${curH}`} type="number" min={1} max={500} defaultValue={curH} onBlur={apply("h")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+                </div>
+              </div>
+              <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+              {/* Per-floor visibility */}
+              {floors.length > 1 && (
+                <>
+                  <div style={{ padding: "0.6rem 1rem 0.3rem" }}><span style={rowLabel}>Show on floors</span></div>
+                  <div style={{ padding: "0 1rem 0.55rem" }}>
+                    {floors.map(f => {
+                      const visible = !(fpData.outline.hiddenFloors || []).includes(f.id);
+                      return (
+                        <div key={f.id} onClick={() => toggleOutlineFloor(f.id)} style={{ alignItems: "center", color: visible ? "var(--fm-ink)" : "var(--fm-ink-mute)", cursor: "pointer", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", gap: "0.5rem", padding: "0.25rem 0" }}>
+                          <span style={{ color: visible ? "var(--fm-brass)" : "transparent", width: 10 }}>✓</span>
+                          {f.label}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+                </>
+              )}
+              {/* Delete (footer) */}
+              <div style={{ flex: 1 }} />
+              <div style={{ borderTop: "1px solid var(--fm-hairline)", padding: "0.7rem 1rem" }}>
+                <button onClick={deleteOutline} style={{ background: "transparent", border: "1px solid var(--fm-red)", borderRadius: 3, color: "var(--fm-red)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: "0.4rem 0.8rem", width: "100%" }}>
+                  Delete outline
+                </button>
+              </div>
+            </>
+          );
+        })() : selected && selRoom ? (
           <>
             {/* Header */}
             <div style={{ padding: "0.85rem 1rem 0.7rem" }}>
@@ -3000,6 +3558,72 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
               ))}
             </div>
             <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+
+            {/* Shape selector — reshape the zone in place (keeps its bounding box) */}
+            {selRoom?.points && !selRoom.locked && (
+              <>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.55rem 1rem" }}>
+                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>Shape</span>
+                  <div style={{ display: "flex", gap: "0.25rem" }}>
+                    {ROOM_SHAPES.map(s => {
+                      const active = (selRoom.shape || "rect") === s.key;
+                      return (
+                        <button key={s.key} title={s.title} onClick={() => reshapeSelectedZone(s.key)}
+                          style={{ background: active ? "rgba(201,169,110,0.15)" : "transparent", border: `1px solid ${active ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 3, color: active ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.03em", padding: "0.14rem 0.45rem", transition: "all 0.1s" }}>
+                          {s.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+              </>
+            )}
+
+            {/* Editable dimensions (bounding box, feet) */}
+            {selRoom?.points && (() => {
+              const xs = selRoom.points.map(p => p.x), ys = selRoom.points.map(p => p.y);
+              const curW = Math.round((Math.max(...xs) - Math.min(...xs)) / FP_GRID);
+              const curH = Math.round((Math.max(...ys) - Math.min(...ys)) / FP_GRID);
+              const inp = { background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem", outline: "none", padding: "0.2rem 0.25rem", textAlign: "center", width: 42 };
+              const apply = (dim) => (e) => { const v = e.target.value; if (v !== "") resizeSelectedZone(dim, v); };
+              return (
+                <>
+                  <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.55rem 1rem" }}>
+                    <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>Size (ft)</span>
+                    {selRoom.locked ? (
+                      <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>{curW} × {curH} · locked</span>
+                    ) : (
+                      <div style={{ alignItems: "center", display: "flex", gap: "0.3rem" }}>
+                        <input key={`${selected}-w-${curW}`} type="number" min={1} max={500} defaultValue={curW}
+                          onBlur={apply("w")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+                        <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem" }}>×</span>
+                        <input key={`${selected}-h-${curH}`} type="number" min={1} max={500} defaultValue={curH}
+                          onBlur={apply("h")} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} style={inp} />
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+                </>
+              );
+            })()}
+
+            {/* Floor assignment — moves the zone (and its pins) to another floor */}
+            {floors.length > 1 && (
+              <>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.55rem 1rem" }}>
+                  <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>Floor</span>
+                  <select
+                    value={activeLevel}
+                    onChange={e => moveZoneToFloor(e.target.value)}
+                    style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.04em", outline: "none", padding: "0.15rem 0.3rem" }}
+                  >
+                    {floors.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                  </select>
+                </div>
+                <div style={{ borderBottom: "1px solid var(--fm-hairline)" }} />
+              </>
+            )}
 
             {/* Room use (real-estate classification) — interior rooms only */}
             {selUseEligible && (
@@ -3327,9 +3951,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         )}
       </div>
 
-      {/* Address → building footprint import modal */}
+      {/* Address → building footprint import modal (only reachable in Online Mode) */}
       {addrModalOpen && (() => {
-        const onlineMode = storageGet("foreman-online-mode") === true;
         const close = () => { if (!addrBusy) setAddrModalOpen(false); };
         const label = { color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", letterSpacing: "0.12em", marginBottom: "0.3rem", textTransform: "uppercase" };
         return (
@@ -3340,15 +3963,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                 <button onClick={close} style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", padding: 0 }}>✕</button>
               </div>
 
-              {!onlineMode ? (
-                <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.78rem", lineHeight: 1.55 }}>
-                  This feature looks up your building's footprint over the network. <strong style={{ color: "var(--fm-ink)" }}>Online Mode is off</strong>, so no requests are made. Enable it in Preferences → Profile to use address import, then return here.
-                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1rem" }}>
-                    <button onClick={close} style={{ background: "var(--fm-brass)", border: "none", borderRadius: 3, color: "var(--fm-bg)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.4rem 1rem" }}>Got it</button>
-                  </div>
-                </div>
-              ) : (
-                <>
+              <>
                   <label style={label}>Address</label>
                   <input
                     autoFocus value={addrInput} onChange={e => setAddrInput(e.target.value)}
@@ -3356,7 +3971,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                     placeholder="123 Main St, Springfield, IL 62704"
                     style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, boxSizing: "border-box", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", outline: "none", padding: "0.45rem 0.55rem", width: "100%" }} />
                   <p style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", lineHeight: 1.5, margin: "0.6rem 0 0" }}>
-                    Looks up the published building outline (OpenStreetMap) and drops it on this floor as an exterior “Building” zone, pre-scaled to feet. It's the envelope to build rooms inside — interior walls aren't included, and a roof outline runs slightly larger than the foundation.
+                    Looks up the published building outline (OpenStreetMap) and adds it as a scaffold — a neutral border shown on every floor, pre-scaled to feet, that you drop rooms onto. It's the envelope, not the interior: interior walls aren't included, and a roofline runs slightly larger than the foundation. Toggle it with the Outline filter; importing again replaces it.
                   </p>
                   {addrError && (
                     <div style={{ background: "rgba(224,123,106,0.1)", border: "1px solid var(--fm-red)", borderRadius: 3, color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", lineHeight: 1.45, margin: "0.7rem 0 0", padding: "0.45rem 0.55rem" }}>
@@ -3369,8 +3984,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
                       {addrBusy ? "Fetching…" : "Fetch outline"}
                     </button>
                   </div>
-                </>
-              )}
+              </>
             </div>
           </div>
         );
@@ -4402,6 +5016,7 @@ function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseI
 }
 
 function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTypeData, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange, itemStableKeyMap }) {
+  const [listUiState, setListUIState] = usePageUIState("inventory-list");
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [newItemCat, setNewItemCat] = useState("");
@@ -4418,14 +5033,25 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
   const [editingSystemRow, setEditingSystemRow] = useState(null);
   const [editingSystemDraft, setEditingSystemDraft] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
-  const [systemFilter, setSystemFilter] = useState("ALL");
-  const [locationFilter, setLocationFilter] = useState("ALL");
-  const [levelFilter, setLevelFilter] = useState("ALL");
-  const [typeFilter, setTypeFilter] = useState("ALL");
+
+  const [systemFilter, _setSystemFilter] = useState(() => listUiState.systemFilter ?? "ALL");
+  function setSystemFilter(v) { _setSystemFilter(v); setListUIState({ systemFilter: v }); }
+
+  const [locationFilter, _setLocationFilter] = useState(() => listUiState.locationFilter ?? "ALL");
+  function setLocationFilter(v) { _setLocationFilter(v); setListUIState({ locationFilter: v }); }
+
+  const [levelFilter, _setLevelFilter] = useState(() => listUiState.levelFilter ?? "ALL");
+  function setLevelFilter(v) { _setLevelFilter(v); setListUIState({ levelFilter: v }); }
+
+  const [typeFilter, _setTypeFilter] = useState(() => listUiState.typeFilter ?? "ALL");
+  function setTypeFilter(v) { _setTypeFilter(v); setListUIState({ typeFilter: v }); }
+
   const [fpData] = useState(() => loadFpData());
   const [invFloors] = useState(() => getFloorsInOrder());
   const [invRooms] = useState(() => loadRooms());
-  const [sortCol, setSortCol] = useState({ col: "location", dir: 1 });
+
+  const [sortCol, _setSortCol] = useState(() => listUiState.sortCol ?? { col: "location", dir: 1 });
+  function setSortCol(v) { _setSortCol(v); setListUIState({ sortCol: v }); }
 
   const allRows = useMemo(() =>
     categories.flatMap(cat =>
@@ -5009,13 +5635,16 @@ export default function InventoryPage({ navigate, navState }) {
   }, [rows]);
 
   const [categoryTypeOverrides, setCategoryTypeOverridesState] = useState(() => loadCategoryTypeOverrides());
-  const [activeTab, setActiveTab] = useState("Item List");
+  const [uiState, setUIState] = usePageUIState("inventory");
+  const [activeTab, _setActiveTab] = useState(() => uiState.activeTab ?? "Item List");
+  function setActiveTab(v) { _setActiveTab(v); setUIState({ activeTab: v }); }
   // Internal tab keys (kept stable for the logic below) mapped to display labels.
   const INV_TAB_KEYS = ["Item List", "Overview", "Outline"];
   const INV_TAB_LABEL = { "Item List": "List View", "Overview": "Table View", "Outline": "Outline View" };
   const [customGroupTypes, setCustomGroupTypes] = useState(() => loadCustomGroupTypes());
   const [groupLabelOverrides, setGroupLabelOverrides] = useState(() => loadGroupLabelOverrides());
-  const [groupFilter, setGroupFilter] = useState("all");
+  const [groupFilter, _setGroupFilter] = useState(() => uiState.groupFilter ?? "all");
+  function setGroupFilter(v) { _setGroupFilter(v); setUIState({ groupFilter: v }); }
   const [deleteGroupPrompt, setDeleteGroupPrompt] = useState(null);
 
 

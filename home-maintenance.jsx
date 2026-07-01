@@ -16,7 +16,7 @@ import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
 import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes, formatRoomLabel } from "./lib/categoryTypes.js";
 import { resolveTypeId, isSpatial, isFunctional, isExteriorType } from "./lib/entityTypes.js";
-import { useForemanStore } from "./lib/store.js";
+import { useForemanStore, usePageUIState } from "./lib/store.js";
 import { getItemStableKey } from "./lib/itemKeys.js";
 import { loadMaintenanceCompletionRecords, updateMaintenanceCompletionRecord, deleteMaintenanceCompletionRecord } from "./lib/maintenance.js";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
@@ -46,7 +46,11 @@ function saveDates(key, dates) {
 
 export default function HomeMaintenanceTable({ navigate, navState }) {
   const [rows, setRows] = useState(() => loadData());
-  const [activeTab, setActiveTab] = useState("All tasks");
+  const [uiState, setUIState] = usePageUIState("maintenance");
+
+  const [activeTab, _setActiveTab] = useState(() => uiState.activeTab ?? "All tasks");
+  function setActiveTab(v) { _setActiveTab(v); setUIState({ activeTab: v }); }
+
   const [completionRecords, setCompletionRecords] = useState(() => loadMaintenanceCompletionRecords());
 
   function handleHistoryEdit(key, field, raw) {
@@ -57,22 +61,46 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   function handleDeleteHistory(key) {
     setCompletionRecords(deleteMaintenanceCompletionRecord(key));
   }
-  const [activeStatus, setActiveStatus] = useState("ALL");
-  const [locationFilter, setLocationFilter] = useState("ALL");
-  const [levelFilter, setLevelFilter] = useState("ALL");
-  const [typeFilter, setTypeFilter] = useState("ALL");
+
+  const [activeStatus, _setActiveStatus] = useState(() => uiState.activeStatus ?? "ALL");
+  function setActiveStatus(v) { _setActiveStatus(v); setUIState({ activeStatus: v }); }
+
+  const [locationFilter, _setLocationFilter] = useState(() => uiState.locationFilter ?? "ALL");
+  function setLocationFilter(v) { _setLocationFilter(v); setUIState({ locationFilter: v }); }
+
+  const [levelFilter, _setLevelFilter] = useState(() => uiState.levelFilter ?? "ALL");
+  function setLevelFilter(v) { _setLevelFilter(v); setUIState({ levelFilter: v }); }
+
+  const [typeFilter, _setTypeFilter] = useState(() => uiState.typeFilter ?? "ALL");
+  function setTypeFilter(v) { _setTypeFilter(v); setUIState({ typeFilter: v }); }
+
   const [search, setSearch] = useState("");
   const [historySearch, setHistorySearch] = useState("");
-  const [historyCatFilter, setHistoryCatFilter] = useState("ALL");
-  const [activeFrequencies, setActiveFrequencies] = useState(new Set());
-  const [activeSeason, setActiveSeason] = useState("ALL");
+
+  const [historyCatFilter, _setHistoryCatFilter] = useState(() => uiState.historyCatFilter ?? "ALL");
+  function setHistoryCatFilter(v) { _setHistoryCatFilter(v); setUIState({ historyCatFilter: v }); }
+
+  const [activeFrequencies, _setActiveFrequencies] = useState(() => new Set(uiState.activeFrequencies ?? []));
+  function setActiveFrequencies(v) { _setActiveFrequencies(v); setUIState({ activeFrequencies: [...v] }); }
+
+  const [activeSeason, _setActiveSeason] = useState(() => uiState.activeSeason ?? "ALL");
+  function setActiveSeason(v) { _setActiveSeason(v); setUIState({ activeSeason: v }); }
+
   const [tasklessMode, setTasklessMode] = useState("none"); // "none" | "only" | "mixed"
   // Inline edits buffered on a taskless placeholder row before it has a task name.
   // Keyed by `${category}|${item}`; merged into the synthetic row, committed on task entry.
   const [tasklessDrafts, setTasklessDrafts] = useState({});
   const [addRowHovered, setAddRowHovered] = useState(false);
   const [addTaskModalOpen, setAddTaskModalOpen] = useState(false);
-  const [sortCols, setSortCols] = useState([]);
+
+  const [sortCols, _setSortCols] = useState(() => uiState.sortCols ?? []);
+  function setSortCols(updater) {
+    _setSortCols(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      setUIState({ sortCols: next });
+      return next;
+    });
+  }
   const [deletedRows, setDeletedRows] = useState(() => loadDeletedRows());
   const [deletedCategories] = useState(() => loadDeletedCategories());
   const [deletedItems] = useState(() => loadDeletedItems());

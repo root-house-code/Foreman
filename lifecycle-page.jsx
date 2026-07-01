@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
-import { useForemanStore } from "./lib/store.js";
+import { useForemanStore, usePageUIState } from "./lib/store.js";
 import { expectedYears } from "./lib/lifespans.js";
 import {
   buildRoster, computeForecast, computeReserve, computeWarranties, computeRepairs12mo,
@@ -129,15 +129,21 @@ function FinancesPage({ navigate, navState, view }) {
   const setCustomField    = useForemanStore(s => s.setCustomField);
 
   const markPlannedLogged = useForemanStore(s => s.markPlannedLogged);
+  const [uiState, setUIState] = usePageUIState("lifecycle");
+
   const [expenseForm, setExpenseForm] = useState(null); // null = closed
-  const [ledgerTab, setLedgerTab] = useState("Ledger"); // Ledger page subnav: Ledger | Summary | Purchases
+
+  const [ledgerTab, _setLedgerTab] = useState(() => uiState.ledgerTab ?? "Ledger");
+  function setLedgerTab(v) { _setLedgerTab(v); setUIState({ ledgerTab: v }); }
+
   const [globalDateStart, setGlobalDateStart] = useState("");
   const [globalDateEnd, setGlobalDateEnd]   = useState("");
   const [filterMode, setFilterMode] = useState("allTime"); // allTime | trailing | custom
   const [trailingMonths, setTrailingMonths] = useState(12);
   const [editingTrailing, setEditingTrailing] = useState(false);
   const [trailingDraft, setTrailingDraft] = useState("");
-  const [forecastHorizon, setForecastHorizon] = useState(12);
+  const [forecastHorizon, _setForecastHorizon] = useState(() => uiState.forecastHorizon ?? 12);
+  function setForecastHorizon(v) { _setForecastHorizon(v); setUIState({ forecastHorizon: v }); }
   const [editingHorizon, setEditingHorizon] = useState(false);
   const [horizonDraft, setHorizonDraft] = useState("");
   const [expandedYm, setExpandedYm] = useState(null);   // Budget tab: open month
