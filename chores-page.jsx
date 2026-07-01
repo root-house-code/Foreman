@@ -24,10 +24,11 @@ import { loadRoomCategories, loadRoomSubtypes, formatRoomLabel } from "./lib/cat
 import { loadRooms } from "./lib/rooms.js";
 import {
   loadChoreCompletions, saveChoreCompletions, isChoreCompleted, toggleChoreCompletion,
-  saveChoreCompletionRecord, loadChoreCompletionRecords, updateChoreCompletionRecord,
+  saveChoreCompletionRecord, loadChoreCompletionRecords, updateChoreCompletionRecord, deleteChoreCompletionRecord,
 } from "./lib/choreCompletions.js";
 import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import { useForemanStore } from "./lib/store.js";
 import {
@@ -709,6 +710,10 @@ export default function ChoresPage({ navigate, navState }) {
     const patch = field === "completedAt" ? { completedAt: dateInputToISO(raw) } : { [field]: raw };
     setChoreCompletionRecords(updateChoreCompletionRecord(key, patch));
   }
+  const [pendingDelete, setPendingDelete] = useState(null);
+  function handleDeleteHistory(key) {
+    setChoreCompletionRecords(deleteChoreCompletionRecord(key));
+  }
   const [historySearch, setHistorySearch] = useState("");
   const [historyRoomFilter, setHistoryRoomFilter] = useState("ALL");
 
@@ -1331,6 +1336,7 @@ export default function ChoresPage({ navigate, navState }) {
                     {["Date", "Chore", "Location", "Who", "Time", "Notes"].map(h => (
                       <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
+                    <th style={{ borderBottom: "1px solid var(--fm-hairline2)", width: "2rem" }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1369,6 +1375,15 @@ export default function ChoresPage({ navigate, navState }) {
                           onCommit={raw => handleHistoryEdit(e.key, "notes", raw)}
                           style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}
                         />
+                        <td style={{ padding: "0.25rem 0 0.25rem 0.25rem", width: "2rem" }}>
+                          <button
+                            onClick={() => setPendingDelete(e.key)}
+                            style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0.2rem 0.4rem" }}
+                            onMouseEnter={ev => ev.currentTarget.style.color = "var(--fm-red)"}
+                            onMouseLeave={ev => ev.currentTarget.style.color = "var(--fm-ink-mute)"}
+                            title="Delete record"
+                          >×</button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -1378,6 +1393,14 @@ export default function ChoresPage({ navigate, navState }) {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="Delete Record"
+        message="This completion record will be permanently deleted. This cannot be undone."
+        onConfirm={() => { handleDeleteHistory(pendingDelete); setPendingDelete(null); }}
+        onCancel={() => setPendingDelete(null)}
+      />
 
       <ReminderSettings
         open={remindersOpen}

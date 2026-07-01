@@ -23,6 +23,7 @@ import {
 import MaintenanceCompleteModal from "./components/MaintenanceCompleteModal.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -471,6 +472,7 @@ export default function WorkbenchPage({ navigate, navState }) {
   const spatialAssignments = useForemanStore(s => s.spatialAssignments);
 
   const [activeTab,    setActiveTab]    = useState("Queue");
+  const [pendingDeleteSession, setPendingDeleteSession] = useState(null);
   const [typeFilter,   setTypeFilter]   = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
 
@@ -807,6 +809,7 @@ export default function WorkbenchPage({ navigate, navState }) {
                   {["Date", "Session", "Items", "Est. Time", "Actual Time", "Assignees"].map(h => (
                     <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
+                  <th style={{ borderBottom: "1px solid var(--fm-hairline2)", width: "2rem" }} />
                 </tr>
               </thead>
               <tbody>
@@ -846,6 +849,15 @@ export default function WorkbenchPage({ navigate, navState }) {
                         onCommit={raw => editSessionField(s.id, "assignees", raw)}
                         style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}
                       />
+                      <td style={{ padding: "0.25rem 0 0.25rem 0.25rem", width: "2rem" }}>
+                        <button
+                          onClick={() => setPendingDeleteSession(s.id)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0.2rem 0.4rem" }}
+                          onMouseEnter={ev => ev.currentTarget.style.color = "var(--fm-red)"}
+                          onMouseLeave={ev => ev.currentTarget.style.color = "var(--fm-ink-mute)"}
+                          title="Delete record"
+                        >×</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -854,6 +866,14 @@ export default function WorkbenchPage({ navigate, navState }) {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDeleteSession}
+        title="Delete Session"
+        message="This work session record will be permanently deleted. This cannot be undone."
+        onConfirm={() => { handleDeleteSession(pendingDeleteSession); setPendingDeleteSession(null); }}
+        onCancel={() => setPendingDeleteSession(null)}
+      />
 
       {/* ── Modals ── */}
       {newSessionOpen && <NewSessionModal onSave={handleCreateSession} onClose={() => setNewSessionOpen(false)} />}

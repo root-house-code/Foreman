@@ -18,7 +18,8 @@ import { GROUP_ORDER, GROUP_LABELS, loadCategoryTypeOverrides, loadRoomSubtypes,
 import { resolveTypeId, isSpatial, isFunctional, isExteriorType } from "./lib/entityTypes.js";
 import { useForemanStore } from "./lib/store.js";
 import { getItemStableKey } from "./lib/itemKeys.js";
-import { loadMaintenanceCompletionRecords, updateMaintenanceCompletionRecord } from "./lib/maintenance.js";
+import { loadMaintenanceCompletionRecords, updateMaintenanceCompletionRecord, deleteMaintenanceCompletionRecord } from "./lib/maintenance.js";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import AddTaskModal from "./components/AddTaskModal.jsx";
 import { FilterDropdown, FilterRow } from "./components/FilterPill.jsx";
 import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
@@ -51,6 +52,10 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
   function handleHistoryEdit(key, field, raw) {
     const patch = field === "completedAt" ? { completedAt: dateInputToISO(raw) } : { [field]: raw };
     setCompletionRecords(updateMaintenanceCompletionRecord(key, patch));
+  }
+  const [pendingDelete, setPendingDelete] = useState(null);
+  function handleDeleteHistory(key) {
+    setCompletionRecords(deleteMaintenanceCompletionRecord(key));
   }
   const [activeStatus, setActiveStatus] = useState("ALL");
   const [locationFilter, setLocationFilter] = useState("ALL");
@@ -685,6 +690,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
                   {["Date", "Category", "Item", "Task", "Who", "Notes"].map(h => (
                     <th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", fontWeight: 400, letterSpacing: "0.12em", padding: "0 0.75rem 0.5rem 0", textAlign: "left", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
+                  <th style={{ borderBottom: "1px solid var(--fm-hairline2)", width: "2rem" }} />
                 </tr>
               </thead>
               <tbody>
@@ -714,6 +720,15 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
                         onCommit={raw => handleHistoryEdit(e.key, "notes", raw)}
                         style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", padding: "0.55rem 0 0.55rem 0" }}
                       />
+                      <td style={{ padding: "0.25rem 0 0.25rem 0.25rem", width: "2rem" }}>
+                        <button
+                          onClick={() => setPendingDelete(e.key)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0.2rem 0.4rem" }}
+                          onMouseEnter={ev => ev.currentTarget.style.color = "var(--fm-red)"}
+                          onMouseLeave={ev => ev.currentTarget.style.color = "var(--fm-ink-mute)"}
+                          title="Delete record"
+                        >×</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -722,6 +737,14 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="Delete Record"
+        message="This completion record will be permanently deleted. This cannot be undone."
+        onConfirm={() => { handleDeleteHistory(pendingDelete); setPendingDelete(null); }}
+        onCancel={() => setPendingDelete(null)}
+      />
 
       {activeTab === "All tasks" && <div style={{ flex: 1, overflow: "auto", padding: "var(--fm-spacing-5xl) var(--fm-spacing-5xl) 4rem" }}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1.25rem" }}>

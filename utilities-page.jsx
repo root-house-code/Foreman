@@ -5,6 +5,7 @@ import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell from "./components/InlineEditCell.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -689,6 +690,7 @@ export default function UtilitiesPage({ navigate, navState }) {
   const [editBill, setEditBill]         = useState(null);     // { bill, utility }
   const [confirmDeleteUtilId, setConfirmDeleteUtilId] = useState(null);
   const [confirmDeleteBillId, setConfirmDeleteBillId] = useState(null);
+  const [pendingDeleteBill, setPendingDeleteBill] = useState(null);
 
   // Categories present in data
   const presentTypes = useMemo(() => {
@@ -1023,6 +1025,7 @@ export default function UtilitiesPage({ navigate, navState }) {
                   {["Period", "Utility", "Type", "Amount", "Usage", "Paid"].map(h => (
                     <th key={h} style={thCell}>{h}</th>
                   ))}
+                  <th style={{ borderBottom: "1px solid var(--fm-hairline2)", width: "2rem" }} />
                 </tr>
               </thead>
               <tbody>
@@ -1062,6 +1065,15 @@ export default function UtilitiesPage({ navigate, navState }) {
                         onCommit={next => editBillField(b.id, "paid", next)}
                         style={tdCell}
                       />
+                      <td style={{ padding: "0.25rem 0 0.25rem 0.25rem", width: "2rem" }}>
+                        <button
+                          onClick={() => setPendingDeleteBill(b.id)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0.2rem 0.4rem" }}
+                          onMouseEnter={ev => ev.currentTarget.style.color = "var(--fm-red)"}
+                          onMouseLeave={ev => ev.currentTarget.style.color = "var(--fm-ink-mute)"}
+                          title="Delete record"
+                        >×</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1070,6 +1082,14 @@ export default function UtilitiesPage({ navigate, navState }) {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDeleteBill}
+        title="Delete Bill"
+        message="This bill record will be permanently deleted. This cannot be undone."
+        onConfirm={() => { handleDeleteBill(pendingDeleteBill); setPendingDeleteBill(null); }}
+        onCancel={() => setPendingDeleteBill(null)}
+      />
 
       {/* ── Modals ── */}
       {(addOpen || editUtil) && (

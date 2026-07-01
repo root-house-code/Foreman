@@ -5,6 +5,7 @@ import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell, { toDateInput } from "./components/InlineEditCell.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -406,6 +407,7 @@ export default function ServicesPage({ navigate, navState }) {
   const [editVisit, setEditVisit]   = useState(null);    // { visit, service } being edited
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // service id pending delete confirm
   const [confirmDeleteVisitId, setConfirmDeleteVisitId] = useState(null); // visit id pending delete confirm
+  const [pendingDeleteVisit, setPendingDeleteVisit] = useState(null);
 
   // ── Derived: categories present in data ──────────────────────────────────
   const presentCats = useMemo(() => {
@@ -796,6 +798,7 @@ export default function ServicesPage({ navigate, navState }) {
                   {["Date", "Service", "Category", "Provider", "Tech", "Notes", "Cost"].map(h => (
                     <th key={h} style={thCell}>{h}</th>
                   ))}
+                  <th style={{ borderBottom: "1px solid var(--fm-hairline2)", width: "2rem" }} />
                 </tr>
               </thead>
               <tbody>
@@ -833,6 +836,15 @@ export default function ServicesPage({ navigate, navState }) {
                         onCommit={raw => editVisitField(v.id, "overrideCost", raw)}
                         style={{ ...tdCell, whiteSpace: "nowrap" }}
                       />
+                      <td style={{ padding: "0.25rem 0 0.25rem 0.25rem", width: "2rem" }}>
+                        <button
+                          onClick={() => setPendingDeleteVisit(v.id)}
+                          style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0.2rem 0.4rem" }}
+                          onMouseEnter={ev => ev.currentTarget.style.color = "var(--fm-red)"}
+                          onMouseLeave={ev => ev.currentTarget.style.color = "var(--fm-ink-mute)"}
+                          title="Delete record"
+                        >×</button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -841,6 +853,14 @@ export default function ServicesPage({ navigate, navState }) {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDeleteVisit}
+        title="Delete Visit"
+        message="This visit record will be permanently deleted. This cannot be undone."
+        onConfirm={() => { handleDeleteVisit(pendingDeleteVisit); setPendingDeleteVisit(null); }}
+        onCancel={() => setPendingDeleteVisit(null)}
+      />
 
       {/* ── Modals ── */}
       {(addOpen || editSvc) && (
