@@ -1,7 +1,11 @@
-import { useState, useContext } from 'react';
+import { useState, useContext, useMemo, useEffect, useRef } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
 import { openCommandPalette } from '../../lib/commandPalette.js';
 import PageInfoButton from '../../components/PageInfoButton.jsx';
+import { useForemanStore } from '../../lib/store.js';
+import { buildAlerts, summarizeAlerts } from '../../lib/alerts.js';
+import { loadChoreNextDates } from '../../lib/chores.js';
+import { storageGet } from '../../lib/storage.js';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 const KBD_HINT = IS_MAC ? '⌘K' : 'Ctrl K';
@@ -14,7 +18,6 @@ function buildDateStrip() {
   const mon = MONTH[now.getMonth()];
   const date = now.getDate();
   const year = now.getFullYear();
-  // ISO week number
   const tmp = new Date(Date.UTC(year, now.getMonth(), date));
   tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
   const weekStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
@@ -22,20 +25,55 @@ function buildDateStrip() {
   return `${day} · ${mon} ${date} · ${year} · WEEK ${week}`;
 }
 
-// Grouped navigation. Each group becomes a dropdown menu; singles render as
-// direct buttons; meta pages sit apart on the right.
+const NAV_TOP    = ['Workbench', 'Dashboard', 'Calendar'];
 const NAV_GROUPS = [
-  { label: 'Overview', pages: ['Dashboard', 'Triage', 'Calendar', 'Timeline'] },
   { label: 'Property', pages: ['Floor Plan', 'Inventory', 'Item Lifespans', 'Supplies'] },
   { label: 'Finances', pages: ['Spending', 'Forecast', 'Services', 'Utilities', 'Mortgage'] },
-  { label: 'Work',     pages: ['Maintenance', 'Chores', 'Workbench', 'To Dos', 'Projects'] },
+  { label: 'Work',     pages: ['Maintenance', 'Chores', 'To Dos', 'Projects'] },
 ];
 const NAV_DIRECT = ['Notebook'];
 const NAV_META   = ['Read Me', 'Preferences'];
 
+const KIND_LABEL = {
+  maintenance: 'MAINT', chore: 'CHORE', warranty: 'WARR',
+  supply: 'SUPPLY', service: 'SVC', planned: 'PLAN', mortgage: 'MORTG',
+};
+
+const KIND_COLOR = {
+  maintenance: 'var(--fm-brass)',
+  chore:       'var(--fm-green)',
+  warranty:    'var(--fm-cyan)',
+  supply:      'var(--fm-amber)',
+  service:     'var(--fm-ink-dim)',
+  planned:     'var(--fm-ink-dim)',
+  mortgage:    'var(--fm-red)',
+};
+
+const TRAY_SECTIONS = [
+  { severity: 'overdue', label: 'Overdue',  color: 'var(--fm-red)'   },
+  { severity: 'soon',    label: 'Due Soon', color: 'var(--fm-amber)' },
+  { severity: 'info',    label: 'Heads-Up', color: 'var(--fm-brass)' },
+];
+
+function fmtTrayDate(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 function readOnlineMode() {
   try { return JSON.parse(localStorage.getItem('foreman-online-mode') ?? 'false'); }
   catch { return false; }
+}
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+function BellIcon({ size = 13 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }} aria-hidden="true">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  );
 }
 
 function GearIcon({ size = 14 }) {
@@ -46,6 +84,208 @@ function GearIcon({ size = 14 }) {
     </svg>
   );
 }
+
+// ── Alerts Tray ───────────────────────────────────────────────────────────────
+
+function AlertsTray({ navigate }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  const itemFieldValues = useForemanStore(s => s.itemFieldValues);
+  const inventory       = useForemanStore(s => s.inventory);
+  const supplies        = useForemanStore(s => s.supplies);
+  const services        = useForemanStore(s => s.services);
+  const chores          = useForemanStore(s => s.chores);
+  const budget          = useForemanStore(s => s.budget);
+  const [choreNextDates] = useState(() => loadChoreNextDates());
+  const nextDatesMap = useMemo(() => storageGet('maintenance-next-dates') ?? {}, []);
+
+  const alerts = useMemo(
+    () => buildAlerts({ itemFieldValues, inventory, supplies, services, chores, choreNextDates, nextDatesMap, budget }),
+    [itemFieldValues, inventory, supplies, services, chores, choreNextDates, nextDatesMap, budget]
+  );
+  const summary = useMemo(() => summarizeAlerts(alerts), [alerts]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  const badgeCount = summary.overdue + summary.soon;
+  const badgeColor = summary.overdue > 0 ? 'var(--fm-red)' : 'var(--fm-amber)';
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title="Alerts"
+        aria-label={`Alerts${badgeCount > 0 ? ` — ${badgeCount} pending` : ''}`}
+        style={{
+          alignItems: 'center',
+          background: open ? 'var(--fm-bg-sunk)' : 'transparent',
+          border: `1px solid ${badgeCount > 0 ? badgeColor + '66' : 'var(--fm-hairline)'}`,
+          borderRadius: 3,
+          color: badgeCount > 0 ? badgeColor : 'var(--fm-ink-mute)',
+          cursor: 'pointer',
+          display: 'flex',
+          gap: 5,
+          padding: '5px 7px',
+          transition: 'color 0.15s, border-color 0.15s',
+        }}
+        onMouseEnter={e => { if (!open) { e.currentTarget.style.borderColor = 'var(--fm-hairline2)'; e.currentTarget.style.color = badgeCount > 0 ? badgeColor : 'var(--fm-ink-dim)'; } }}
+        onMouseLeave={e => { if (!open) { e.currentTarget.style.borderColor = badgeCount > 0 ? badgeColor + '66' : 'var(--fm-hairline)'; e.currentTarget.style.color = badgeCount > 0 ? badgeColor : 'var(--fm-ink-mute)'; } }}
+      >
+        <BellIcon size={12} />
+        {badgeCount > 0 && (
+          <span style={{
+            background: badgeColor,
+            borderRadius: 8,
+            color: '#0a0c11',
+            fontFamily: 'var(--fm-mono)',
+            fontSize: 8,
+            fontWeight: 700,
+            lineHeight: 1,
+            minWidth: 14,
+            padding: '2px 4px',
+            textAlign: 'center',
+          }}>
+            {badgeCount > 99 ? '99+' : badgeCount}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          background: 'var(--fm-bg-raised)',
+          border: '1px solid var(--fm-hairline2)',
+          borderRadius: 4,
+          boxShadow: '0 8px 32px #00000066',
+          maxHeight: 440,
+          minWidth: 300,
+          overflowY: 'auto',
+          position: 'absolute',
+          right: 0,
+          top: 'calc(100% + 6px)',
+          zIndex: 70,
+        }}>
+          {alerts.length === 0 ? (
+            <div style={{ color: 'var(--fm-green)', fontFamily: 'var(--fm-serif)', fontSize: '0.88rem', padding: '1.25rem 1rem', textAlign: 'center' }}>
+              All clear
+            </div>
+          ) : (
+            TRAY_SECTIONS.map(({ severity, label, color }) => {
+              const items = alerts.filter(a => a.severity === severity);
+              if (items.length === 0) return null;
+              return (
+                <div key={severity} style={{ paddingBottom: '0.35rem' }}>
+                  <div style={{
+                    color,
+                    fontFamily: 'var(--fm-mono)',
+                    fontSize: '0.55rem',
+                    letterSpacing: '0.14em',
+                    padding: '0.55rem 0.85rem 0.2rem',
+                    textTransform: 'uppercase',
+                  }}>
+                    {label} · {items.length}
+                  </div>
+                  {items.slice(0, 8).map(a => (
+                    <button
+                      key={a.id}
+                      onClick={() => { setOpen(false); navigate(a.nav?.page || 'workbench'); }}
+                      style={{
+                        alignItems: 'center',
+                        background: 'transparent',
+                        border: 'none',
+                        borderLeft: `2px solid ${color}`,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        gap: '0.5rem',
+                        padding: '0.32rem 0.85rem',
+                        textAlign: 'left',
+                        transition: 'background 0.1s',
+                        width: '100%',
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--fm-bg-panel)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span style={{
+                        background: KIND_COLOR[a.kind] + '18',
+                        border: `1px solid ${KIND_COLOR[a.kind]}44`,
+                        borderRadius: 2,
+                        color: KIND_COLOR[a.kind],
+                        flexShrink: 0,
+                        fontFamily: 'var(--fm-mono)',
+                        fontSize: '0.5rem',
+                        letterSpacing: '0.06em',
+                        padding: '1px 4px',
+                      }}>
+                        {KIND_LABEL[a.kind] ?? a.kind.toUpperCase()}
+                      </span>
+                      <span style={{
+                        color: 'var(--fm-ink)',
+                        flex: 1,
+                        fontFamily: 'var(--fm-mono)',
+                        fontSize: '0.68rem',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {a.title}
+                      </span>
+                      {a.date && (
+                        <span style={{ color, flexShrink: 0, fontFamily: 'var(--fm-mono)', fontSize: '0.6rem' }}>
+                          {fmtTrayDate(a.date)}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                  {items.length > 8 && (
+                    <div style={{ color: 'var(--fm-ink-mute)', fontFamily: 'var(--fm-mono)', fontSize: '0.58rem', padding: '0.15rem 0.85rem 0.2rem' }}>
+                      +{items.length - 8} more
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+
+          <div style={{ borderTop: '1px solid var(--fm-hairline)', marginTop: '0.25rem', padding: '0.45rem 0.85rem 0.5rem' }}>
+            <button
+              onClick={() => { setOpen(false); navigate('workbench'); }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--fm-brass)',
+                cursor: 'pointer',
+                fontFamily: 'var(--fm-mono)',
+                fontSize: '0.62rem',
+                letterSpacing: '0.06em',
+                padding: 0,
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--fm-ink)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--fm-brass)'}
+            >
+              View all in Workbench →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Nav helpers ───────────────────────────────────────────────────────────────
 
 const triggerStyle = (active) => ({
   padding: '5px 10px',
@@ -81,24 +321,22 @@ function NavGroup({ group, currentActive, open, setOpen, navigate }) {
       </button>
 
       {isOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            marginTop: 0,
-            minWidth: 150,
-            background: 'var(--fm-bg-raised)',
-            border: '1px solid var(--fm-hairline2)',
-            borderRadius: 4,
-            boxShadow: '0 8px 24px #00000055',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 1,
-            padding: 4,
-            zIndex: 60,
-          }}
-        >
+        <div style={{
+          background: 'var(--fm-bg-raised)',
+          border: '1px solid var(--fm-hairline2)',
+          borderRadius: 4,
+          boxShadow: '0 8px 24px #00000055',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          left: 0,
+          marginTop: 0,
+          minWidth: 150,
+          padding: 4,
+          position: 'absolute',
+          top: '100%',
+          zIndex: 60,
+        }}>
           {group.pages.map((page) => {
             const isActive = page === currentActive;
             return (
@@ -106,19 +344,19 @@ function NavGroup({ group, currentActive, open, setOpen, navigate }) {
                 key={page}
                 onClick={() => { setOpen(null); if (!isActive) navigate(page); }}
                 style={{
-                  padding: '6px 10px',
-                  borderRadius: 3,
-                  border: 'none',
                   background: isActive ? 'var(--fm-brass-bg)' : 'transparent',
+                  border: 'none',
+                  borderRadius: 3,
                   color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-dim)',
+                  cursor: isActive ? 'default' : 'pointer',
                   fontFamily: 'var(--fm-mono)',
                   fontSize: 10.5,
                   letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
+                  padding: '6px 10px',
                   textAlign: 'left',
-                  cursor: isActive ? 'default' : 'pointer',
-                  whiteSpace: 'nowrap',
+                  textTransform: 'uppercase',
                   transition: 'color 0.12s, background 0.12s',
+                  whiteSpace: 'nowrap',
                 }}
                 onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.color = 'var(--fm-ink)'; e.currentTarget.style.background = 'var(--fm-bg-panel)'; } }}
                 onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.color = 'var(--fm-ink-dim)'; e.currentTarget.style.background = 'transparent'; } }}
@@ -133,6 +371,8 @@ function NavGroup({ group, currentActive, open, setOpen, navigate }) {
   );
 }
 
+// ── Header ────────────────────────────────────────────────────────────────────
+
 export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline = 'your house, in order' }) {
   const nav = useContext(FmNavContext);
   const currentActive = active || nav.current;
@@ -140,49 +380,40 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
   const [open, setOpen] = useState(null);
 
   return (
-    <header
-      style={{
-        padding: '16px 30px 14px',
-        borderBottom: 'var(--fm-border)',
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'space-between',
-        background: 'var(--fm-bg)',
-      }}
-    >
+    <header style={{
+      alignItems: 'flex-end',
+      background: 'var(--fm-bg)',
+      borderBottom: 'var(--fm-border)',
+      display: 'flex',
+      justifyContent: 'space-between',
+      padding: '16px 30px 14px',
+    }}>
       <div>
-        <div
-          style={{
-            color: 'var(--fm-ink-mute)',
-            fontFamily: 'var(--fm-mono)',
-            fontSize: 10,
-            letterSpacing: '0.22em',
-            textTransform: 'uppercase',
-            marginBottom: 2,
-          }}
-        >
+        <div style={{
+          color: 'var(--fm-ink-mute)',
+          fontFamily: 'var(--fm-mono)',
+          fontSize: 10,
+          letterSpacing: '0.22em',
+          marginBottom: 2,
+          textTransform: 'uppercase',
+        }}>
           {dateStrip}
         </div>
-        <h1
-          style={{
-            font: "500 28px var(--fm-serif)",
-            color: 'var(--fm-ink)',
-            margin: 0,
-            letterSpacing: '-0.02em',
-          }}
-        >
+        <h1 style={{ color: 'var(--fm-ink)', font: '500 28px var(--fm-serif)', letterSpacing: '-0.02em', margin: 0 }}>
           Foreman{' '}
           <span style={{ color: 'var(--fm-brass)' }}>/</span>{' '}
           <span style={{ color: 'var(--fm-brass-dim)', fontStyle: 'italic' }}>{tagline}</span>
         </h1>
       </div>
 
-      <nav style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <nav style={{ alignItems: 'center', display: 'flex', gap: 6 }}>
         <PageInfoButton title={currentActive} navigate={nav.navigate} />
+
+        {/* Search */}
         <button
           onClick={openCommandPalette}
           title={`Search (${KBD_HINT})`}
-          style={{ alignItems: 'center', background: 'var(--fm-bg-sunk)', border: '1px solid var(--fm-hairline)', borderRadius: 3, color: 'var(--fm-ink-mute)', cursor: 'pointer', display: 'flex', fontFamily: 'var(--fm-mono)', fontSize: 10, gap: 6, marginRight: 6, padding: '5px 8px', transition: 'color 0.15s, border-color 0.15s' }}
+          style={{ alignItems: 'center', background: 'var(--fm-bg-sunk)', border: '1px solid var(--fm-hairline)', borderRadius: 3, color: 'var(--fm-ink-mute)', cursor: 'pointer', display: 'flex', fontFamily: 'var(--fm-mono)', fontSize: 10, gap: 6, marginRight: 2, padding: '5px 8px', transition: 'color 0.15s, border-color 0.15s' }}
           onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--fm-brass)'; e.currentTarget.style.color = 'var(--fm-ink-dim)'; }}
           onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--fm-hairline)'; e.currentTarget.style.color = 'var(--fm-ink-mute)'; }}
         >
@@ -190,17 +421,39 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
           <span>Search</span>
           <span style={{ background: 'var(--fm-bg-raised)', border: '1px solid var(--fm-hairline2)', borderRadius: 2, color: 'var(--fm-ink-mute)', fontSize: 8.5, letterSpacing: '0.04em', padding: '1px 4px' }}>{KBD_HINT}</span>
         </button>
+
+        {/* Alerts tray */}
+        <AlertsTray navigate={nav.navigate} />
+
+        {/* Top-level nav: Workbench, Dashboard */}
+        {NAV_TOP.map((page) => {
+          const isActive = page === currentActive;
+          return (
+            <button
+              key={page}
+              onClick={() => !isActive && nav.navigate(page)}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink-dim)'; }}
+              style={{ ...triggerStyle(isActive), cursor: isActive ? 'default' : 'pointer' }}
+            >
+              {page}
+            </button>
+          );
+        })}
+
         {onlineMode && (
-          <div style={{ alignItems: 'center', display: 'flex', gap: '0.3rem', marginRight: '0.5rem' }}>
+          <div style={{ alignItems: 'center', display: 'flex', gap: '0.3rem', marginRight: '0.25rem' }}>
             <span style={{ background: 'var(--fm-green)', borderRadius: '50%', display: 'inline-block', height: '5px', width: '5px' }} />
             <span style={{ color: 'var(--fm-green)', fontFamily: 'var(--fm-mono)', fontSize: 9.5, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Online</span>
           </div>
         )}
 
+        {/* Grouped nav */}
         {NAV_GROUPS.map((group) => (
           <NavGroup key={group.label} group={group} currentActive={currentActive} open={open} setOpen={setOpen} navigate={nav.navigate} />
         ))}
 
+        {/* Notebook */}
         {NAV_DIRECT.map((page) => {
           const isActive = page === currentActive;
           return (
@@ -218,6 +471,7 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
 
         <span style={{ background: 'var(--fm-hairline)', height: 16, margin: '0 3px', width: 1 }} />
 
+        {/* Meta: Read Me + Preferences gear */}
         {NAV_META.map((page) => {
           const isActive = page === currentActive;
           const isGear = page === 'Preferences';
@@ -231,19 +485,19 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
               onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--fm-ink-mute)'; }}
               style={{
                 alignItems: 'center',
-                display: 'inline-flex',
-                padding: isGear ? '5px 6px' : '5px 8px',
-                borderRadius: 3,
-                border: `1px solid ${isActive ? 'var(--fm-brass)' : 'transparent'}`,
                 background: isActive ? 'var(--fm-brass-bg)' : 'transparent',
+                border: `1px solid ${isActive ? 'var(--fm-brass)' : 'transparent'}`,
+                borderRadius: 3,
                 color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-mute)',
+                cursor: isActive ? 'default' : 'pointer',
+                display: 'inline-flex',
                 fontFamily: 'var(--fm-mono)',
                 fontSize: 10,
                 letterSpacing: '0.08em',
+                padding: isGear ? '5px 6px' : '5px 8px',
                 textTransform: 'uppercase',
-                cursor: isActive ? 'default' : 'pointer',
-                whiteSpace: 'nowrap',
                 transition: 'color 0.15s',
+                whiteSpace: 'nowrap',
               }}
             >
               {isGear ? <GearIcon /> : page}

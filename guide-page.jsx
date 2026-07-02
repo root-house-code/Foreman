@@ -25,6 +25,10 @@ import { loadStandaloneArticles, saveStandaloneArticles, standaloneNoteKey } fro
 import { loadProjects } from "./lib/projects.js";
 import { loadArticleAssociations, saveArticleAssociations, setAssociationIn } from "./lib/articleAssociations.js";
 import { storageGet, storageSet } from "./lib/storage.js";
+import { loadMaintenanceCompletionRecords } from "./lib/maintenance.js";
+import { loadChoreCompletionRecords } from "./lib/choreCompletions.js";
+import { buildJournal } from "./lib/journal.js";
+import JournalView from "./components/JournalView.jsx";
 
 // Structural fields stay Inventory-managed; keep them out of the article's add-field menu.
 const STRUCTURAL_FIELD_IDS = new Set(["item_type", "item_subtype"]);
@@ -237,7 +241,7 @@ function RestoreButton({ onRestore }) {
   );
 }
 
-export default function GuidePage({ navigate }) {
+export default function GuidePage({ navigate, navState = null }) {
   const [deletedRows, setDeletedRows] = useState(() => loadDeletedRows());
   const [deletedItems]      = useState(() => loadDeletedItems());
   const [deletedCategories] = useState(() => loadDeletedCategories());
@@ -257,6 +261,25 @@ export default function GuidePage({ navigate }) {
   const [associations, setAssociations] = useState(() => loadArticleAssociations());
 
   const [uiState, setUIState] = usePageUIState("notebook");
+
+  // ── Tab state (Notebook | Timeline) ──────────────────────────────────────
+  const [activeTab, _setActiveTab] = useState(() => uiState.activeTab ?? "Notebook");
+  function setActiveTab(v) { _setActiveTab(v); setUIState({ activeTab: v }); }
+
+  useEffect(() => {
+    if (navState?.tab) setActiveTab(navState.tab);
+  }, []);
+
+  // ── Timeline data (shared with the Timeline tab) ─────────────────────────
+  // projects comes from the existing loadProjects() memo below; the rest need
+  // store subscriptions since they aren't already read by this page.
+  const chores    = useForemanStore(s => s.chores);
+  const services  = useForemanStore(s => s.services);
+  const utilities = useForemanStore(s => s.utilities);
+  const expenses  = useForemanStore(s => s.expenses);
+  const sessions  = useForemanStore(s => s.sessions);
+  const [maintenanceRecords] = useState(() => loadMaintenanceCompletionRecords());
+  const [choreRecords]       = useState(() => loadChoreCompletionRecords());
 
   // Article organization (Part A) + Notebook upgrades (Part C)
   const [grouping, setGrouping]             = useState(() => loadNotebookGrouping());
@@ -586,6 +609,11 @@ export default function GuidePage({ navigate }) {
   }
   const projects = useMemo(() => loadProjects(), []);
   const projectOptions = useMemo(() => projects.map(p => ({ value: p.id, label: p.name })), [projects]);
+
+  const journalEvents = useMemo(
+    () => buildJournal({ maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects, sessions }),
+    [maintenanceRecords, choreRecords, chores, services, utilities, expenses, projects, sessions]
+  );
   // Functional categories double as "systems" (mirrors Inventory's system picker).
   // Same full-taxonomy source as locationOptions, so rooms never leak in as systems
   // and item-less functional categories still appear.
@@ -751,14 +779,22 @@ export default function GuidePage({ navigate }) {
 
       <FmHeader active="Notebook" tagline="Notebook" />
       <FmSubnav
-        tabs={["Notebook"]}
-        active="Notebook"
-        stats={[
-          { value: grouped.reduce((n, g) => n + g.items.length, 0), label: "items" },
-          { value: systemCount, label: "systems" },
-          { value: standaloneArticles.length, color: "var(--fm-brass)", label: "articles" },
-        ]}
+        tabs={["Notebook", "Timeline"]}
+        active={activeTab}
+        onTabChange={setActiveTab}
+        stats={activeTab === "Timeline"
+          ? [{ value: journalEvents.length, label: "entries", color: "var(--fm-brass)" }]
+          : [
+              { value: grouped.reduce((n, g) => n + g.items.length, 0), label: "items" },
+              { value: systemCount, label: "systems" },
+              { value: standaloneArticles.length, color: "var(--fm-brass)", label: "articles" },
+            ]
+        }
       />
+
+      {activeTab === "Timeline" ? (
+        <JournalView events={journalEvents} navigate={navigate} />
+      ) : (<>
 
       {!useDefaultData && grouped.length === 0 && standaloneArticles.length === 0 && (
         <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", justifyContent: "center", padding: "4rem 2rem" }}>
@@ -1231,6 +1267,8 @@ export default function GuidePage({ navigate }) {
           </div>
         </div>
       )}
+
+      </>)}
     </div>
   );
 }
