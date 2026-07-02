@@ -451,8 +451,6 @@ const ROADMAP_SECTIONS = [
   // Top Priority — gate adoption/shipping or are pervasive, high-leverage wins.
   { id: "road-setup",     label: "Home Setup Wizard",      group: "Top Priority" },
   { id: "road-electron",  label: "Windows App",            group: "Top Priority" },
-  { id: "road-alerts",    label: "Alerts Inbox",           group: "Top Priority" },
-  { id: "road-nav-state", label: "Page State",             group: "Top Priority" },
   // Medium Priority — clear value, build on existing foundations, not gating.
   { id: "road-gcal",      label: "Google Calendar",        group: "Medium Priority" },
   { id: "road-vault",     label: "Document Vault",         group: "Medium Priority" },
@@ -509,53 +507,6 @@ function RoadmapTab() {
             [`NSIS installer (blocked by OneDrive)`, `The electron-builder config is in place — the “build” field in package.json targets win/nsis and the electron:build script runs vite build then electron-builder. The build currently fails with EPERM: operation not permitted on a temp-to-final rename because OneDrive's sync process locks files mid-write inside the project directory. Fix option A: pause OneDrive sync before running npm run electron:build. Fix option B: set the output directory outside OneDrive by adding “directories”: { “output”: “C:/Temp/foreman-build” } to the build config in package.json. Also needed before release: a proper app icon at assets/icon.ico (256x256 minimum, referenced as “icon”: “assets/icon.ico” in the win block of the build config) to replace the current placeholder PNG. A code-signing certificate (DigiCert, Sectigo, or equivalent) is needed to suppress the Windows Defender SmartScreen warning on first install — without it users see “Windows protected your PC” on every fresh install. The electron-builder win block accepts certificateFile and certificatePassword fields, or use the electron-windows-sign package for PKCS#12 or Azure Key Vault signing.`],
             [`Auto-update`, `Not yet implemented. The bridge is already stubbed: preload.cjs exposes onUpdateStatus(cb) for the renderer to subscribe to, and the comment in preload.cjs marks it as a Phase 4 item. Implementation: add electron-updater as a runtime dependency (npm install electron-updater — note: runtime, not devDependency). In electron/main.cjs, require autoUpdater from electron-updater and call autoUpdater.checkForUpdatesAndNotify() inside app.whenReady() after the window is created. Add a publish block to the build config in package.json: { “provider”: “github”, “owner”: “root-house-code”, “repo”: “Foreman” }. Push a GitHub Release with the built installer and its .yml manifest attached; electron-updater compares the installed version string against the latest.yml on GitHub on every startup. Wire autoUpdater events (update-available, update-downloaded, error) through ipcMain to the renderer via ipcRenderer.on(“update-status”) and surface them as a dismissible banner. Important: auto-update on Windows requires the installer to be code-signed — unsigned builds silently fail the update check.`],
             [`Item-level deep links for QR scanning`, `The foreman:// protocol is registered and page-level routing works — foreman://inventory opens the Inventory page. What is missing is sub-page routing for specific records, which is the useful case for QR code labels printed on appliances or rooms. The handleDeepLink function in electron/main.cjs already forwards the full URL string to the renderer via mainWindow.webContents.send(“deep-link”, url). The onDeepLink effect in src/App.jsx currently extracts only parsed.hostname as the page key. Extend it to also read the pathname: for a URL like foreman://inventory/item-id-abc, hostname is “inventory” and pathname is “/item-id-abc” — pass { deepLinkId: “item-id-abc” } as navState to navigate(). Each page that supports deep linking then reads navState?.deepLinkId on mount and selects the matching record, opening its detail panel. InventoryPage already accepts navState for similar pre-selection patterns. The same pattern extends to maintenance tasks, chores, rooms, or any entity with a stable string id.`],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
-
-      <ArchSection id="road-alerts" label="Alerts" heading="Alerts Inbox" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          Foreman already generates many signals — overdue tasks, warranties expiring, supplies running low, bills due, contract renewals — but they're scattered across Dashboard cards and individual pages. The Alerts Inbox gathers them into one prioritized place. It can stand on its own as a dedicated surface and, at the same time, extend and revamp the Dashboard's Triage panel rather than living entirely apart from it.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["One inbox, every signal", "Overdue maintenance and chores, warranties expiring, low or out-of-stock supplies, upcoming bill due dates, and service renewals — all in a single prioritized, filterable list instead of six separate corners of the app."],
-            ["Standalone, and a Triage revamp", "Lives as its own surface while the Dashboard Triage panel becomes the inbox's at-a-glance preview — the two share one engine rather than computing overlapping lists independently."],
-            ["Triage and dismiss", "Snooze, dismiss, or act on each alert inline — log it, reorder, pay — and carry an unread count in the header so nothing quietly slips."],
-            ["Built from existing derivations", "Reuses the overdue, warranty, low-supply, and renewal logic already computed across the Dashboard, Lifecycle, Supplies, Services, and Utilities pages — consolidation, not new calculation."],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </ArchSection>
-
-      <ArchSection id="road-nav-state" label="Page State" heading="Navigation State Persistence" sectionRefs={sectionRefs}>
-        <p style={bodyText}>
-          This is shipped. Pages now remember their view configuration — active tab, filter selections, sort column, view mode — when you navigate away and return, and across full page reloads. Maintenance remembers its active tab, all five filter dropdowns, season, and frequency chips. Chores remembers the active room, frequency chips, history room filter, and sort state. Workbench remembers its active tab and both filter dropdowns. Inventory remembers the active view and the filter and sort state in the list view. Lifecycle remembers the ledger subnav tab and forecast horizon. The Notebook remembers the 'Only documented' toggle (grouping was already stored independently).
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The implementation uses a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>pageUIState</span> slice in the Zustand store, backed by <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-page-ui-state</span> in storage. A <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>usePageUIState(pageId)</span> hook exported from <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/store.js</span> returns the stored config and a setter. Each migrated state variable initializes from the store on mount and writes back through a wrapper that calls both the local React setter and the store setter. Search queries, open panels, and selected items are intentionally not restored — returning to a page mid-search or with a detail panel open without the context that led there is more disorienting than starting fresh.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["Implementation approach", "The correct tool in this codebase is a pageUIState slice in the existing Zustand store (lib/store.js): a plain object keyed by page identifier, where each page reads its configuration from the store on mount instead of from useState defaults, and writes back on change. This is in-memory, so it survives navigation within a session but resets on full page reload. For truly sticky preferences — view modes or groupings where a user would be annoyed if a reload forgot them — those specific keys can be persisted to storage on write. The key principle: most configuration should survive within a session; a small set of high-value preferences should also survive reloads."],
-            ["What to persist per page", "Inventory: active tab (All / By Room / By Category), sort column and direction, active filter chips, expanded category list. Maintenance: active tab (Schedule / History), active filters, sort state, expanded category state. Notebook: grouping mode (Category / System / Custom), onlyDocumented toggle. Lifecycle: active tab (Forecast / Chores / Budget), forecast horizon setting. Workbench: active tab. Chores: sort column, sort direction. The floor plan, preferences, and read-me pages have no meaningful ephemeral state to restore."],
-            ["What not to persist", "Search queries should not persist — a user who left mid-search has usually finished the task that required it; returning to a filtered view with two visible items is more confusing than starting fresh. Selected items and open detail panels should not persist — the panel being open when you return to a page is context-free without the activity that opened it. Scroll position is not worth the implementation complexity: if filters and sort are restored, the user can quickly reorient."],
-            ["Scope and sequencing", "This is a wide refactor, not a complex one. Each page requires identifying its relevant state variables, adding a pageUIState key to the Zustand store for the page, replacing the useState initializers with store reads, and replacing setters with store writes. A single page can be done in under an hour. The recommended sequencing is highest-friction pages first: Inventory has the most state variables and the most user-visible reset problem. Maintenance and Notebook follow. Low-state pages (Workbench, Chores) are last. Do not attempt all pages in one pass — each page can be migrated independently without affecting the others."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
