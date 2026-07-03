@@ -19,6 +19,8 @@ class ErrorBoundary extends Component {
 }
 import { migrateToEntityTypes } from "../lib/entityTypes.js";
 import { runMigrations } from "../lib/migration.js";
+import { onStorageRemoteChange } from "../lib/storage.js";
+import { useForemanStore } from "../lib/store.js";
 import HomeMaintenanceTable from "../home-maintenance.jsx";
 import InventoryPage from "../inventory-page.jsx";
 import BoardPage from "../board-page.jsx";
@@ -88,6 +90,13 @@ export default function App() {
         } catch {}
       });
     }
+  }, []);
+
+  // Multi-device: when another device writes (LAN client on the host, or the
+  // host/other clients when this is a LAN client), the delta has already been
+  // applied to the storage cache — rebuild the store slices so pages reflect it.
+  useEffect(() => {
+    onStorageRemoteChange(() => useForemanStore.getState().reloadAll());
   }, []);
 
   const navContextValue = useMemo(

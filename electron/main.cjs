@@ -1,6 +1,8 @@
 const { app, BrowserWindow, Menu, ipcMain, Tray, Notification, dialog, nativeImage } = require("electron");
 const path = require("path");
+const crypto = require("crypto");
 const { readAllSync, flush, createBackup } = require("./storageFile.cjs");
+const { createLanServer, lanAddresses } = require("./lanServer.cjs");
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
@@ -127,6 +129,7 @@ ipcMain.on("storage:readAll", (event) => {
 ipcMain.on("storage:setKeys", (_event, delta) => {
   applyDelta(delta);
   scheduleFlush();
+  _lan?.broadcast(delta, null); // keep LAN clients current with host edits
 });
 
 // Synchronous merge + immediate write — used before window.location.reload()
@@ -135,8 +138,76 @@ ipcMain.on("storage:setKeysNow", (event, delta) => {
   applyDelta(delta);
   _flushPending = true;
   flushNow();
+  _lan?.broadcast(delta, null);
   event.returnValue = true;
 });
+
+// ── LAN sharing ───────────────────────────────────────────────────────────────
+// Hub-and-spoke multi-device: this process is the single authoritative host;
+// browsers on the same wifi load the SPA from the LAN server and read/write the
+// live store through its API. Settings persist in the store itself.
+const LAN_KEY = "foreman-lan-share";
+let _lan = null; // { server, port, addresses, broadcast, close }
+
+function lanSettings() {
+  const store = ensureStore();
+  if (!store[LAN_KEY] || !store[LAN_KEY].token) {
+    store[LAN_KEY] = { enabled: false, token: crypto.randomUUID(), port: 8417, ...(store[LAN_KEY] || {}) };
+    scheduleFlush();
+  }
+  return store[LAN_KEY];
+}
+
+function saveLanSettings(patch) {
+  const store = ensureStore();
+  store[LAN_KEY] = { ...lanSettings(), ...patch };
+  scheduleFlush();
+  return store[LAN_KEY];
+}
+
+// A write arriving from a LAN client: merge, persist, tell the host renderer.
+// (The server broadcasts to the *other* LAN clients itself.)
+function applyRemoteDelta(delta, _clientId) {
+  applyDelta(delta);
+  scheduleFlush();
+  mainWindow?.webContents.send("remote-storage-change", delta);
+}
+
+async function startLan() {
+  if (_lan) return lanStatus();
+  const settings = lanSettings();
+  const distDir = path.join(__dirname, "../dist");
+  _lan = await createLanServer({
+    distDir,
+    getToken: () => lanSettings().token,
+    getStore: () => ensureStore(),
+    applyRemoteDelta,
+  }, settings.port || 8417);
+  saveLanSettings({ enabled: true, port: _lan.port });
+  return lanStatus();
+}
+
+async function stopLan() {
+  if (_lan) { await _lan.close(); _lan = null; }
+  saveLanSettings({ enabled: false });
+  return lanStatus();
+}
+
+function lanStatus() {
+  const settings = lanSettings();
+  return {
+    running: !!_lan,
+    enabled: settings.enabled,
+    port: _lan?.port ?? settings.port,
+    token: settings.token,
+    addresses: _lan?.addresses ?? lanAddresses(),
+  };
+}
+
+ipcMain.handle("lan:start", () => startLan().catch(err => ({ running: false, error: String(err?.message || err) })));
+ipcMain.handle("lan:stop", () => stopLan());
+ipcMain.handle("lan:status", () => lanStatus());
+ipcMain.handle("lan:regenerate", () => { saveLanSettings({ token: crypto.randomUUID() }); return lanStatus(); });
 
 // ── Notifications IPC ─────────────────────────────────────────────────────────
 ipcMain.on("notify", (_event, title, body) => {
@@ -170,6 +241,9 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
 
+  // Resume LAN sharing if it was on when the app last quit
+  try { if (lanSettings().enabled) startLan().catch(() => {}); } catch {}
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -182,6 +256,7 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   _quitting = true;
   flushNow();
+  if (_lan) { try { _lan.close(); } catch {} _lan = null; }
 });
 
 app.on("window-all-closed", () => {

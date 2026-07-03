@@ -24,4 +24,14 @@ contextBridge.exposeInMainWorld("foreman", {
   onDeepLink: (cb) => {
     ipcRenderer.on("deep-link", (_event, url) => cb(url));
   },
+
+  // ── LAN sharing (multi-device) ────────────────────────────────────────────
+  lanStart: () => ipcRenderer.invoke("lan:start"),
+  lanStop: () => ipcRenderer.invoke("lan:stop"),
+  lanStatus: () => ipcRenderer.invoke("lan:status"),
+  lanRegenerate: () => ipcRenderer.invoke("lan:regenerate"),
+  // Fired when a LAN client writes — delta = { updates, deletes }
+  onRemoteChange: (cb) => {
+    ipcRenderer.on("remote-storage-change", (_event, delta) => cb(delta));
+  },
 });
