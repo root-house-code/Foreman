@@ -2,6 +2,8 @@ import { useState, useMemo, Fragment } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { storageGet } from "./lib/storage.js";
 import { buildSupplyRows } from "./lib/supplies.js";
+import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
+import { buildDefaultCategoryTypes, resolveItemLocationSystem } from "./lib/itemLocationSystem.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 
@@ -176,12 +178,15 @@ const modalBox = {
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SuppliesPage({ navigate }) {
-  const [activeTab, setActiveTab] = useState("Supplies");
   const [copied, setCopied] = useState(false);
 
   const itemFieldValues = useForemanStore(s => s.itemFieldValues);
   const inventory       = useForemanStore(s => s.inventory);
   const supplies        = useForemanStore(s => s.supplies);
+  const spatialAssignments = useForemanStore(s => s.spatialAssignments);
+  const entityTypeData     = useForemanStore(s => s.entityTypes);
+  const [catTypeOverrides]     = useState(() => loadCategoryTypeOverrides());
+  const [defaultCategoryTypes] = useState(() => buildDefaultCategoryTypes());
   const setSupplyState     = useForemanStore(s => s.setSupplyState);
   const addManualSupply    = useForemanStore(s => s.addManualSupply);
   const updateManualSupply = useForemanStore(s => s.updateManualSupply);
@@ -193,16 +198,22 @@ export default function SuppliesPage({ navigate }) {
   const [nextDatesMap] = useState(() => storageGet("maintenance-next-dates") ?? {});
 
   // ── Unified supply roster (auto-derived + manual), sorted by urgency ──────────
+  // Each auto-derived row is joined to its inventory item's Location and System
+  // (same resolution as the Inventory list); manual supplies have no item, so
+  // they pass a blank category and resolve to no location/system.
   const rows = useMemo(() => {
-    return buildSupplyRows(itemFieldValues, inventory, nextDatesMap, supplies).sort((a, b) => {
-      const so = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
-      if (so !== 0) return so;
-      const an = a.nextDue ? a.nextDue.getTime() : Infinity;
-      const bn = b.nextDue ? b.nextDue.getTime() : Infinity;
-      if (an !== bn) return an - bn;
-      return a.item.localeCompare(b.item);
-    });
-  }, [itemFieldValues, inventory, nextDatesMap, supplies]);
+    const metaCtx = { spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData };
+    return buildSupplyRows(itemFieldValues, inventory, nextDatesMap, supplies)
+      .map(r => ({ ...r, ...resolveItemLocationSystem(r.stableKey, r.source === "manual" ? "" : r.category, metaCtx) }))
+      .sort((a, b) => {
+        const so = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+        if (so !== 0) return so;
+        const an = a.nextDue ? a.nextDue.getTime() : Infinity;
+        const bn = b.nextDue ? b.nextDue.getTime() : Infinity;
+        if (an !== bn) return an - bn;
+        return a.item.localeCompare(b.item);
+      });
+  }, [itemFieldValues, inventory, nextDatesMap, supplies, spatialAssignments, catTypeOverrides, defaultCategoryTypes, entityTypeData]);
 
   const toBuy   = rows.filter(r => r.status === "out" || r.status === "low");
   const tracked = rows.filter(r => r.status !== "untracked").length;
@@ -240,147 +251,146 @@ export default function SuppliesPage({ navigate }) {
       <FmHeader active="Supplies" tagline="stock & resupply" />
 
       <FmSubnav
-        tabs={["Supplies", "Shopping List"]}
-        active={activeTab}
-        onTabChange={setActiveTab}
+        tabs={["Supplies"]}
+        active="Supplies"
         stats={[
           { value: toBuy.length, label: "to buy", color: toBuy.length > 0 ? "var(--fm-amber)" : "var(--fm-green)" },
           { value: tracked, label: "tracked" },
         ]}
       />
 
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{ maxWidth: 1000, padding: "1.75rem 2.25rem" }}>
+      <div style={{ display: "flex", flex: 1, gap: "1.25rem", overflow: "hidden", padding: "1.75rem 2.25rem" }}>
 
-          {activeTab === "Supplies" && (
-            <div style={card}>
-              <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.9rem" }}>
-                <span style={sectionTitle}>Consumables</span>
-                <button style={pillBtn} onClick={() => setEditing({ source: "manual", __new: true })}>+ Add Supply</button>
+        {/* Consumables (left) */}
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+          <div style={card}>
+            <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+              <span style={sectionTitle}>Consumables</span>
+              <button style={pillBtn} onClick={() => setEditing({ source: "manual", __new: true })}>+ Add Supply</button>
+            </div>
+            {rows.length === 0 ? (
+              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.7, padding: "0.25rem 0" }}>
+                No consumables found yet. Foreman derives these from items in your inventory that have a recurring replaceable part — a furnace filter, fridge water filter, softener salt, detector batteries, and the like. Add those items (and their specs) in Inventory and they'll appear here automatically.
               </div>
-              {rows.length === 0 ? (
-                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.7, padding: "0.25rem 0" }}>
-                  No consumables found yet. Foreman derives these from items in your inventory that have a recurring replaceable part — a furnace filter, fridge water filter, softener salt, detector batteries, and the like. Add those items (and their specs) in Inventory and they'll appear here automatically.
-                </div>
-              ) : (
-                <table style={{ borderCollapse: "collapse", width: "100%" }}>
-                  <thead>
-                    <tr>
-                      <th style={thCell}>Item</th>
-                      <th style={thCell}>Supply</th>
-                      <th style={thCell}>Spec</th>
-                      <th style={{ ...thCell, textAlign: "center" }}>On Hand</th>
-                      <th style={{ ...thCell, textAlign: "right" }}>Cadence</th>
-                      <th style={{ ...thCell, textAlign: "right" }}>Next Change</th>
-                      <th style={{ ...thCell, textAlign: "right" }}>Status</th>
-                      <th style={{ ...thCell, paddingRight: 0 }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map(r => {
-                      const meta = STATUS_META[r.status];
-                      return (
-                        <Fragment key={r.key}>
+            ) : (
+              <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={thCell}>Item</th>
+                    <th style={thCell}>Location</th>
+                    <th style={thCell}>System</th>
+                    <th style={thCell}>Supply</th>
+                    <th style={thCell}>Spec</th>
+                    <th style={{ ...thCell, textAlign: "center" }}>On Hand</th>
+                    <th style={{ ...thCell, textAlign: "right" }}>Cadence</th>
+                    <th style={{ ...thCell, textAlign: "right" }}>Next Change</th>
+                    <th style={{ ...thCell, textAlign: "right" }}>Status</th>
+                    <th style={{ ...thCell, paddingRight: 0 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => {
+                    const meta = STATUS_META[r.status];
+                    return (
+                      <Fragment key={r.key}>
+                      <tr>
+                        <td style={{ ...tdCell, color: "var(--fm-ink)" }}>{r.item}{r.source === "manual" && <span style={{ color: "var(--fm-ink-mute)", fontSize: "0.55rem", marginLeft: "0.4rem" }}>·manual</span>}</td>
+                        <td style={tdCell}>{r.location || "—"}</td>
+                        <td style={{ ...tdCell, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.04em", textTransform: "uppercase", color: r.system ? "var(--fm-ink-dim)" : "var(--fm-ink-mute)" }}>{r.system || "—"}</td>
+                        <td style={tdCell}>{r.name || "—"}</td>
+                        <td style={{ ...tdCell, color: "var(--fm-ink-mute)" }}>{r.spec || "—"}</td>
+                        <td style={{ ...tdCell, textAlign: "center" }}>
+                          {r.qtyOnHand == null ? (
+                            <button style={trackBtn} onClick={() => setQty(r, 1)}>Track</button>
+                          ) : (
+                            <span style={{ alignItems: "center", display: "inline-flex", gap: "0.4rem" }}>
+                              <button style={stepBtn} onClick={() => setQty(r, r.qtyOnHand - 1)}>−</button>
+                              <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", minWidth: 16, textAlign: "center" }}>{r.qtyOnHand}</span>
+                              <button style={stepBtn} onClick={() => setQty(r, r.qtyOnHand + 1)}>+</button>
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ ...tdCell, textAlign: "right" }}>{cadenceLabel(r.cadenceMonths)}</td>
+                        <td style={{ ...tdCell, textAlign: "right" }}>{fmtDate(r.nextDue)}</td>
+                        <td style={{ ...tdCell, textAlign: "right" }}>
+                          <span style={{ color: meta.color, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textTransform: "uppercase" }}>{meta.label}</span>
+                        </td>
+                        <td style={{ ...tdCell, paddingRight: 0, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <button style={rowBtn} onClick={() => setRestock(restock?.key === r.key ? null : { key: r.key, qty: "1", cost: "" })}>buy</button>
+                          <button style={rowBtn} onClick={() => setEditing(r)}>edit</button>
+                        </td>
+                      </tr>
+                      {restock?.key === r.key && (
                         <tr>
-                          <td style={{ ...tdCell, color: "var(--fm-ink)" }}>{r.item}{r.source === "manual" && <span style={{ color: "var(--fm-ink-mute)", fontSize: "0.55rem", marginLeft: "0.4rem" }}>·manual</span>}</td>
-                          <td style={tdCell}>{r.name || "—"}</td>
-                          <td style={{ ...tdCell, color: "var(--fm-ink-mute)" }}>{r.spec || "—"}</td>
-                          <td style={{ ...tdCell, textAlign: "center" }}>
-                            {r.qtyOnHand == null ? (
-                              <button style={trackBtn} onClick={() => setQty(r, 1)}>Track</button>
-                            ) : (
-                              <span style={{ alignItems: "center", display: "inline-flex", gap: "0.4rem" }}>
-                                <button style={stepBtn} onClick={() => setQty(r, r.qtyOnHand - 1)}>−</button>
-                                <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", minWidth: 16, textAlign: "center" }}>{r.qtyOnHand}</span>
-                                <button style={stepBtn} onClick={() => setQty(r, r.qtyOnHand + 1)}>+</button>
-                              </span>
-                            )}
-                          </td>
-                          <td style={{ ...tdCell, textAlign: "right" }}>{cadenceLabel(r.cadenceMonths)}</td>
-                          <td style={{ ...tdCell, textAlign: "right" }}>{fmtDate(r.nextDue)}</td>
-                          <td style={{ ...tdCell, textAlign: "right" }}>
-                            <span style={{ color: meta.color, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textTransform: "uppercase" }}>{meta.label}</span>
-                          </td>
-                          <td style={{ ...tdCell, paddingRight: 0, textAlign: "right", whiteSpace: "nowrap" }}>
-                            <button style={rowBtn} onClick={() => setRestock(restock?.key === r.key ? null : { key: r.key, qty: "1", cost: "" })}>buy</button>
-                            <button style={rowBtn} onClick={() => setEditing(r)}>edit</button>
+                          <td colSpan={10} style={{ ...tdCell, background: "var(--fm-bg-sunk)" }}>
+                            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                              <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>Restock {r.item}{r.name ? " — " + r.name : ""}:</span>
+                              <input type="number" min="1" value={restock.qty} onChange={e => setRestock(s => ({ ...s, qty: e.target.value }))} placeholder="qty" style={{ ...inputStyle, width: 70 }} />
+                              <input type="number" min="0" step="0.01" value={restock.cost} onChange={e => setRestock(s => ({ ...s, cost: e.target.value }))} placeholder="cost $ (optional)" style={{ ...inputStyle, width: 150 }} />
+                              <button style={pillBtn} onClick={() => logRestock(r)}>Save</button>
+                              <button style={rowBtn} onClick={() => setRestock(null)}>Cancel</button>
+                              <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem" }}>adds to on-hand · a cost logs to the Ledger</span>
+                            </div>
                           </td>
                         </tr>
-                        {restock?.key === r.key && (
-                          <tr>
-                            <td colSpan={8} style={{ ...tdCell, background: "var(--fm-bg-sunk)" }}>
-                              <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                                <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>Restock {r.item}{r.name ? " — " + r.name : ""}:</span>
-                                <input type="number" min="1" value={restock.qty} onChange={e => setRestock(s => ({ ...s, qty: e.target.value }))} placeholder="qty" style={{ ...inputStyle, width: 70 }} />
-                                <input type="number" min="0" step="0.01" value={restock.cost} onChange={e => setRestock(s => ({ ...s, cost: e.target.value }))} placeholder="cost $ (optional)" style={{ ...inputStyle, width: 150 }} />
-                                <button style={pillBtn} onClick={() => logRestock(r)}>Save</button>
-                                <button style={rowBtn} onClick={() => setRestock(null)}>Cancel</button>
-                                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem" }}>adds to on-hand · a cost logs to the Ledger</span>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-              {rows.length > 0 && (
-                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", lineHeight: 1.6, marginTop: "0.9rem" }}>
-                  Cadence and next-change come from each item's maintenance schedule. Set a count with “Track”, then the −/＋ steppers; anything at or below its reorder point shows on the Shopping List.
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "Shopping List" && (
-            <div style={card}>
-              <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.9rem" }}>
-                <span style={sectionTitle}>Shopping List</span>
-                {toBuy.length > 0 && <button style={pillBtn} onClick={copyShoppingList}>{copied ? "Copied ✓" : "Copy list"}</button>}
+                      )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {rows.length > 0 && (
+              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", lineHeight: 1.6, marginTop: "0.9rem" }}>
+                Cadence and next-change come from each item's maintenance schedule. Set a count with “Track”, then the −/＋ steppers; anything at or below its reorder point shows on the Shopping List.
               </div>
-              {toBuy.length === 0 ? (
-                <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.7, padding: "0.25rem 0" }}>
-                  Nothing to buy — you're stocked up. Items drop in here once their on-hand count reaches the reorder point.
-                </div>
-              ) : (
-                <table style={{ borderCollapse: "collapse", width: "100%" }}>
-                  <thead>
-                    <tr>
-                      <th style={thCell}>Item</th>
-                      <th style={thCell}>Supply</th>
-                      <th style={thCell}>Spec</th>
-                      <th style={{ ...thCell, textAlign: "right" }}>On Hand</th>
-                      <th style={{ ...thCell, textAlign: "right", paddingRight: 0 }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {toBuy.map(r => {
-                      const meta = STATUS_META[r.status];
-                      return (
-                        <tr key={r.key}>
-                          <td style={{ ...tdCell, color: "var(--fm-ink)" }}>
-                            {r.productUrl
-                              ? <a href={r.productUrl} target="_blank" rel="noreferrer" style={{ color: "var(--fm-brass)", textDecoration: "none" }}>{r.item} ↗</a>
-                              : r.item}
-                          </td>
-                          <td style={tdCell}>{r.name || "—"}</td>
-                          <td style={{ ...tdCell, color: "var(--fm-ink-mute)" }}>{r.spec || "—"}</td>
-                          <td style={{ ...tdCell, textAlign: "right" }}>{r.qtyOnHand ?? 0}</td>
-                          <td style={{ ...tdCell, textAlign: "right", paddingRight: 0 }}>
-                            <span style={{ color: meta.color, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textTransform: "uppercase" }}>{meta.label}</span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-
+            )}
+          </div>
         </div>
+
+        {/* Shopping list (right) */}
+        <div style={{ flexShrink: 0, overflowY: "auto", width: "clamp(300px, 32%, 400px)" }}>
+          <div style={card}>
+            <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+              <span style={sectionTitle}>Shopping List</span>
+              {toBuy.length > 0 && <button style={pillBtn} onClick={copyShoppingList}>{copied ? "Copied ✓" : "Copy list"}</button>}
+            </div>
+            {toBuy.length === 0 ? (
+              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.7, padding: "0.25rem 0" }}>
+                Nothing to buy — you're stocked up. Items drop in here once their on-hand count reaches the reorder point.
+              </div>
+            ) : (
+              <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={thCell}>Item</th>
+                    <th style={thCell}>Supply</th>
+                    <th style={{ ...thCell, textAlign: "right", paddingRight: 0 }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {toBuy.map(r => {
+                    const meta = STATUS_META[r.status];
+                    return (
+                      <tr key={r.key}>
+                        <td style={{ ...tdCell, color: "var(--fm-ink)" }}>
+                          {r.productUrl
+                            ? <a href={r.productUrl} target="_blank" rel="noreferrer" style={{ color: "var(--fm-brass)", textDecoration: "none" }}>{r.item} ↗</a>
+                            : r.item}
+                        </td>
+                        <td style={tdCell}>{r.name || "—"}{r.spec ? <span style={{ color: "var(--fm-ink-mute)", display: "block", fontSize: "0.62rem" }}>{r.spec}</span> : null}</td>
+                        <td style={{ ...tdCell, textAlign: "right", paddingRight: 0 }}>
+                          <span style={{ color: meta.color, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", textTransform: "uppercase" }}>{meta.label}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
       </div>
 
       {editing && (
