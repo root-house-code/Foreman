@@ -5577,7 +5577,6 @@ export default function InventoryPage({ navigate, navState }) {
   const [newItemIds, setNewItemIds] = useState(() => new Set());
   const [editingCategoryName, setEditingCategoryName] = useState(null);
   const [editingItemName, setEditingItemName] = useState(null); // { category, item }
-  const [editingTask, setEditingTask] = useState(null); // row being edited, or null
   const [pendingNewCategory, setPendingNewCategory] = useState(null); // { id, groupType }
 
   const CATEGORY_ITEMS = useMemo(() => {
@@ -5721,29 +5720,12 @@ export default function InventoryPage({ navigate, navState }) {
   const [duplicateItemPopup, setDuplicateItemPopup] = useState(null); // { item, fromCategory, x, y }
   const [itemDetails, setItemDetails] = useState(() => loadItemDetails());
   const [selectedItem, setSelectedItem] = useState(null); // { category, item }
-  const [detailTab, setDetailTab] = useState("details");
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(0);
   const [todos, setTodos] = useState(() => loadTodos());
-  const [addingTodo, setAddingTodo] = useState(false);
-  const [newTodoTitle, setNewTodoTitle] = useState("");
   const projects = useForemanStore(s => s.projects);
-  const [addingProject, setAddingProject] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [deleteProjectPrompt, setDeleteProjectPrompt] = useState(null);
-  const [hoveredProjectId, setHoveredProjectId] = useState(null);
-  const [addingTask, setAddingTask] = useState(false);
-  const [addTaskModalOpen, setAddTaskModalOpen] = useState(false);
-  const [newTask, setNewTask] = useState({ task: "", schedule: "", season: null, lastCompleted: null, nextDate: null, followSchedule: false, notes: "" });
-  const [deleteTaskPrompt, setDeleteTaskPrompt] = useState(null);
-  const [deleteTodoPrompt, setDeleteTodoPrompt] = useState(null);
-  const [hoveredTodoId, setHoveredTodoId] = useState(null);
   const [deletedRows, setDeletedRows] = useState(() => loadDeletedRows());
   const [nextDatesMap, setNextDatesMapInv] = useState(() => storageGet("maintenance-next-dates") ?? {});
-  const [suggestedTasks, setSuggestedTasks] = useState(null); // null | Array<{task,schedule,season,selected}>
-  const [suggestedFor, setSuggestedFor] = useState(null); // { category, item }
-  const [fetchingTasks, setFetchingTasks] = useState(false);
-  const [fetchError, setFetchError] = useState(null);
   const [itemFieldSchemas, setItemFieldSchemas] = useState(() => loadItemFieldSchemas());
   const _spatialAssignments = useForemanStore(s => s.spatialAssignments);
   const _itemFieldValues    = useForemanStore(s => s.itemFieldValues);
@@ -5756,8 +5738,6 @@ export default function InventoryPage({ navigate, navState }) {
     return out;
   }, [_spatialAssignments, _itemFieldValues]);
   const selectedItemKey   = useForemanStore(s => s.selectedItemKey);
-  const [showFieldPicker, setShowFieldPicker] = useState(false);
-  const [newField, setNewField] = useState({ name: "", type: "text", options: "" });
   const [roomSubtypes, setRoomSubtypes] = useState(() => loadRoomSubtypes());
   const entityTypeData = useForemanStore(s => s.entityTypes);
   const lifespanOverrides = useForemanStore(s => s.lifespanOverrides); // type-level default lifespans
@@ -5784,35 +5764,6 @@ export default function InventoryPage({ navigate, navState }) {
     useForemanStore.getState().closeItemDetail();
   }, [selectedItemKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const itemTasks = useMemo(() => {
-    if (!selectedItem) return [];
-    return rows.filter(r =>
-      r.category === selectedItem.category &&
-      r.item === selectedItem.item &&
-      !r._isBlankCategory &&
-      r.task &&
-      !(!r._isCustom && deletedCategories.has(r.category)) &&
-      !deletedItems.has(getItemStableKey(r)) &&
-      !deletedRows.has(`${r.category}|${r.item}|${r.task}`)
-    );
-  }, [rows, selectedItem, deletedRows, deletedCategories, deletedItems]);
-
-  const selectedTodos = useMemo(() => {
-    if (!selectedItem) return [];
-    return todos.filter(t =>
-      t.linkedCategory === selectedItem.category &&
-      (t.linkedItem === selectedItem.item || t.linkedItem === null)
-    );
-  }, [todos, selectedItem]);
-
-  const selectedProjects = useMemo(() => {
-    if (!selectedItem) return [];
-    return projects.filter(p =>
-      p.linkedCategory === selectedItem.category &&
-      (p.linkedItem === selectedItem.item || p.linkedItem === null)
-    );
-  }, [projects, selectedItem]);
-
   const itemCoverageMap = useMemo(() => {
     const map = {};
     rows.forEach(row => {
@@ -5829,167 +5780,6 @@ export default function InventoryPage({ navigate, navState }) {
     return map;
   }, [rows, deletedCategories, deletedItems, deletedRows, nextDatesMap]);
 
-  function handleAddTask() {
-    if (!newTask.task.trim() || !selectedItem) return;
-    const taskName = newTask.task.trim();
-    const key = `${selectedItem.category}|${selectedItem.item}|${taskName}`;
-    const newRow = {
-      _id: `custom-${Date.now()}`,
-      _isCustom: true,
-      _defaultKey: null,
-      category: selectedItem.category,
-      item: selectedItem.item,
-      task: taskName,
-      schedule: newTask.schedule || "",
-      season: newTask.season || null,
-    };
-    const customs = loadCustomData();
-    saveCustomData([...customs, newRow]);
-    if (newTask.lastCompleted) {
-      const dates = storageGet("maintenance-dates") ?? {};
-      dates[key] = new Date(newTask.lastCompleted).toISOString();
-      storageSet("maintenance-dates", dates);
-    }
-    if (newTask.nextDate) {
-      const nextDates = storageGet("maintenance-next-dates") ?? {};
-      nextDates[key] = new Date(newTask.nextDate).toISOString();
-      storageSet("maintenance-next-dates", nextDates);
-    }
-    if (newTask.notes) {
-      const notes = storageGet("maintenance-notes") ?? {};
-      notes[key] = newTask.notes;
-      storageSet("maintenance-notes", notes);
-    }
-    if (newTask.followSchedule) {
-      const follow = storageGet("maintenance-follow") ?? {};
-      follow[key] = true;
-      storageSet("maintenance-follow", follow);
-    }
-    reload();
-    setAddingTask(false);
-    setNewTask({ task: "", schedule: "", season: null, lastCompleted: null, nextDate: null, followSchedule: false, notes: "" });
-  }
-
-  function handleAddTaskFromModal(form) {
-    if (!selectedItem) return;
-    const taskName = form.task.trim();
-    const key = `${selectedItem.category}|${selectedItem.item}|${taskName}`;
-    const newRow = {
-      _id: `custom-${Date.now()}`,
-      _isCustom: true,
-      _defaultKey: null,
-      category: selectedItem.category,
-      item: selectedItem.item,
-      task: taskName,
-      schedule: form.schedule || "",
-      season: form.season || null,
-    };
-    const customs = loadCustomData();
-    saveCustomData([...customs, newRow]);
-    if (form.lastCompleted) {
-      const dates = storageGet("maintenance-dates") ?? {};
-      dates[key] = new Date(form.lastCompleted).toISOString();
-      storageSet("maintenance-dates", dates);
-    }
-    if (form.nextDate) {
-      const nextDates = storageGet("maintenance-next-dates") ?? {};
-      nextDates[key] = new Date(form.nextDate).toISOString();
-      storageSet("maintenance-next-dates", nextDates);
-    }
-    if (form.notes) {
-      const notes = storageGet("maintenance-notes") ?? {};
-      notes[key] = form.notes;
-      storageSet("maintenance-notes", notes);
-    }
-    if (form.followSchedule) {
-      const follow = storageGet("maintenance-follow") ?? {};
-      follow[key] = true;
-      storageSet("maintenance-follow", follow);
-    }
-    reload();
-    setAddTaskModalOpen(false);
-  }
-
-  function handleDeleteTask(row) {
-    if (row._isCustom) {
-      const customs = loadCustomData();
-      saveCustomData(customs.filter(r => r._id !== row._id));
-      reload();
-    } else {
-      const key = `${row.category}|${row.item}|${row.task}`;
-      const next = new Set([...deletedRows, key]);
-      saveDeletedRows(next);
-      setDeletedRows(next);
-    }
-  }
-
-  async function handleFetchTasks(manufacturer, model, item, category) {
-    setFetchingTasks(true);
-    setFetchError(null);
-    setSuggestedTasks(null);
-    setSuggestedFor({ category, item });
-
-    const scheduleValues = "every 1 month, every 3 months, every 6 months, every 1 year, every 2 years, every 5 years, every 10 years, as needed, every load";
-    const prompt = `You are a home maintenance expert. List the manufacturer-recommended maintenance tasks for this appliance.
-
-Manufacturer: ${manufacturer}
-Model: ${model || "unknown"}
-Appliance type: ${item}
-
-Return ONLY a JSON array with no explanation or markdown. Each object must have exactly these fields:
-- "task": string — concise task name (e.g. "Replace water filter")
-- "schedule": string — use one of: ${scheduleValues}
-- "season": null or one of "spring", "summer", "fall", "winter" (only if the task is season-specific)
-
-Return 5–12 tasks. Include only tasks that are standard for this appliance type.`;
-
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.2,
-          max_tokens: 1024,
-        }),
-      });
-      if (!res.ok) throw new Error(`Groq API error ${res.status}`);
-      const data = await res.json();
-      const raw = data.choices[0].message.content.replace(/```json\n?|\n?```/g, "").trim();
-      const parsed = JSON.parse(raw);
-      setSuggestedTasks(parsed.map(t => ({ ...t, selected: true })));
-    } catch (err) {
-      setFetchError(err.message);
-    } finally {
-      setFetchingTasks(false);
-    }
-  }
-
-  function handleAddSuggestedTasks() {
-    if (!suggestedTasks || !suggestedFor) return;
-    const toAdd = suggestedTasks.filter(t => t.selected);
-    if (toAdd.length === 0) return;
-    const customs = loadCustomData();
-    const newRows = toAdd.map((t, i) => ({
-      _id: `custom-${Date.now()}-${i}`,
-      _isCustom: true,
-      _defaultKey: null,
-      category: suggestedFor.category,
-      item: suggestedFor.item,
-      task: t.task,
-      schedule: t.schedule || "",
-      season: t.season || null,
-    }));
-    saveCustomData([...customs, ...newRows]);
-    reload();
-    setSuggestedTasks(null);
-    setSuggestedFor(null);
-  }
-
   function handleCustomFieldValueChange(category, item, fieldId, value, stableKey = null) {
     let key = stableKey;
     if (!key) {
@@ -6000,58 +5790,6 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     useForemanStore.getState().setCustomField(key, fieldId, value);
   }
 
-  function handleAddItemField(category, item, field, stableKey = null) {
-    const key = stableKey ?? `${category}|${item}`;
-    const next = { ...itemFieldSchemas, [key]: [...(itemFieldSchemas[key] || []), field] };
-    setItemFieldSchemas(next);
-    saveItemFieldSchemas(next);
-  }
-
-  function handleDeleteItemField(category, item, fieldId, stableKey = null) {
-    const key = stableKey ?? `${category}|${item}`;
-    const next = { ...itemFieldSchemas, [key]: (itemFieldSchemas[key] || []).filter(f => f.id !== fieldId) };
-    setItemFieldSchemas(next);
-    saveItemFieldSchemas(next);
-  }
-
-
-  function handleAddTodo() {
-    const title = newTodoTitle.trim();
-    if (!title || !selectedItem) return;
-    const next = [...todos, createTodo({
-      title,
-      linkedCategory: selectedItem.category,
-      linkedItem: selectedItem.item,
-    })];
-    setTodos(next);
-    saveTodos(next);
-    setNewTodoTitle("");
-    setAddingTodo(false);
-  }
-
-  function handleDeleteTodo(todo) {
-    const next = todos.filter(t => t.id !== todo.id);
-    setTodos(next);
-    saveTodos(next);
-    setDeleteTodoPrompt(null);
-  }
-
-  function handleAddProject() {
-    const name = newProjectName.trim();
-    if (!name || !selectedItem) return;
-    useForemanStore.getState().addProject(createProject({
-      name,
-      linkedCategory: selectedItem.category,
-      linkedItem: selectedItem.item,
-    }));
-    setNewProjectName("");
-    setAddingProject(false);
-  }
-
-  function handleDeleteProject(project) {
-    useForemanStore.getState().deleteProject(project.id);
-    setDeleteProjectPrompt(null);
-  }
 
   function reload() {
     setRows(loadData());
@@ -6469,32 +6207,6 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     if (fpChanged) saveFpData({ ...fpD, drawings: updatedFpDrawings });
 
     reload();
-  }
-
-  function handleUpdateTask(originalRow) {
-    if (!newTask.task.trim() || !selectedItem) return;
-    const taskName = newTask.task.trim();
-    if (originalRow._isCustom) {
-      const oldKey = `${originalRow.category}|${originalRow.item}|${originalRow.task}`;
-      const newKey = `${originalRow.category}|${originalRow.item}|${taskName}`;
-      const customs = loadCustomData();
-      saveCustomData(customs.map(r => r._id === originalRow._id ? { ...r, task: taskName, schedule: newTask.schedule || "", season: newTask.season || null } : r));
-      if (taskName !== originalRow.task) {
-        ["maintenance-dates", "maintenance-next-dates", "maintenance-notes", "maintenance-follow"].forEach(k => {
-          const d = storageGet(k) ?? {};
-          if (d[oldKey] !== undefined) { d[newKey] = d[oldKey]; delete d[oldKey]; storageSet(k, d); }
-        });
-      }
-    } else {
-      const key = `${originalRow.category}|${originalRow.item}|${originalRow.task}`;
-      const overrides = loadOverrides();
-      overrides[key] = { ...(overrides[key] || {}), schedule: newTask.schedule || "", season: newTask.season || null };
-      saveOverrides(overrides);
-    }
-    reload();
-    setEditingTask(null);
-    setAddingTask(false);
-    setNewTask({ task: "", schedule: "", season: null, lastCompleted: null, nextDate: null, followSchedule: false, notes: "" });
   }
 
   function handleAddCategoryDirect(name, groupType) {
