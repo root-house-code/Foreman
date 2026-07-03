@@ -20,6 +20,8 @@ import {
   resolveTypeId,
   getBehaviorClass,
   isExteriorType,
+  isSpatial,
+  isFunctional,
 } from "./lib/entityTypes.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
@@ -1053,14 +1055,37 @@ function EditableYears({ stableKey, value, overridden, onSave }) {
 // Replacement Forecast — lives on the Inventory page. Self-contained: reads the
 // store, builds the roster, and projects replacement timing. The "Life" column
 // edits each item's own estimated_lifespan (which overrides its type default).
-export function ReplacementForecast() {
-  const itemFieldValues   = useForemanStore(s => s.itemFieldValues);
-  const inventory         = useForemanStore(s => s.inventory);
-  const lifespanOverrides = useForemanStore(s => s.lifespanOverrides);
-  const setCustomField    = useForemanStore(s => s.setCustomField);
+export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
+  const itemFieldValues     = useForemanStore(s => s.itemFieldValues);
+  const spatialAssignments  = useForemanStore(s => s.spatialAssignments);
+  const inventory           = useForemanStore(s => s.inventory);
+  const lifespanOverrides   = useForemanStore(s => s.lifespanOverrides);
+  const entityTypeData      = useForemanStore(s => s.entityTypes);
+  const setCustomField      = useForemanStore(s => s.setCustomField);
+  const [catTypeOverrides]  = useState(() => loadCategoryTypeOverrides());
+  const [hoveredKey, setHoveredKey] = useState(null);
 
   const roster       = useMemo(() => buildRoster(itemFieldValues, inventory), [itemFieldValues, inventory]);
-  const forecast     = useMemo(() => computeForecast(roster, new Date(), lifespanOverrides), [roster, lifespanOverrides]);
+
+  // Resolve each item's Location, System, and Type from the store the same way
+  // the Inventory list does — spatial assignments + item field values, merged.
+  const resolveMeta = useMemo(() => {
+    return (stableKey, category) => {
+      const cf = { ...(spatialAssignments?.[stableKey] || {}), ...(itemFieldValues?.[stableKey] || {}) };
+      const catTypeId = resolveTypeId(category, catTypeOverrides[category] || "system");
+      const catIsSpatial    = isSpatial(catTypeId, entityTypeData);
+      const catIsFunctional = isFunctional(catTypeId, entityTypeData);
+      const location = cf.roomLabel || cf.exteriorLabel || cf.room || (catIsSpatial ? category : "");
+      const system   = catIsFunctional ? category : (cf.systemCategory || cf.system || "");
+      const type     = cf.item_type || "";
+      return { location, system, type };
+    };
+  }, [spatialAssignments, itemFieldValues, catTypeOverrides, entityTypeData]);
+
+  const forecast     = useMemo(
+    () => computeForecast(roster, new Date(), lifespanOverrides).map(f => ({ ...f, ...resolveMeta(f.stableKey, f.category) })),
+    [roster, lifespanOverrides, resolveMeta]
+  );
   const reserve      = useMemo(() => computeReserve(forecast), [forecast]);
   const warranties   = useMemo(() => computeWarranties(roster), [roster]);
   const missingDates = useMemo(
@@ -1071,9 +1096,10 @@ export function ReplacementForecast() {
   // Default: Remaining ascending — longest overdue first through longest left.
   const [sort, setSort] = useState({ key: "remaining", dir: "asc" });
   function toggleSort(key) {
+    const ascFirst = ["item", "location", "system", "type", "remaining"];
     setSort(s => s.key === key
       ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
-      : { key, dir: (key === "item" || key === "category" || key === "remaining") ? "asc" : "desc" });
+      : { key, dir: ascFirst.includes(key) ? "asc" : "desc" });
   }
   const sortedForecast = useMemo(() => sortForecastRows(forecast, sort), [forecast, sort]);
 
@@ -1138,7 +1164,9 @@ export function ReplacementForecast() {
               <thead>
                 <tr>
                   <SortTh label="Item" col="item" sort={sort} onSort={toggleSort} />
-                  <SortTh label="Category" col="category" sort={sort} onSort={toggleSort} />
+                  <SortTh label="Location" col="location" sort={sort} onSort={toggleSort} />
+                  <SortTh label="System" col="system" sort={sort} onSort={toggleSort} />
+                  <SortTh label="Type" col="type" sort={sort} onSort={toggleSort} />
                   <SortTh label="Installed" col="installed" sort={sort} onSort={toggleSort} align="right" />
                   <SortTh label="Age" col="age" sort={sort} onSort={toggleSort} align="right" />
                   <SortTh label="Life" col="life" sort={sort} onSort={toggleSort} align="right" />
@@ -1149,16 +1177,28 @@ export function ReplacementForecast() {
               <tbody>
                 {sortedForecast.map(f => {
                   const color = lifeColor(f.remaining, f.pct);
+                  const isSelected = selectedKey === f.stableKey;
+                  const isHovered  = hoveredKey === f.stableKey;
+                  const rowBg = isSelected ? "var(--fm-brass-bg)" : isHovered ? "var(--fm-bg-raised)" : "transparent";
                   return (
-                    <tr key={f.stableKey}>
+                    <tr
+                      key={f.stableKey}
+                      onClick={() => onSelectItem?.({ category: f.category, item: f.item, stableKey: f.stableKey })}
+                      onMouseEnter={() => setHoveredKey(f.stableKey)}
+                      onMouseLeave={() => setHoveredKey(null)}
+                      title="Click to view item details"
+                      style={{ background: rowBg, cursor: onSelectItem ? "pointer" : "default" }}
+                    >
                       <td style={{ ...tdCell, color: "var(--fm-ink)" }}>{f.item}</td>
-                      <td style={tdCell}>{f.category}</td>
+                      <td style={tdCell}>{f.location || <span style={{ color: "var(--fm-hairline2)" }}>—</span>}</td>
+                      <td style={{ ...tdCell, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.04em", textTransform: "uppercase", color: f.system ? "var(--fm-ink-dim)" : "var(--fm-hairline2)" }}>{f.system || "—"}</td>
+                      <td style={{ ...tdCell, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.04em", textTransform: "uppercase", color: f.type ? "var(--fm-ink-dim)" : "var(--fm-hairline2)" }}>{f.type || "—"}</td>
                       <td style={{ ...tdCell, textAlign: "right", whiteSpace: "nowrap" }}>
                         {f.installSource !== "install" && <span style={{ color: "var(--fm-ink-mute)" }} title={`Based on ${f.installSource} date`}>~</span>}
                         {fmtDate(f.installed)}
                       </td>
                       <td style={{ ...tdCell, textAlign: "right" }}>{f.age.toFixed(1)} yr</td>
-                      <td style={{ ...tdCell, textAlign: "right" }}>
+                      <td style={{ ...tdCell, textAlign: "right" }} onClick={e => e.stopPropagation()}>
                         <EditableYears stableKey={f.stableKey} value={f.exp} overridden={f.estimatedLifespan != null} onSave={setCustomField} />
                       </td>
                       <td style={tdCell}>
@@ -1240,7 +1280,9 @@ function sortForecastRows(rows, sort) {
   const valOf = (f) => {
     switch (sort.key) {
       case "item":       return f.item.toLowerCase();
-      case "category":   return (f.category || "").toLowerCase();
+      case "location":   return (f.location || "").toLowerCase();
+      case "system":     return (f.system || "").toLowerCase();
+      case "type":       return (f.type || "").toLowerCase();
       case "installed":  return f.installed ? f.installed.getTime() : null;
       case "age":        return f.age;
       case "life":       return f.exp;
@@ -1696,7 +1738,7 @@ export function MortgagePage(props) { return <FinancesPage {...props} view="mort
 export function ItemLifespansPage() {
   return (
     <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
-      <FmHeader active="Item Lifespans" tagline="aging & replacement" />
+      <FmHeader active="Item Lifespans" tagline="Item Lifespans" />
       <div style={{ flex: 1, overflowY: "auto" }}>
         <div style={{ maxWidth: 1000, padding: "1.75rem 2.25rem" }}>
           <ReplacementForecast />
