@@ -60,7 +60,7 @@ function compressImage(file, maxWidth = 1200, quality = 0.75) {
 // onClose:      called when the × in the header is clicked
 // navigate:     page navigation fn (used by the "View all on …" footer links)
 // showClose:    whether to render the header × (default true)
-export default function ItemDetailPanel({ selectedItem, onClose, navigate, showClose = true }) {
+export default function ItemDetailPanel({ selectedItem, onClose, navigate, showClose = true, onMaintenanceChanged }) {
   // ── Store-backed data ────────────────────────────────────────────────────
   const _itemFieldValues    = useForemanStore(s => s.itemFieldValues);
   const _spatialAssignments = useForemanStore(s => s.spatialAssignments);
@@ -84,7 +84,7 @@ export default function ItemDetailPanel({ selectedItem, onClose, navigate, showC
   const [todos, setTodos]               = useState(() => loadTodos());
   const [nextDatesMap]                  = useState(() => storageGet("maintenance-next-dates") ?? {});
   const [categoryTypeOverrides]         = useState(() => loadCategoryTypeOverrides());
-  function reload() { setRows(loadData()); }
+  function reload() { setRows(loadData()); onMaintenanceChanged?.(); }
 
   // ── Panel-local UI state ──────────────────────────────────────────────────
   const [detailTab, setDetailTab]       = useState("details");
