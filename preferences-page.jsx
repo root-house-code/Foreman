@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { createPortal } from "react-dom";
+import QRCode from "qrcode";
 import { storageGet, storageSet, storageDel } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
@@ -642,6 +643,119 @@ function AutomationSettings() {
   );
 }
 
+// ─── MultiDeviceCard ──────────────────────────────────────────────────────────
+// LAN sharing (desktop app only): the Electron main process serves the app +
+// live data to browsers on the same wifi. This is local-network only — not an
+// internet feature — so it is not gated behind Online Mode.
+
+function MultiDeviceCard() {
+  const [status, setStatus] = useState(null); // { running, enabled, port, token, addresses, error? }
+  const [qr, setQr] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    window.foreman?.lanStatus?.().then(setStatus).catch(() => {});
+  }, []);
+
+  const shareUrl = status?.running && status.addresses?.length
+    ? `http://${status.addresses[0]}:${status.port}/#pair=${status.token}`
+    : null;
+
+  // Standard dark-on-white QR for reliable phone-camera scanning.
+  useEffect(() => {
+    if (!shareUrl) { setQr(null); return; }
+    QRCode.toDataURL(shareUrl, { margin: 2, width: 168, color: { dark: "#0f1117", light: "#ffffff" } })
+      .then(setQr)
+      .catch(() => setQr(null));
+  }, [shareUrl]);
+
+  async function handleToggle(on) {
+    if (busy) return;
+    setBusy(true);
+    try { setStatus(on ? await window.foreman.lanStart() : await window.foreman.lanStop()); }
+    catch {} finally { setBusy(false); }
+  }
+
+  async function handleRegenerate() {
+    if (busy) return;
+    setBusy(true);
+    try { setStatus(await window.foreman.lanRegenerate()); }
+    catch {} finally { setBusy(false); }
+  }
+
+  function handleCopy() {
+    if (!shareUrl) return;
+    navigator.clipboard?.writeText(shareUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  }
+
+  const running = !!status?.running;
+
+  return (
+    <div style={{ background: "var(--fm-bg-raised)", border: `1px solid ${running ? "var(--fm-green)" : "var(--fm-hairline)"}`, borderRadius: "6px", padding: "1.1rem 1.25rem", transition: "border-color 0.2s" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.6rem" }}>
+          <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>Multi-Device Sharing</span>
+          {running && (
+            <div style={{ alignItems: "center", display: "flex", gap: "0.35rem" }}>
+              <span style={{ background: "var(--fm-green)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+              <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em" }}>Sharing</span>
+            </div>
+          )}
+        </div>
+        <label style={{ cursor: busy ? "default" : "pointer", flexShrink: 0 }}>
+          <input
+            type="checkbox"
+            checked={running}
+            disabled={busy}
+            onChange={e => handleToggle(e.target.checked)}
+            style={{ accentColor: "var(--fm-green)", height: "16px", width: "16px" }}
+          />
+        </label>
+      </div>
+      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: 0 }}>
+        Use Foreman from your phone or another computer on the same wifi network. This computer hosts your data; other devices open the app in a browser. Nothing leaves your network, and devices need this app running to connect.
+      </p>
+      {status?.error && (
+        <p style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", margin: "0.6rem 0 0" }}>Couldn't start sharing: {status.error}</p>
+      )}
+
+      {running && shareUrl && (
+        <div style={{ alignItems: "flex-start", display: "flex", gap: "1.1rem", marginTop: "1rem" }}>
+          {qr && (
+            <img src={qr} alt="Pairing QR code" style={{ background: "#fff", borderRadius: "6px", flexShrink: 0, height: 128, width: 128 }} />
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.1em", marginBottom: "0.3rem", textTransform: "uppercase" }}>Scan from your phone, or open:</div>
+            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", overflowWrap: "anywhere", userSelect: "all" }}>{shareUrl}</div>
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.7rem" }}>
+              <button
+                onClick={handleCopy}
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.06em", padding: "0.3rem 0.7rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+              >{copied ? "Copied ✓" : "Copy link"}</button>
+              <button
+                onClick={handleRegenerate}
+                title="Invalidates the old link — devices must re-scan to reconnect"
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.06em", padding: "0.3rem 0.7rem", transition: "all 0.15s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-red)"; e.currentTarget.style.color = "var(--fm-red)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+              >Regenerate pairing code</button>
+            </div>
+            <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", lineHeight: 1.6, marginTop: "0.6rem" }}>
+              The link carries a pairing code — only devices with it can read your data. Windows may ask to allow Foreman through the firewall the first time.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── IntegrationsSettings ─────────────────────────────────────────────────────
 
 const REMINDER_HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: formatHour12(h) }));
@@ -766,6 +880,13 @@ function IntegrationsSettings() {
           </label>
         </div>
       </div>
+
+      {/* Multi-Device Sharing (desktop app only) — LAN-local, so not gated by Online Mode */}
+      {window.foreman?.isElectron && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <MultiDeviceCard />
+        </div>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {/* Discord / Reminder Agent card */}

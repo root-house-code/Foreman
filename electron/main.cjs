@@ -242,7 +242,11 @@ app.whenReady().then(() => {
   createTray();
 
   // Resume LAN sharing if it was on when the app last quit
-  try { if (lanSettings().enabled) startLan().catch(() => {}); } catch {}
+  try {
+    if (lanSettings().enabled) startLan().catch(err => console.error("[lan] auto-start failed:", err));
+  } catch (err) {
+    console.error("[lan] auto-start failed:", err);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
