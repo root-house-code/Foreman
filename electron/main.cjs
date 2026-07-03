@@ -77,37 +77,65 @@ function createTray() {
   tray.on("click", () => { mainWindow?.show(); mainWindow?.focus(); });
 }
 
-// ── Storage IPC ───────────────────────────────────────────────────────────────
-ipcMain.on("storage:readAll", (event) => {
-  event.returnValue = readAllSync();
-  try { createBackup(); } catch {}
-});
-
-// Synchronous immediate flush — used before window.location.reload() so the
-// debounced timer doesn't race with the next storageInit read.
-ipcMain.on("storage:flushNow", (event, snapshot) => {
-  clearTimeout(_flushTimer);
-  _flushTimer = null;
-  _pendingSnapshot = null;
-  try { flush(snapshot); } catch {}
-  event.returnValue = true;
-});
-
+// ── Storage: authoritative store ──────────────────────────────────────────────
+// Main owns the single in-memory store. The renderer (and, when LAN sharing is
+// on, remote clients) send per-key deltas that merge here; main persists the
+// whole store to disk on a debounce. Memory is authoritative after first load —
+// a renderer reload must not re-read a stale disk state past un-flushed deltas.
+let _store = null;
 let _flushTimer = null;
-let _pendingSnapshot = null;
+let _flushPending = false;
 let _lastBackupTime = 0;
 const BACKUP_INTERVAL = 3_600_000; // 1 h
-ipcMain.on("storage:flush", (_event, snapshot) => {
-  _pendingSnapshot = snapshot;
+
+function ensureStore() {
+  if (_store === null) _store = readAllSync();
+  return _store;
+}
+
+function applyDelta({ updates, deletes }) {
+  const store = ensureStore();
+  if (updates) for (const [k, v] of Object.entries(updates)) store[k] = v;
+  if (deletes) for (const k of deletes) delete store[k];
+}
+
+function scheduleFlush() {
+  _flushPending = true;
   clearTimeout(_flushTimer);
   _flushTimer = setTimeout(() => {
-    flush(_pendingSnapshot);
+    flushNow();
     const now = Date.now();
     if (now - _lastBackupTime >= BACKUP_INTERVAL) {
       try { createBackup(); _lastBackupTime = now; } catch {}
     }
-    _pendingSnapshot = null;
   }, 500);
+}
+
+function flushNow() {
+  clearTimeout(_flushTimer);
+  _flushTimer = null;
+  if (!_flushPending || _store === null) return;
+  _flushPending = false;
+  try { flush(_store); } catch {}
+}
+
+ipcMain.on("storage:readAll", (event) => {
+  event.returnValue = ensureStore();
+  try { createBackup(); } catch {}
+});
+
+ipcMain.on("storage:setKeys", (_event, delta) => {
+  applyDelta(delta);
+  scheduleFlush();
+});
+
+// Synchronous merge + immediate write — used before window.location.reload()
+// so the debounce timer doesn't race with the next storage read.
+ipcMain.on("storage:setKeysNow", (event, delta) => {
+  applyDelta(delta);
+  _flushPending = true;
+  flushNow();
+  event.returnValue = true;
 });
 
 // ── Notifications IPC ─────────────────────────────────────────────────────────
@@ -153,11 +181,7 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   _quitting = true;
-  clearTimeout(_flushTimer);
-  if (_pendingSnapshot) {
-    flush(_pendingSnapshot);
-    _pendingSnapshot = null;
-  }
+  flushNow();
 });
 
 app.on("window-all-closed", () => {

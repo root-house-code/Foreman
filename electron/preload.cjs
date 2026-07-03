@@ -4,9 +4,12 @@ contextBridge.exposeInMainWorld("foreman", {
   isElectron: true,
 
   // ── Storage ─────────────────────────────────────────────────────────────
+  // Per-key delta protocol: the renderer sends only changed/deleted keys and
+  // main merges them into its authoritative store, so concurrent writers
+  // (LAN clients on other devices) are never clobbered by a stale snapshot.
   readAllSync: () => ipcRenderer.sendSync("storage:readAll"),
-  flush: (snapshot) => ipcRenderer.send("storage:flush", snapshot),
-  flushNow: (snapshot) => ipcRenderer.sendSync("storage:flushNow", snapshot),
+  setKeys: (updates, deletes) => ipcRenderer.send("storage:setKeys", { updates, deletes }),
+  setKeysNow: (updates, deletes) => ipcRenderer.sendSync("storage:setKeysNow", { updates, deletes }),
 
   // ── Notifications ────────────────────────────────────────────────────────
   notify: (title, body) => ipcRenderer.send("notify", title, body),
