@@ -28,6 +28,7 @@ import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
+import ItemDetailPanel from "./components/ItemDetailPanel.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1735,14 +1736,31 @@ export function ForecastPage(props) { return <FinancesPage {...props} view="fore
 export function MortgagePage(props) { return <FinancesPage {...props} view="mortgage" />; }
 
 // Item Lifespans — a standalone Property page wrapping the replacement forecast.
-export function ItemLifespansPage() {
+// Selecting a row opens the shared item detail panel on the right, the same
+// UI/UX as the Inventory list.
+export function ItemLifespansPage({ navigate }) {
+  const [selectedItem, setSelectedItem] = useState(null);
   return (
     <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
       <FmHeader active="Item Lifespans" tagline="Item Lifespans" />
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{ maxWidth: 1000, padding: "1.75rem 2.25rem" }}>
-          <ReplacementForecast />
+      <div style={{ display: "flex", flex: 1, gap: "1.25rem", overflow: "hidden", padding: "1.75rem 2.25rem" }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+          <div style={{ maxWidth: 1000 }}>
+            <ReplacementForecast
+              onSelectItem={setSelectedItem}
+              selectedKey={selectedItem?.stableKey}
+            />
+          </div>
         </div>
+        {selectedItem && (
+          <div style={{ display: "flex", flexShrink: 0, width: "clamp(320px, 32%, 420px)" }}>
+            <ItemDetailPanel
+              selectedItem={selectedItem}
+              onClose={() => setSelectedItem(null)}
+              navigate={navigate}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
