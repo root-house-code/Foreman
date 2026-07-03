@@ -273,16 +273,19 @@ function ArchTab() {
 
       <ArchSection id="arch-storage" label="Storage" heading="How Foreman Stores Your Data" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
-          Foreman is a local-first application. There is no server, no account, and no internet connection required to use it. Every piece of data you add — tasks, inventory, chores, projects, notes — is saved in IndexedDB, a database built into your browser. Nothing leaves your device unless you explicitly export it.
+          Foreman is a local-first application. There is no server, no account, and no internet connection required to use it. Nothing leaves your device unless you explicitly export it. Where that data actually lives depends on how you run Foreman.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Think of IndexedDB as a private, structured database inside your browser. Foreman writes to it whenever you make a change, and reads from it every time you open the app. Unlike the older localStorage API it replaced, IndexedDB has no meaningful storage limit — you won't run out of space from normal use.
+          In the browser (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>npm run dev</span>, or any web deployment), every piece of data you add — tasks, inventory, chores, projects, notes — is saved in IndexedDB, a database built into your browser. Think of it as a private, structured database inside your browser: Foreman writes to it whenever you make a change and reads from it every time you open the app. Unlike the older localStorage API it replaced, IndexedDB has no meaningful storage limit. The tradeoff is that your data is tied to the specific browser and device you use — clearing your browser's site data would clear Foreman's data along with it.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The tradeoff: your data is private and fast to access, but it's tied to the specific browser and device you use. Clearing your browser's site data would clear Foreman's data along with it. Use the Export function in Preferences to keep a portable backup.
+          In the Windows desktop app, data instead lives in two real files under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Documents\Foreman\</span>: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span> (everything except images) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span>. They're plain text, copyable, and yours — not locked inside a browser's storage. Writes go through an atomic temp-file-then-rename so a crash mid-write can't corrupt the file, and rolling backups land in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Documents\Foreman\backups\</span> on an hourly/daily/weekly retention schedule.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          Use the Export function in Preferences to keep a portable backup regardless of which build you run — it's also how data moves from a browser install into the desktop app the first time.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem", color: "var(--fm-ink-mute)" }}>
-          For developers: Foreman uses <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>idb-keyval</span> as a thin wrapper over IndexedDB. All storage goes through <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span>, which maintains an in-memory cache populated at startup. Every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>load*()</span> call reads from cache synchronously (no async/await required in React state initializers); every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>save*()</span> call writes to cache immediately and fires an IndexedDB write asynchronously. Keys follow the convention <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman-{"{domain}"}</span> (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
+          For developers: all storage goes through <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span>, which maintains an in-memory cache populated at startup and detects the backend once at module load — <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>window.foreman?.isElectron</span> is set by <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/preload.cjs</span> only when running inside Electron. Every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>load*()</span> call reads from cache synchronously (no async/await required in React state initializers); every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>save*()</span> call writes to cache immediately and fires an async persist — to IndexedDB via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>idb-keyval</span> in the browser, or to <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span>/<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span> via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/storageFile.cjs</span> in the desktop app. No other file touches either backend directly. Keys follow the convention <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman-{"{domain}"}</span> (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
         </p>
       </ArchSection>
 
@@ -292,9 +295,10 @@ function ArchTab() {
             ["React 18", "The UI library. React is the system that keeps the interface in sync with your data. When you mark a task done, React automatically updates every part of the screen that reflects that task without a page refresh."],
             ["Zustand", "Lightweight global state management. A single store in lib/store.js holds named slices for every domain (rooms, projects, chores, spatial assignments, item fields, and more). Pages subscribe to slices using selectors — when a slice changes, every page that reads it re-renders automatically. This is what makes changes on the Floor Plan immediately visible in Inventory without a reload."],
             ["Vite", "The build tool. Vite packages all the source code into the files your browser actually runs. During development it runs a local server that updates the page instantly when you save a file."],
-            ["idb-keyval", "A minimal wrapper over IndexedDB that provides a simple get/set/del API. Foreman uses this as its storage backend via lib/storage.js, replacing localStorage to eliminate storage size limits."],
+            ["Electron", "Wraps the same Vite/React app in a native Windows desktop shell (electron/ directory) — no browser required. Provides the system tray, native file dialogs, OS notification bridge, the foreman:// deep-link protocol, and the file-based storage backend described above. The browser dev build is entirely unaffected; Electron is an alternate shell around the same renderer code."],
+            ["idb-keyval", "A minimal wrapper over IndexedDB that provides a simple get/set/del API. Foreman uses this as its storage backend via lib/storage.js in the browser build, replacing localStorage to eliminate storage size limits."],
             ["TipTap", "The rich-text editor that powers the Notebook page. Supports formatted notes with headings, lists, bold, italic, and code."],
-            ["PDF.js", "Used to parse equipment manuals uploaded as PDFs. Parsing happens locally in your browser; no file content is sent anywhere."],
+            ["PDF.js", "Used to parse equipment manuals uploaded as PDFs. Parsing happens locally; no file content is sent anywhere."],
             ["Inter / Newsreader / JetBrains Mono", "The three typefaces used across the design system."],
           ].map(([name, desc]) => (
             <div key={name}>
@@ -304,7 +308,7 @@ function ArchTab() {
           ))}
         </div>
         <p style={{ ...bodyText, marginTop: "1rem", color: "var(--fm-ink-mute)" }}>
-          No backend framework. No database. No authentication. No external API is required for core functionality.
+          No backend framework. No database server. No authentication. No external API is required for core functionality.
         </p>
       </ArchSection>
 
@@ -316,7 +320,7 @@ function ArchTab() {
           Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component. A global Command Palette (⌘K / Ctrl-K, or the header search box) is mounted above the pages and indexes every page and entity for instant search and jump-to navigation.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Every page uses the same two layout components as its shell: FmHeader (the top bar, whose pages are organized into grouped dropdown menus — Overview, Property, Finances, Work — with Notebook and the meta links beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
+          Every page uses the same two layout components as its shell: FmHeader (the top bar — Workbench, Dashboard, and Calendar sit as direct top-level links; Property, Finances, and Work are grouped dropdown menus; Notebook and the meta links sit beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           A single Zustand store in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/store.js</span> serves as the authoritative source for all cross-page data. Pages subscribe to named slices of the store using selector functions; when a write happens in one place, every subscribed page updates automatically. Each store action persists its change to IndexedDB in the same operation — there is no separate "save" step. The store is seeded from IndexedDB at startup and can be fully reloaded after profile switches or bulk imports via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>reloadAll()</span>.
