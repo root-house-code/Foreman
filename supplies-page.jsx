@@ -2,8 +2,9 @@ import { useState, useMemo, Fragment } from "react";
 import { useForemanStore } from "./lib/store.js";
 import { storageGet } from "./lib/storage.js";
 import { buildSupplyRows } from "./lib/supplies.js";
+import { loadData } from "./lib/data.js";
 import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
-import { buildDefaultCategoryTypes, resolveItemLocationSystem } from "./lib/itemLocationSystem.js";
+import { buildDefaultCategoryTypes, buildItemMetaByName } from "./lib/itemLocationSystem.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 
@@ -203,8 +204,13 @@ export default function SuppliesPage({ navigate }) {
   // they pass a blank category and resolve to no location/system.
   const rows = useMemo(() => {
     const metaCtx = { spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData };
+    // Resolve Location/System by item identity (category|item), merging across
+    // all of an item's stable keys — an item's room may sit on a different row
+    // than the one a supply derives from.
+    const metaByName = buildItemMetaByName(loadData(), metaCtx);
+    const blankMeta = { location: "", system: "", type: "" };
     return buildSupplyRows(itemFieldValues, inventory, nextDatesMap, supplies)
-      .map(r => ({ ...r, ...resolveItemLocationSystem(r.stableKey, r.source === "manual" ? "" : r.category, metaCtx) }))
+      .map(r => ({ ...r, ...(r.source === "manual" ? blankMeta : (metaByName[`${r.category}|${r.item}`] || blankMeta)) }))
       .sort((a, b) => {
         const so = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
         if (so !== 0) return so;

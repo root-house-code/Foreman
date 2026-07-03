@@ -21,7 +21,7 @@ import {
   getBehaviorClass,
   isExteriorType,
 } from "./lib/entityTypes.js";
-import { buildDefaultCategoryTypes, resolveItemLocationSystem } from "./lib/itemLocationSystem.js";
+import { buildDefaultCategoryTypes, buildItemMetaByName } from "./lib/itemLocationSystem.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -1068,13 +1068,17 @@ export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
 
   const roster       = useMemo(() => buildRoster(itemFieldValues, inventory), [itemFieldValues, inventory]);
 
-  // Resolve each item's Location, System, and Type from the store the same way
-  // the Inventory list does (shared helper — single source of truth).
-  const metaCtx = { spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData };
+  // Resolve each item's Location, System, and Type the same way the Inventory
+  // list does — by item identity, merging across an item's stable keys (shared
+  // helper — single source of truth).
+  const metaByName = useMemo(
+    () => buildItemMetaByName(loadData(), { spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData }),
+    [spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData]
+  );
   const forecast     = useMemo(
     () => computeForecast(roster, new Date(), lifespanOverrides)
-      .map(f => ({ ...f, ...resolveItemLocationSystem(f.stableKey, f.category, metaCtx) })),
-    [roster, lifespanOverrides, spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData]
+      .map(f => ({ ...f, ...(metaByName[`${f.category}|${f.item}`] || { location: "", system: "", type: "" }) })),
+    [roster, lifespanOverrides, metaByName]
   );
   const reserve      = useMemo(() => computeReserve(forecast), [forecast]);
   const warranties   = useMemo(() => computeWarranties(roster), [roster]);
