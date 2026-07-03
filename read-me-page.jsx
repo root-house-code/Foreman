@@ -455,6 +455,8 @@ const ROADMAP_SECTIONS = [
   // Top Priority — gate adoption/shipping or are pervasive, high-leverage wins.
   { id: "road-setup",     label: "Home Setup Wizard",      group: "Top Priority" },
   { id: "road-electron",  label: "Windows App",            group: "Top Priority" },
+  { id: "road-undo",      label: "Undo & Restore",         group: "Top Priority" },
+  { id: "road-complete",  label: "Complete Anywhere",      group: "Top Priority" },
   // Medium Priority — clear value, build on existing foundations, not gating.
   { id: "road-gcal",      label: "Google Calendar",        group: "Medium Priority" },
   { id: "road-vault",     label: "Document Vault",         group: "Medium Priority" },
@@ -468,6 +470,7 @@ const ROADMAP_SECTIONS = [
   { id: "road-advisor",   label: "AI Advisor",             group: "Low Priority" },
   { id: "road-ha",        label: "Home Assistant",         group: "Low Priority" },
   { id: "road-gla",       label: "GLA Measurements",       group: "Low Priority" },
+  { id: "road-wrapped",   label: "Year in Review",         group: "Low Priority" },
   { id: "road-furniture", label: "Furniture Planning",     group: "Low Priority" },
 ];
 
@@ -511,6 +514,48 @@ function RoadmapTab() {
             [`NSIS installer (blocked by OneDrive)`, `The electron-builder config is in place — the “build” field in package.json targets win/nsis and the electron:build script runs vite build then electron-builder. The build currently fails with EPERM: operation not permitted on a temp-to-final rename because OneDrive's sync process locks files mid-write inside the project directory. Fix option A: pause OneDrive sync before running npm run electron:build. Fix option B: set the output directory outside OneDrive by adding “directories”: { “output”: “C:/Temp/foreman-build” } to the build config in package.json. Also needed before release: a proper app icon at assets/icon.ico (256x256 minimum, referenced as “icon”: “assets/icon.ico” in the win block of the build config) to replace the current placeholder PNG. A code-signing certificate (DigiCert, Sectigo, or equivalent) is needed to suppress the Windows Defender SmartScreen warning on first install — without it users see “Windows protected your PC” on every fresh install. The electron-builder win block accepts certificateFile and certificatePassword fields, or use the electron-windows-sign package for PKCS#12 or Azure Key Vault signing.`],
             [`Auto-update`, `Not yet implemented. The bridge is already stubbed: preload.cjs exposes onUpdateStatus(cb) for the renderer to subscribe to, and the comment in preload.cjs marks it as a Phase 4 item. Implementation: add electron-updater as a runtime dependency (npm install electron-updater — note: runtime, not devDependency). In electron/main.cjs, require autoUpdater from electron-updater and call autoUpdater.checkForUpdatesAndNotify() inside app.whenReady() after the window is created. Add a publish block to the build config in package.json: { “provider”: “github”, “owner”: “root-house-code”, “repo”: “Foreman” }. Push a GitHub Release with the built installer and its .yml manifest attached; electron-updater compares the installed version string against the latest.yml on GitHub on every startup. Wire autoUpdater events (update-available, update-downloaded, error) through ipcMain to the renderer via ipcRenderer.on(“update-status”) and surface them as a dismissible banner. Important: auto-update on Windows requires the installer to be code-signed — unsigned builds silently fail the update check.`],
             [`Item-level deep links for QR scanning`, `The foreman:// protocol is registered and page-level routing works — foreman://inventory opens the Inventory page. What is missing is sub-page routing for specific records, which is the useful case for QR code labels printed on appliances or rooms. The handleDeepLink function in electron/main.cjs already forwards the full URL string to the renderer via mainWindow.webContents.send(“deep-link”, url). The onDeepLink effect in src/App.jsx currently extracts only parsed.hostname as the page key. Extend it to also read the pathname: for a URL like foreman://inventory/item-id-abc, hostname is “inventory” and pathname is “/item-id-abc” — pass { deepLinkId: “item-id-abc” } as navState to navigate(). Each page that supports deep linking then reads navState?.deepLinkId on mount and selects the matching record, opening its detail panel. InventoryPage already accepts navState for similar pre-selection patterns. The same pattern extends to maintenance tasks, chores, rooms, or any entity with a stable string id.`],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-undo" label="Trust" heading="Undo & Restore" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Every history tab now has permanent delete, and Inventory, the Floor Plan, and Projects all carry destructive actions — each guarded only by a confirmation dialog. Meanwhile the desktop app writes rolling backups (hourly / daily / weekly) that are invisible from inside the app: restoring one means finding Documents\Foreman\backups\ and hand-copying a file. For the honest / durable / earns-trust tenets, deletion with no recovery is the weakest link in the core. Two pieces close it, both cheap because every destructive action already flows through the storage layer.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Undo toast", "Snapshot a key's prior value at the storageSet layer before each destructive write and offer “Deleted X — Undo” for ~10 seconds. One generic mechanism covers every page — history records, inventory items, zones, projects — with no per-page code."],
+            ["Backups browser", "A Preferences panel that lists the desktop app's rolling backups with dates and preview counts (items, records), and restores one in a click — taking its own pre-restore snapshot first so a restore is itself undoable."],
+            ["Browser-build parity", "The same restore UI runs over the existing profile-snapshot mechanism in the browser build, so recovery isn't a desktop-only privilege."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-complete" label="Logging" heading="Complete Anywhere" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Logging a completed task is the most frequent action in Foreman, but it's only fully available on a task's home page or inside a Workbench session. The Calendar shows the due chip, the Dashboard triage shows the overdue item, the Alerts tray names it, Item Lifespans shows the aging item — and in every one of those places you must navigate away to act. This closes that gap: wherever Foreman shows you due work, it lets you finish it.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["Inline ✓ Done everywhere", "An inline complete affordance on every surface that displays a due or overdue task — Calendar chips, Dashboard triage rows, Alerts tray entries, and the item detail panel's Maintenance tab."],
+            ["Same writers, same record", "Each surface reuses the exact completion flow that already exists — maintenance and chore completion records, supply decrement, next-date advance, multi-assignee prompt where relevant — so a completion logged from the Calendar is indistinguishable from one logged on the Maintenance page."],
+            ["Tenet payoff", "Utility: you come with a problem and leave with it handled — wherever you happened to see the problem."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
@@ -726,6 +771,27 @@ function RoadmapTab() {
             ["ANSI Z765 rules", "Finished, heated, above-grade living space counts toward GLA; below-grade space (basements), garages, and unfinished areas (most attics) are measured and reported separately rather than folded into the headline number — matching how living area is defined for appraisals and listings."],
             ["Measured to standard", "Area is computed from exterior wall dimensions with ceiling-height minimums applied, and finished vs. unfinished status tracked per space, so the total is defensible against a real appraisal."],
             ["Honest display", "When enabled, the floor plan reports Gross Living Area alongside separate above-grade, below-grade, and garage subtotals, instead of a single summed figure — the breakdown a buyer or appraiser expects to see."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      </ArchSection>
+
+      <ArchSection id="road-wrapped" label="Recap" heading="Year in Review" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Foreman already records everything a recap needs — completion records with people and durations, work sessions, expenses, service visits, project history, the streaks implicit in the Timeline — but nothing celebrates the work. A seasonal and annual recap turns the honest record into a reward, and recaps are a proven behavior loop: seeing the record grow is what keeps people keeping the record. The "Foreman is fun" tenet, made concrete.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["The numbers that tell the story", "Tasks completed, hours invested, money spent versus replacement reserve funded, most-serviced item (“MVP: Furnace — 6 services”), busiest room, longest streak, and each household member's contribution — all derived read-time from records that already exist. Zero new data entry."],
+            ["Seasonal and annual", "A recap view surfaced at season changes and in late December — as a Timeline tab or a Dashboard card that appears when a period closes."],
+            ["Printable and portable", "Exportable as a clean one-pager, which quietly doubles as the first slice of the Handoff Export dossier — the year's chapter of the home's record."],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
