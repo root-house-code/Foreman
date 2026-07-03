@@ -20,9 +20,8 @@ import {
   resolveTypeId,
   getBehaviorClass,
   isExteriorType,
-  isSpatial,
-  isFunctional,
 } from "./lib/entityTypes.js";
+import { buildDefaultCategoryTypes, resolveItemLocationSystem } from "./lib/itemLocationSystem.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
 import FmHeader from "./src/components/FmHeader.jsx";
@@ -1064,42 +1063,18 @@ export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
   const entityTypeData      = useForemanStore(s => s.entityTypes);
   const setCustomField      = useForemanStore(s => s.setCustomField);
   const [catTypeOverrides]  = useState(() => loadCategoryTypeOverrides());
-  const [allRows]           = useState(() => loadData());
+  const [defaultCategoryTypes] = useState(() => buildDefaultCategoryTypes());
   const [hoveredKey, setHoveredKey] = useState(null);
 
   const roster       = useMemo(() => buildRoster(itemFieldValues, inventory), [itemFieldValues, inventory]);
 
-  // Each category's default behavioral type, from the data rows (custom rows win
-  // over same-named defaults) — mirrors the Inventory page's defaultCategoryTypes.
-  const defaultCategoryTypes = useMemo(() => {
-    const map = {};
-    allRows.forEach(row => {
-      if (!row.category || !row.categoryType) return;
-      if (!map[row.category] || row._isCustom) map[row.category] = row.categoryType;
-    });
-    return map;
-  }, [allRows]);
-
   // Resolve each item's Location, System, and Type from the store the same way
-  // the Inventory list does — spatial assignments + item field values, merged.
-  const resolveMeta = useMemo(() => {
-    return (stableKey, category) => {
-      const cf = { ...(spatialAssignments?.[stableKey] || {}), ...(itemFieldValues?.[stableKey] || {}) };
-      // Effective category type = override ?? data default ?? "system" (matches Inventory).
-      const catType = catTypeOverrides[category] ?? defaultCategoryTypes[category] ?? "system";
-      const catTypeId = resolveTypeId(category, catType);
-      const catIsSpatial    = isSpatial(catTypeId, entityTypeData);
-      const catIsFunctional = isFunctional(catTypeId, entityTypeData);
-      const location = cf.roomLabel || cf.exteriorLabel || cf.room || (catIsSpatial ? category : "");
-      const system   = catIsFunctional ? category : (cf.systemCategory || cf.system || "");
-      const type     = cf.item_type || "";
-      return { location, system, type };
-    };
-  }, [spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData]);
-
+  // the Inventory list does (shared helper — single source of truth).
+  const metaCtx = { spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData };
   const forecast     = useMemo(
-    () => computeForecast(roster, new Date(), lifespanOverrides).map(f => ({ ...f, ...resolveMeta(f.stableKey, f.category) })),
-    [roster, lifespanOverrides, resolveMeta]
+    () => computeForecast(roster, new Date(), lifespanOverrides)
+      .map(f => ({ ...f, ...resolveItemLocationSystem(f.stableKey, f.category, metaCtx) })),
+    [roster, lifespanOverrides, spatialAssignments, itemFieldValues, catTypeOverrides, defaultCategoryTypes, entityTypeData]
   );
   const reserve      = useMemo(() => computeReserve(forecast), [forecast]);
   const warranties   = useMemo(() => computeWarranties(roster), [roster]);
