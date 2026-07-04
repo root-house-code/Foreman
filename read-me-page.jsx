@@ -224,6 +224,7 @@ function TenetsTab() {
 
 const ARCH_SECTIONS = [
   { id: "arch-storage",      label: "Data Storage" },
+  { id: "arch-multidevice",  label: "Multi-Device Sharing" },
   { id: "arch-stack",        label: "Built With" },
   { id: "arch-structure",    label: "App Structure" },
   { id: "arch-datamodel",    label: "Data Model" },
@@ -282,13 +283,38 @@ function ArchTab() {
           In the Windows desktop app, data instead lives in two real files under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Documents\Foreman\</span>: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span> (everything except images) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span>. They're plain text, copyable, and yours — not locked inside a browser's storage. Writes go through an atomic temp-file-then-rename so a crash mid-write can't corrupt the file, and rolling backups land in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Documents\Foreman\backups\</span> on an hourly/daily/weekly retention schedule.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          With Multi-Device Sharing on (Preferences → Integrations, desktop app only), other devices on your wifi don't store their own copy at all — the desktop app serves them the app and the live data over the local network, and their edits write straight back to the same <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span>. One authoritative store, no sync conflicts, nothing leaving your network.
+          The desktop app can also share that data live with other devices on your wifi — see Multi-Device Sharing below.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           Use the Export function in Preferences to keep a portable backup regardless of which build you run — it's also how data moves from a browser install into the desktop app the first time.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem", color: "var(--fm-ink-mute)" }}>
-          For developers: all storage goes through <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span>, which maintains an in-memory cache populated at startup and detects the backend once at module load — <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>window.foreman?.isElectron</span> is set by <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/preload.cjs</span> only when running inside Electron. Every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>load*()</span> call reads from cache synchronously (no async/await required in React state initializers); every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>save*()</span> call writes to cache immediately and fires an async persist — to IndexedDB via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>idb-keyval</span> in the browser, or to <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span>/<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span> via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/storageFile.cjs</span> in the desktop app. A third backend covers LAN clients: when the page was served by a Foreman host (detected by probing <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/ping</span> at startup), writes are sent to the host as per-key deltas over HTTP and other devices' changes arrive on a server-sent-event stream. No other file touches any backend directly. Keys follow the convention <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman-{"{domain}"}</span> (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
+          For developers: all storage goes through <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span>, which maintains an in-memory cache populated at startup and detects the backend once at module load — <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>window.foreman?.isElectron</span> is set by <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/preload.cjs</span> only when running inside Electron. Every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>load*()</span> call reads from cache synchronously (no async/await required in React state initializers); every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>save*()</span> call writes to cache immediately and fires an async persist — to IndexedDB via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>idb-keyval</span> in the browser, or to <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span>/<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span> via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/storageFile.cjs</span> in the desktop app. A third backend covers LAN clients (detailed below). No other file touches any backend directly. Keys follow the convention <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman-{"{domain}"}</span> (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
+        </p>
+      </ArchSection>
+
+      <ArchSection id="arch-multidevice" label="Sharing" heading="Multi-Device Sharing" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          The Windows desktop app can share its live data with other devices on the same wifi network — a phone, a tablet, another computer — with no cloud service and no account. The architecture is hub-and-spoke: the desktop app is the single authoritative host, and other devices are windows into it rather than copies that need to stay in sync.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
+          {[
+            ["The host", "Turning on Multi-Device Sharing (Preferences → Integrations) starts a small web server inside the Electron app, bound to your LAN. It serves the same app bundle a browser would load, plus a token-guarded API for reading and writing the store. The token is a random ID generated on first use and stored with your other settings; a Regenerate button invalidates it and cuts off every paired device."],
+            ["Pairing", "Preferences shows a QR code encoding the host's local address and the current token. Scanning it opens the full Foreman app in the phone's browser and saves the token to that browser's storage, so reconnecting later doesn't require rescanning unless the code is regenerated or the browser's data is cleared."],
+            ["Live in both directions", "A client device sends its writes to the host as they happen; the host merges them into its single in-memory store, persists to data.json, and pushes the change back out over a live connection (server-sent events) to every other connected device — including the desktop app's own window. There's one source of truth, so there's nothing to merge or resolve later."],
+            ["The honest constraint", "Devices reach the data by reaching the host, so the desktop app has to be running (it lives in the system tray, so this is normally true whenever the computer is on) and every device has to be on the same network. Away from home, or with the host off, a paired device has no data to show — the tradeoff this design makes to keep everything local and account-free."],
+          ].map(([name, desc]) => (
+            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
+              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+              <p style={bodyText}>
+                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+                {desc}
+              </p>
+            </div>
+          ))}
+        </div>
+        <p style={{ ...bodyText, marginTop: "0.85rem", color: "var(--fm-ink-mute)" }}>
+          For developers: the host is <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/lanServer.cjs</span>, a dependency-free Node <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>http</span> server exposing <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/ping</span> (an unauthenticated marker a client uses to detect a Foreman host), <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/all</span> (full store read), <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/set</span> (a per-key delta write), and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/events</span> (an SSE stream fanning out every write to the other connected devices). On the client, <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span> probes <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/ping</span> at startup; finding it switches the module into its third backend (remote mode) instead of IndexedDB, so the same renderer code runs unchanged on both the host and every client. Writes everywhere — host renderer, LAN clients — travel as per-key deltas rather than whole-store snapshots, which is what makes concurrent edits from different devices safe: nobody can clobber a change they never saw.
         </p>
       </ArchSection>
 
@@ -817,7 +843,7 @@ function RoadmapTab() {
 
 const UPDATES = [
   {
-    date: "July 1, 2026",
+    date: "July 3, 2026",
     heading: "Multi-Device: Use Foreman From Your Phone",
     bullets: [
       ["Share on your wifi", "The Windows desktop app can now host Foreman for every device on your home network. Flip on Multi-Device Sharing in Preferences → Integrations, scan the QR code with your phone, and the full app opens in the browser — live against the same data this computer holds. Works for laptops and other computers too."],
