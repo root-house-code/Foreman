@@ -150,3 +150,21 @@ storageInit().then(() => {
     </StrictMode>
   );
 });
+
+// ── PWA service worker ─────────────────────────────────────────────────────────
+// Registers only in a production build served over http(s) outside the Electron
+// shell (the desktop app has no use for it; the Vite dev server would fight HMR).
+// Browsers only expose serviceWorker in secure contexts (HTTPS or localhost), so
+// over plain LAN HTTP this is a silent no-op — the app runs exactly as before,
+// and phones still get the manifest icon + standalone display via Add to Home
+// Screen. Where a secure context exists, assets cache for instant loads.
+if (
+  import.meta.env.PROD &&
+  !window.foreman?.isElectron &&
+  window.location.protocol.startsWith("http") &&
+  "serviceWorker" in navigator
+) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  });
+}

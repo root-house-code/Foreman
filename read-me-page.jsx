@@ -844,6 +844,16 @@ function RoadmapTab() {
 const UPDATES = [
   {
     date: "July 3, 2026",
+    heading: "Mobile: Install Foreman to Your Home Screen",
+    bullets: [
+      ["An app icon, not a browser tab", "Foreman is now an installable web app. On a phone connected via Multi-Device Sharing, use the browser's “Add to Home Screen” and you get a Foreman icon — brass F on the house colors — that opens the app directly. iPhones get the same treatment via Safari."],
+      ["A header that fits a phone", "The header and tab bar now wrap and scale on small screens instead of running off the edge — every page, dropdown, and stat is reachable by touch. This is the first pass of mobile polish; page layouts themselves are next."],
+      ["Faster loads where supported", "A service worker caches the app's assets so revisits load instantly, and never touches live data — reads, writes, and the cross-device update stream always go straight to the host. (Browsers only enable this over HTTPS or localhost, so on plain wifi sharing it simply stays off — everything else works the same.)"],
+      ["Foreman, by name", "The browser tab and installed app are now titled Foreman instead of the old “Home Maintenance Registry”."],
+    ],
+  },
+  {
+    date: "July 3, 2026",
     heading: "Multi-Device: Use Foreman From Your Phone",
     bullets: [
       ["Share on your wifi", "The Windows desktop app can now host Foreman for every device on your home network. Flip on Multi-Device Sharing in Preferences → Integrations, scan the QR code with your phone, and the full app opens in the browser — live against the same data this computer holds. Works for laptops and other computers too."],

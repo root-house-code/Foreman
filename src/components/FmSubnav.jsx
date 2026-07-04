@@ -2,15 +2,17 @@ export default function FmSubnav({ tabs, active, stats, onTabChange, filter }) {
   return (
     <div
       style={{
-        padding: '10px 30px',
+        padding: '10px clamp(12px, 3.5vw, 30px)',
         borderBottom: 'var(--fm-border)',
         display: 'flex',
+        flexWrap: 'wrap',   // phones: stats wrap below the tabs instead of overflowing
+        rowGap: 8,
         justifyContent: 'space-between',
         alignItems: 'center',
         background: 'var(--fm-bg-raised)',
       }}
     >
-      <div style={{ display: 'flex', gap: 18 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, rowGap: 6 }}>
         {tabs.map((t) => {
           const isActive = t === active;
           return (
@@ -38,7 +40,9 @@ export default function FmSubnav({ tabs, active, stats, onTabChange, filter }) {
         <div
           style={{
             display: 'flex',
+            flexWrap: 'wrap',
             gap: 28,
+            rowGap: 6,
             fontFamily: 'var(--fm-mono)',
             fontSize: 10.5,
             color: 'var(--fm-ink-dim)',

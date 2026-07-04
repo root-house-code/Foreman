@@ -385,8 +385,10 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
       background: 'var(--fm-bg)',
       borderBottom: 'var(--fm-border)',
       display: 'flex',
+      flexWrap: 'wrap',       // phones: nav drops below the title instead of overflowing off-screen
       justifyContent: 'space-between',
-      padding: '16px 30px 14px',
+      padding: '16px clamp(12px, 3.5vw, 30px) 14px',
+      rowGap: 10,
     }}>
       <div>
         <div style={{
@@ -399,14 +401,14 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
         }}>
           {dateStrip}
         </div>
-        <h1 style={{ color: 'var(--fm-ink)', font: '500 28px var(--fm-serif)', letterSpacing: '-0.02em', margin: 0 }}>
+        <h1 style={{ color: 'var(--fm-ink)', font: '500 clamp(20px, 5vw, 28px) var(--fm-serif)', letterSpacing: '-0.02em', margin: 0 }}>
           Foreman{' '}
           <span style={{ color: 'var(--fm-brass)' }}>/</span>{' '}
           <span style={{ color: 'var(--fm-brass-dim)', fontStyle: 'italic' }}>{tagline}</span>
         </h1>
       </div>
 
-      <nav style={{ alignItems: 'center', display: 'flex', gap: 6 }}>
+      <nav style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 6, rowGap: 6 }}>
         <PageInfoButton title={currentActive} navigate={nav.navigate} />
 
         {/* Search */}
