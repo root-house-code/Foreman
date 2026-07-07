@@ -77,6 +77,7 @@ import ComboInput from "./components/ComboInput.jsx";
 import ModelComboField from "./components/ModelComboField.jsx";
 import TodoModal from "./components/TodoModal.jsx";
 import ItemDetailPanel from "./components/ItemDetailPanel.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 
 const PRIORITY_COLORS = {
   low:    "var(--fm-green)",
@@ -5570,6 +5571,7 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function InventoryPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const [rows, setRows] = useState(() => loadData());
   const [deletedCategories, setDeletedCategories] = useState(() => loadDeletedCategories());
   const [deletedItems, setDeletedItems] = useState(() => loadDeletedItems());
@@ -6714,7 +6716,7 @@ export default function InventoryPage({ navigate, navState }) {
 
   return (
     <div style={{
-      height: "100vh",
+      height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh",
       overflow: "hidden",
       display: "flex",
       flexDirection: "column",

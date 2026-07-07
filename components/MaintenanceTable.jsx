@@ -13,6 +13,8 @@ import Tooltip from "./Tooltip.jsx";
 import MaintenanceDetailModal from "./MaintenanceDetailModal.jsx";
 import { SEASON_OPTIONS } from "../lib/scheduleOptions.js";
 import { CATEGORY_TIPS, ITEM_TIPS, TASK_TIPS } from "../lib/tooltips.js";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 
 // ─── System tag abbreviations ─────────────────────────────────────────────────
 const SYS_ABBR = {
@@ -152,6 +154,7 @@ export default function MaintenanceTable({
   const [loggedRows, setLoggedRows] = useState(new Set());
   const [detailRow, setDetailRow] = useState(null);
   const [completionRow, setCompletionRow] = useState(null); // { row, key }
+  const isMobile = useIsMobile();
 
   function handleModalMarkDone(key, row, completedDate, notes, nextDateOverride, assignee) {
     if (!completedDate) {
@@ -197,6 +200,116 @@ export default function MaintenanceTable({
       _isPrimary: isPrimary,
     };
   };
+
+  // Modals are shared between the desktop table and the mobile card list.
+  const modals = (
+    <>
+      {completionRow && createPortal(
+        <MaintenanceCompleteModal
+          row={completionRow.row}
+          date={nextDates[completionRow.key] || new Date()}
+          isCompleted={!!completedDates[completionRow.key]}
+          lastDate={completedDates[completionRow.key] || null}
+          onMarkDone={(completedDate, notes, nextDateOverride, assignee) =>
+            handleModalMarkDone(completionRow.key, completionRow.row, completedDate, notes, nextDateOverride, assignee)
+          }
+          onRowEdit={(field, value) => onRowEdit(completionRow.row._id, field, value)}
+          onClose={() => setCompletionRow(null)}
+        />,
+        document.body
+      )}
+
+      {detailRow && createPortal(
+        <MaintenanceDetailModal
+          row={detailRow}
+          note={notes[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? ""}
+          onNoteChange={text => onNoteChange(`${detailRow.category}|${detailRow.item}|${detailRow.task}`, text)}
+          completedDate={completedDates[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? null}
+          nextDate={nextDates[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? null}
+          onLogIt={() => setCompletionRow({ row: detailRow, key: `${detailRow.category}|${detailRow.item}|${detailRow.task}` })}
+          onClose={() => setDetailRow(null)}
+        />,
+        document.body
+      )}
+
+      {confirmRow && createPortal(
+        <DeleteConfirmModal
+          row={confirmRow}
+          onConfirm={() => { onDeleteRow(confirmRow); setConfirmRow(null); }}
+          onCancel={() => setConfirmRow(null)}
+        />,
+        document.body
+      )}
+    </>
+  );
+
+  // ── Mobile: tappable card list ──────────────────────────────────────────────
+  // One card per task, status carried by the left edge. Tap opens the detail
+  // sheet (notes, meta, log); "Log it" jumps straight to the completion sheet.
+  if (isMobile) {
+    return (
+      <div>
+        {groupedRows.map((row) => {
+          const key = `${row.category}|${row.item}|${row.task}`;
+          const status = computeStatus(key, nextDates, loggedRows);
+          const isTaskless = row._isTaskless;
+          const hasNote = !!(notes[key] || "").trim();
+          const nextD = nextDates[key];
+          const lastD = completedDates[key];
+          const fmtShort = d => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          return (
+            <div
+              key={row._id || key}
+              onClick={e => {
+                if (e.target.closest("button,input,select,textarea")) return;
+                if (!isTaskless) setDetailRow(row);
+              }}
+              style={{
+                background: isTaskless ? "rgba(201,169,110,0.07)" : "var(--fm-bg-raised)",
+                border: "1px solid var(--fm-hairline)",
+                borderLeft: `3px solid ${isTaskless ? "var(--fm-brass)" : status.color}`,
+                borderRadius: 8,
+                marginBottom: 8,
+                padding: "10px 12px",
+              }}
+            >
+              <div style={{ alignItems: "center", display: "flex", gap: 8, marginBottom: 4 }}>
+                <span style={{ color: status.color, fontFamily: "var(--fm-mono)", fontSize: "0.66rem", letterSpacing: "0.04em" }}>{status.text}</span>
+                <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", letterSpacing: "0.08em", padding: "1px 5px", textTransform: "uppercase" }}>{getSysTag(row.category)}</span>
+                {hasNote && <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem" }}>✎</span>}
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", whiteSpace: "nowrap" }}>
+                  {nextD ? `next ${fmtShort(nextD)}` : ""}
+                </span>
+              </div>
+              <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.92rem", fontWeight: 500, lineHeight: 1.35 }}>{row.item}</div>
+              <div style={{ alignItems: "flex-end", display: "flex", gap: 10, justifyContent: "space-between", marginTop: 2 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.4 }}>
+                    {row.task || (isTaskless ? "No task yet — use + Add Task" : "")}
+                  </div>
+                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.04em", marginTop: 4 }}>
+                    {[row.schedule, lastD ? `last ${fmtShort(lastD)}` : null].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+                {!isTaskless && (
+                  <button
+                    onClick={() => setCompletionRow({ row, key })}
+                    style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 6, color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.66rem", letterSpacing: "0.08em", minHeight: 38, padding: "0 14px", textTransform: "uppercase", whiteSpace: "nowrap" }}
+                  >Log it</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {rows.length === 0 && (
+          <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", padding: "3rem 1rem", textAlign: "center" }}>
+            No results found.
+          </div>
+        )}
+        {modals}
+      </div>
+    );
+  }
 
   return (
     <div style={{ background: "var(--fm-bg-raised)", border: "var(--fm-border)", borderRadius: "var(--fm-radius)" }}>
@@ -389,42 +502,7 @@ export default function MaintenanceTable({
         </div>
       )}
 
-      {completionRow && createPortal(
-        <MaintenanceCompleteModal
-          row={completionRow.row}
-          date={nextDates[completionRow.key] || new Date()}
-          isCompleted={!!completedDates[completionRow.key]}
-          lastDate={completedDates[completionRow.key] || null}
-          onMarkDone={(completedDate, notes, nextDateOverride, assignee) =>
-            handleModalMarkDone(completionRow.key, completionRow.row, completedDate, notes, nextDateOverride, assignee)
-          }
-          onRowEdit={(field, value) => onRowEdit(completionRow.row._id, field, value)}
-          onClose={() => setCompletionRow(null)}
-        />,
-        document.body
-      )}
-
-      {detailRow && createPortal(
-        <MaintenanceDetailModal
-          row={detailRow}
-          note={notes[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? ""}
-          onNoteChange={text => onNoteChange(`${detailRow.category}|${detailRow.item}|${detailRow.task}`, text)}
-          completedDate={completedDates[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? null}
-          nextDate={nextDates[`${detailRow.category}|${detailRow.item}|${detailRow.task}`] ?? null}
-          onLogIt={() => setCompletionRow({ row: detailRow, key: `${detailRow.category}|${detailRow.item}|${detailRow.task}` })}
-          onClose={() => setDetailRow(null)}
-        />,
-        document.body
-      )}
-
-      {confirmRow && createPortal(
-        <DeleteConfirmModal
-          row={confirmRow}
-          onConfirm={() => { onDeleteRow(confirmRow); setConfirmRow(null); }}
-          onCancel={() => setConfirmRow(null)}
-        />,
-        document.body
-      )}
+      {modals}
     </div>
   );
 }
@@ -433,9 +511,10 @@ export default function MaintenanceTable({
 
 function DeleteConfirmModal({ row, onConfirm, onCancel }) {
   const isCustom = row._isCustom;
+  const isMobile = useIsMobile();
   return (
-    <div onClick={onCancel} style={{ alignItems: "center", background: "rgba(0,0,0,0.6)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: "420px", padding: "1.75rem 2rem", width: "90%" }}>
+    <div onClick={onCancel} style={{ alignItems: "center", background: "rgba(0,0,0,0.6)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000, ...(isMobile ? sheetOverlay : null) }}>
+      <div onClick={e => e.stopPropagation()} className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: "420px", padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
         <div style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: "0.75rem", textTransform: "uppercase" }}>
           {isCustom ? "Permanently Delete Task" : "Remove from Schedule"}
         </div>

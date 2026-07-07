@@ -1,0 +1,61 @@
+/* Foreman mobile layer — touch ergonomics and phone-width layout.
+   Everything here is scoped to coarse pointers or the 720px breakpoint used by
+   src/hooks/useIsMobile.js, so desktop rendering is untouched. */
+
+/* ── Touch feedback (any touch device) ────────────────────────────────────── */
+@media (pointer: coarse) {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  [role="button"] {
+    touch-action: manipulation; /* no double-tap-zoom delay on taps */
+  }
+  /* Tactile press feedback everywhere without per-component code */
+  button:active,
+  [role="button"]:active {
+    opacity: 0.65;
+    transition: opacity 0s;
+  }
+}
+
+/* ── Phone-width layout ───────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  html,
+  body {
+    overflow-x: hidden; /* content never hides off the right edge */
+  }
+  body {
+    /* Room for the fixed bottom nav (FmHeader mobile variant) + gesture bar */
+    padding-bottom: calc(60px + env(safe-area-inset-bottom));
+  }
+
+  /* Horizontal strips (subnav tabs, stats, filter pills): momentum scroll,
+     no wrapping, no visible scrollbar. */
+  .fm-hscroll {
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .fm-hscroll::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ── Bottom sheet + nav animations ────────────────────────────────────────── */
+@keyframes fmSheetIn {
+  from { transform: translateY(24px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes fmFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.fm-sheet-backdrop {
+  animation: fmFadeIn 0.16s ease-out;
+}
+.fm-sheet-panel {
+  animation: fmSheetIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}

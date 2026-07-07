@@ -30,6 +30,8 @@ import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell, { toDateInput, dateInputToISO } from "./components/InlineEditCell.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 import { useForemanStore, usePageUIState } from "./lib/store.js";
 import {
   loadChoreReminderModes, saveChoreReminderModes,
@@ -258,12 +260,13 @@ function TitleCell({ value, onChange, placeholder = "Chore name", suggestions = 
 }
 
 function DeleteConfirmModal({ chore, onConfirm, onClose }) {
+  const isMobile = useIsMobile();
   return (
     <div
-      style={{ alignItems: "center", background: "rgba(0,0,0,0.65)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}
+      style={{ alignItems: "center", background: "rgba(0,0,0,0.65)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000, ...(isMobile ? sheetOverlay : null) }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 420, padding: "1.75rem 2rem", width: "90%" }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 420, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
         <div style={{ color: "var(--fm-red)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: "1rem", textTransform: "uppercase" }}>
           Permanently Delete Chore
         </div>
@@ -297,6 +300,7 @@ function DeleteConfirmModal({ chore, onConfirm, onClose }) {
 }
 
 function CreateChoreModal({ date, chore, roomOptions, roomItemsMap = {}, onAddItemToInventory, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const isEdit = !!chore;
   const [form, setForm] = useState({
     title:     chore?.title    ?? "",
@@ -361,10 +365,10 @@ function CreateChoreModal({ date, chore, roomOptions, roomItemsMap = {}, onAddIt
 
   return (
     <div
-      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 200 }}
+      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 200, ...(isMobile ? sheetOverlay : null) }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 480, padding: "1.75rem 2rem", width: "90%" }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 480, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
         <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: dateLabel ? "0.2rem" : "1.5rem", textTransform: "uppercase" }}>
           {isEdit ? "Edit Chore" : "New Chore"}
         </div>
@@ -388,7 +392,7 @@ function CreateChoreModal({ date, chore, roomOptions, roomItemsMap = {}, onAddIt
           />
         </div>
 
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr", marginBottom: "1rem" }}>
+        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", marginBottom: "1rem" }}>
           <div>
             <label style={labelStyle}>Location</label>
             <select value={form.room} onChange={e => handleRoomChange(e.target.value)} style={selectStyle}>
@@ -447,7 +451,7 @@ function CreateChoreModal({ date, chore, roomOptions, roomItemsMap = {}, onAddIt
           </select>
         </div>
 
-        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "1fr 1fr 1fr", marginBottom: "1rem" }}>
+        <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", marginBottom: "1rem" }}>
           <div>
             <label style={labelStyle}>Day</label>
             <select value={form.dayOfWeek ?? ""} onChange={e => set("dayOfWeek", e.target.value === "" ? null : parseInt(e.target.value))} style={selectStyle}>
@@ -620,6 +624,7 @@ function MonthCalendar({ chores, choreCompletions, onChoreClick, onDayClick }) {
 }
 
 function WeekStrip({ chores, choreCompletions, onChoreClick, startDate }) {
+  const isMobile = useIsMobile();
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(startDate || today);
@@ -628,7 +633,11 @@ function WeekStrip({ chores, choreCompletions, onChoreClick, startDate }) {
   });
 
   return (
-    <div style={{ display: "grid", gap: "6px", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: "1.25rem" }}>
+    // Phones: the 7-across strip becomes a vertical day list — full-width rows
+    // with readable, tappable chore chips instead of 50px columns.
+    <div style={isMobile
+      ? { display: "flex", flexDirection: "column", gap: "6px", marginBottom: "1.25rem" }
+      : { display: "grid", gap: "6px", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: "1.25rem" }}>
       {days.map((date, i) => {
         const isToday = date.toDateString() === today.toDateString();
         const dayChores = chores.filter(c => isChoreOnDate(c, date));
@@ -638,16 +647,23 @@ function WeekStrip({ chores, choreCompletions, onChoreClick, startDate }) {
             style={{
               background: isToday ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)",
               border: isToday ? "1px solid rgba(201,169,110,0.3)" : "var(--fm-border)",
-              borderRadius: "var(--fm-radius)",
-              minHeight: "80px",
-              padding: "0.5rem 0.45rem",
+              borderRadius: isMobile ? 8 : "var(--fm-radius)",
+              minHeight: isMobile ? undefined : "80px",
+              padding: isMobile ? "0.55rem 0.75rem" : "0.5rem 0.45rem",
             }}
           >
-            <div style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.1em", marginBottom: "2px", textTransform: "uppercase" }}>
-              {STRIP_DAYS[date.getDay()]}
-            </div>
-            <div style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1rem", lineHeight: 1, marginBottom: "0.35rem" }}>
-              {date.getDate()}
+            <div style={isMobile
+              ? { alignItems: "baseline", display: "flex", gap: "0.5rem", marginBottom: dayChores.length ? "0.4rem" : 0 }
+              : {}}>
+              <div style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: isMobile ? "0.62rem" : "0.52rem", letterSpacing: "0.1em", marginBottom: isMobile ? 0 : "2px", textTransform: "uppercase" }}>
+                {STRIP_DAYS[date.getDay()]}
+              </div>
+              <div style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1rem", lineHeight: 1, marginBottom: isMobile ? 0 : "0.35rem" }}>
+                {date.getDate()}
+              </div>
+              {isMobile && dayChores.length === 0 && (
+                <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto" }}>—</span>
+              )}
             </div>
             {dayChores.map(chore => {
               const done = isChoreCompleted(choreCompletions, chore.id, date);
@@ -663,11 +679,11 @@ function WeekStrip({ chores, choreCompletions, onChoreClick, startDate }) {
                     cursor: "pointer",
                     marginBottom: "3px",
                     opacity: done ? 0.5 : 1,
-                    padding: "0.15rem 0.3rem",
+                    padding: isMobile ? "0.5rem 0.6rem" : "0.15rem 0.3rem",
                     transition: "opacity 0.12s",
                   }}
                 >
-                  <span style={{ color: done ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-sans)", fontSize: "0.6rem", overflow: "hidden", textDecoration: done ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ color: done ? "var(--fm-ink-mute)" : "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-sans)", fontSize: isMobile ? "0.85rem" : "0.6rem", overflow: "hidden", textDecoration: done ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {chore.title}
                   </span>
                 </div>
@@ -686,6 +702,7 @@ const TH = { color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSiz
 const TD = { padding: "0.45rem 0.6rem", verticalAlign: "middle" };
 
 export default function ChoresPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const chores = useForemanStore(s => s.chores);
   const [notes, setNotes]                 = useState(() => loadChoreNotes());
   const [reminderModes, setReminderModes] = useState(() => loadChoreReminderModes());
@@ -1017,7 +1034,7 @@ export default function ChoresPage({ navigate, navState }) {
   ];
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
 
       {confirmChore && (
         <DeleteConfirmModal
@@ -1182,8 +1199,66 @@ export default function ChoresPage({ navigate, navState }) {
           )}
         </div>
 
-        {/* All chores table */}
-        <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius)", overflowX: "auto" }}>
+        {/* All chores — cards on phones, table on desktop */}
+        {isMobile && (
+          <div>
+            {filtered.length === 0 && (
+              <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", padding: "3rem 1rem", textAlign: "center" }}>
+                No chores found.
+              </div>
+            )}
+            {filtered.map(chore => {
+              const status = choreStatus(choreNextDates[chore.id]);
+              const nd = choreNextDates[chore.id];
+              const ndStr = nd ? new Date(nd).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+              const roomLabel = (roomLabels[chore.room] || chore.room || "").replace(/\s*\[.*?\]$/, "");
+              return (
+                <div
+                  key={chore.id}
+                  onClick={e => {
+                    if (e.target.closest("button,input,select,textarea")) return;
+                    setEditChore(chore);
+                  }}
+                  style={{
+                    background: "var(--fm-bg-raised)",
+                    border: "1px solid var(--fm-hairline)",
+                    borderLeft: `3px solid ${status.dot}`,
+                    borderRadius: 8,
+                    marginBottom: 8,
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
+                    <span style={{ color: status.dot, fontFamily: "var(--fm-mono)", fontSize: "0.64rem", letterSpacing: "0.04em" }}>{status.text}</span>
+                    <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", marginLeft: "auto", whiteSpace: "nowrap" }}>
+                      {ndStr ? `next ${ndStr}` : ""}
+                    </span>
+                  </div>
+                  <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.92rem", fontWeight: 500, lineHeight: 1.35, marginTop: 2 }}>
+                    {chore.title || "Unnamed chore"}
+                  </div>
+                  <div style={{ alignItems: "flex-end", display: "flex", gap: 10, justifyContent: "space-between", marginTop: 2 }}>
+                    <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.04em", minWidth: 0 }}>
+                      {[roomLabel || null, chore.schedule || null, chore.duration != null ? fmtMinutes(chore.duration) : null].filter(Boolean).join(" · ")}
+                    </div>
+                    <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: 6 }}>
+                      <button
+                        onClick={() => setDetailEvent({ chore, date: nd ? new Date(nd) : new Date() })}
+                        style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: 6, color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.66rem", letterSpacing: "0.08em", minHeight: 38, padding: "0 14px", textTransform: "uppercase", whiteSpace: "nowrap" }}
+                      >Log it</button>
+                      <button
+                        onClick={() => setConfirmChore(chore)}
+                        title="Delete chore"
+                        style={{ background: "transparent", border: "none", color: "var(--fm-ink-mute)", fontSize: "1rem", lineHeight: 1, minHeight: 38, padding: "0 8px" }}
+                      >×</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {!isMobile && <div style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius)", overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", fontSize: "0.82rem", width: "100%" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--fm-hairline2)" }}>
@@ -1314,7 +1389,7 @@ export default function ChoresPage({ navigate, navState }) {
               })}
             </tbody>
           </table>
-        </div>
+        </div>}
         </>}
 
         {activeTab === "History" && (

@@ -1,0 +1,16 @@
+# Gradle / build output
+.gradle/
+build/
+app/build/
+
+# Machine-local SDK location
+local.properties
+
+# The bundled SPA is a build artifact — regenerated from ../dist by the
+# copyWebAssets task (run `npm run build` in the repo root first).
+app/src/main/assets/www/
+
+# IDE
+.idea/
+*.iml
+captures/

@@ -1,5 +1,27 @@
 import { forwardRef } from "react";
 
+// ── Bottom-sheet overrides (phone) ─────────────────────────────────────────
+// Spread AFTER a modal's own overlay/panel styles when useIsMobile() is true:
+//   <div style={{ ...overlay, ...(isMobile ? sheetOverlay : null) }}>
+//     <div className={isMobile ? "fm-sheet-panel" : undefined}
+//          style={{ ...panel, ...(isMobile ? sheetPanel : null) }}>
+// The .fm-sheet-panel class (src/styles/mobile.css) adds the slide-up animation.
+
+export const sheetOverlay = { alignItems: "flex-end" };
+
+export const sheetPanel = {
+  borderBottom: "none",
+  borderLeft: "none",
+  borderRight: "none",
+  borderRadius: "14px 14px 0 0",
+  boxSizing: "border-box",
+  maxHeight: "88vh",
+  maxWidth: "100%",
+  overflowY: "auto",
+  padding: "1.15rem 1.1rem calc(1.25rem + env(safe-area-inset-bottom))",
+  width: "100%",
+};
+
 export const PRIORITY_LABELS = { low: "Low", medium: "Medium", high: "High", urgent: "Urgent" };
 
 export const STATUS_COLUMNS = [

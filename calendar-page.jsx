@@ -3,6 +3,8 @@ import { useForemanStore } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 import CategoryTabs from "./components/CategoryTabs.jsx";
 import ChoreDetailModal from "./components/ChoreDetailModal.jsx";
 import MaintenanceCompleteModal from "./components/MaintenanceCompleteModal.jsx";
@@ -303,6 +305,7 @@ function buildRoomItemsMap() {
 // ─── CreateChoreModal ─────────────────────────────────────────────────────────
 
 function CreateChoreModal({ date, roomOptions, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState({
     title: "", room: roomOptions[0]?.value ?? "Whole House",
     schedule: "every 1 weeks", dayOfWeek: date ? date.getDay() : null,
@@ -315,8 +318,8 @@ function CreateChoreModal({ date, roomOptions, onSave, onClose }) {
   const labelStyle  = { color: "#a8a29c", display: "block", fontFamily: "monospace", fontSize: "0.62rem", letterSpacing: "0.1em", marginBottom: "0.25rem", textTransform: "uppercase" };
   const selectStyle = { ...inputStyle, appearance: "none", cursor: "pointer", backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5460'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 0.5rem center", paddingRight: "1.5rem" };
   return (
-    <div style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 200 }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 480, padding: "1.75rem 2rem", width: "90%" }}>
+    <div style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 200, ...(isMobile ? sheetOverlay : null) }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 480, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
         <div style={{ color: "#8b7d6b", fontFamily: "monospace", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: "0.2rem", textTransform: "uppercase" }}>New Chore</div>
         <div style={{ color: "#c9a96e", fontFamily: "'Georgia','Times New Roman',serif", fontSize: "1.05rem", marginBottom: "1.5rem" }}>{dateLabel}</div>
         <div style={{ marginBottom: "1rem" }}><label style={labelStyle}>Chore Name</label><input autoFocus value={form.title} onChange={e => set("title", e.target.value)} onKeyDown={e => { if (e.key === "Enter" && canSave) onSave(form, date); if (e.key === "Escape") onClose(); }} placeholder="e.g. Vacuum all floors" style={inputStyle} /></div>
@@ -340,6 +343,7 @@ function CreateChoreModal({ date, roomOptions, onSave, onClose }) {
 // ─── CalendarPage ─────────────────────────────────────────────────────────────
 
 export default function CalendarPage({ navigate }) {
+  const isMobile = useIsMobile();
   const todayRaw   = new Date();
   const todayYear  = todayRaw.getFullYear();
   const todayMonth = todayRaw.getMonth();
@@ -608,7 +612,7 @@ export default function CalendarPage({ navigate }) {
 
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-serif)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-serif)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
 
       {createDate && (
         <CreateChoreModal

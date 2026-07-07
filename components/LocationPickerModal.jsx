@@ -1,5 +1,7 @@
 import { useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 import { storageGet } from "../lib/storage.js";
 import { getFloorsInOrder } from "../lib/floors.js";
 import { loadRooms } from "../lib/rooms.js";
@@ -31,6 +33,7 @@ function detectZone(x, y, placements, levelId) {
 }
 
 export default function LocationPickerModal({ initialLocation, onConfirm, onCancel }) {
+  const isMobile = useIsMobile();
   const floors = useMemo(() => getFloorsInOrder(), []);
   const allRooms = useMemo(() => loadRooms(), []);
   const fpData = useMemo(() => {
@@ -97,15 +100,18 @@ export default function LocationPickerModal({ initialLocation, onConfirm, onCanc
         alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0,
         display: "flex", justifyContent: "center", left: 0,
         position: "fixed", right: 0, top: 0, zIndex: 1200,
+        ...(isMobile ? sheetOverlay : null),
       }}
     >
       <div
         onClick={e => e.stopPropagation()}
+        className={isMobile ? "fm-sheet-panel" : undefined}
         style={{
           background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)",
           borderRadius: "var(--fm-radius-lg)", boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
           display: "flex", flexDirection: "column", maxHeight: "88vh",
           padding: "1.25rem", width: "min(680px, 94vw)",
+          ...(isMobile ? sheetPanel : null),
         }}
       >
         {/* Header */}

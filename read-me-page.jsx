@@ -224,13 +224,42 @@ function TenetsTab() {
 
 const ARCH_SECTIONS = [
   { id: "arch-storage",      label: "Data Storage" },
-  { id: "arch-multidevice",  label: "Multi-Device Sharing" },
+  { id: "arch-multidevice",  label: "Multi-Device" },
+  { id: "arch-pwa",          label: "PWA & Offline" },
   { id: "arch-stack",        label: "Built With" },
   { id: "arch-structure",    label: "App Structure" },
+  { id: "arch-state",        label: "State" },
   { id: "arch-datamodel",    label: "Data Model" },
   { id: "arch-design",       label: "Design System" },
   { id: "arch-integrations", label: "Integrations" },
 ];
+
+// Inline code reference (file paths, storage keys, function names).
+const monoStyle = { fontFamily: "var(--fm-mono)", fontSize: "0.8rem" };
+function Mono({ children }) { return <span style={monoStyle}>{children}</span>; }
+
+// Bulleted row with a bold lead-in, used throughout the architecture tab.
+function ArchRow({ name, children }) {
+  return (
+    <div style={{ display: "flex", gap: "0.75rem" }}>
+      <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
+      <p style={bodyText}>
+        <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
+        {children}
+      </p>
+    </div>
+  );
+}
+
+// Titled block within the data model section.
+function ArchBlock({ title, children }) {
+  return (
+    <div>
+      <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>{title}</div>
+      {children}
+    </div>
+  );
+}
 
 function ArchSection({ id, label, heading, sectionRefs, first, children }) {
   return (
@@ -267,68 +296,80 @@ function RoadGroupHeader({ label, first }) {
 
 function ArchTab() {
   const { activeSection, sectionRefs, scrollTo } = useToc(ARCH_SECTIONS);
+  const stack = { display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" };
 
   return (
     <div>
       <TocNav sections={ARCH_SECTIONS} activeSection={activeSection} onSelect={scrollTo} />
 
-      <ArchSection id="arch-storage" label="Storage" heading="How Foreman Stores Your Data" sectionRefs={sectionRefs} first>
+      {/* ── Storage ─────────────────────────────────────────────────────────── */}
+      <ArchSection id="arch-storage" label="Storage" heading="Storage Engine" sectionRefs={sectionRefs} first>
         <p style={bodyText}>
-          Foreman is a local-first application. There is no server, no account, and no internet connection required to use it. Nothing leaves your device unless you explicitly export it. Where that data actually lives depends on how you run Foreman.
+          Foreman is local-first: no server, no account, no network dependency for core function. All persistence flows through one module, <Mono>lib/storage.js</Mono>, which exposes <Mono>storageGet</Mono> / <Mono>storageSet</Mono> / <Mono>storageDel</Mono> (plus <Mono>storageSetMany</Mono>, <Mono>storageDelMany</Mono>, and <Mono>storageGetAll</Mono> for bulk operations like profile switching and export). No other file touches IndexedDB, the Electron IPC bridge, or the network directly — the rest of the codebase is backend-agnostic by construction.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          In the browser (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>npm run dev</span>, or any web deployment), every piece of data you add — tasks, inventory, chores, projects, notes — is saved in IndexedDB, a database built into your browser. Think of it as a private, structured database inside your browser: Foreman writes to it whenever you make a change and reads from it every time you open the app. Unlike the older localStorage API it replaced, IndexedDB has no meaningful storage limit. The tradeoff is that your data is tied to the specific browser and device you use — clearing your browser's site data would clear Foreman's data along with it.
+          The module keeps an in-memory cache (<Mono>_cache</Mono>) hydrated exactly once by <Mono>storageInit()</Mono>, which <Mono>src/main.jsx</Mono> awaits before calling <Mono>createRoot()</Mono>. After that, every <Mono>load*()</Mono> in <Mono>lib/</Mono> is a synchronous cache read — safe inside React state initializers — and every <Mono>save*()</Mono> mutates the cache immediately and schedules persistence in the background. The UI never waits on I/O.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}><Mono>storageInit()</Mono> selects one of three backends:</p>
+        <div style={stack}>
+          <ArchRow name="Electron (file mode)"><Mono>electron/preload.cjs</Mono> exposes <Mono>window.foreman</Mono> via <Mono>contextBridge</Mono> with <Mono>isElectron: true</Mono>; <Mono>lib/storage.js</Mono> detects it at module load and hydrates synchronously through <Mono>readAllSync()</Mono>, a blocking <Mono>ipcRenderer.sendSync("storage:readAll")</Mono> against the main process's authoritative store.</ArchRow>
+          <ArchRow name="LAN client (remote mode)">Failing that, the app probes <Mono>GET /api/ping</Mono> — only a Foreman host answers <Mono>{"{ foreman: true }"}</Mono>. If found, <Mono>_initRemote()</Mono> pulls the full store from <Mono>/api/all</Mono> and subscribes to <Mono>/api/events</Mono> over server-sent events. On the Vite dev server or any static host the probe 404s and falls through.</ArchRow>
+          <ArchRow name="Browser (IndexedDB)">The default: hydrate from <Mono>idb-keyval</Mono>'s <Mono>entries()</Mono>, then run a one-time localStorage → IndexedDB migration guarded by the <Mono>foreman-idb-migrated</Mono> sentinel key.</ArchRow>
+        </div>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Delta transport.</span> In file and remote modes, writes accumulate in <Mono>_dirty</Mono> / <Mono>_deleted</Mono> sets and flush on a 100&nbsp;ms debounce (<Mono>_scheduleSend()</Mono>) as a per-key delta <Mono>{"{ updates, deletes }"}</Mono> — never a whole-store snapshot. That is the invariant that makes concurrent multi-device edits safe: a writer can only overwrite keys it actually changed. <Mono>storageFlushNow()</Mono> flushes synchronously (<Mono>sendSync</Mono> in Electron, a <Mono>keepalive</Mono> fetch on LAN clients) and is called before <Mono>window.location.reload()</Mono> so the debounce timer can't race the next boot's read.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          In the Windows desktop app, data instead lives in two real files under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Documents\Foreman\</span>: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span> (everything except images) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span>. They're plain text, copyable, and yours — not locked inside a browser's storage. Writes go through an atomic temp-file-then-rename so a crash mid-write can't corrupt the file, and rolling backups land in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>Documents\Foreman\backups\</span> on an hourly/daily/weekly retention schedule.
+          <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Desktop persistence.</span> The Electron main process owns the single authoritative store (<Mono>ensureStore()</Mono> / <Mono>applyDelta()</Mono> in <Mono>electron/main.cjs</Mono>). Renderer deltas arrive over the <Mono>storage:setKeys</Mono> IPC channel and flush to disk on a 500&nbsp;ms debounce; memory is authoritative after first load so a renderer reload can never resurrect stale disk state. <Mono>electron/storageFile.cjs</Mono> partitions each snapshot into <Mono>Documents\Foreman\data.json</Mono> and <Mono>images.json</Mono> (the <Mono>foreman-images</Mono> key alone, since base64 images dominate file size), writing both via <Mono>atomicWrite()</Mono> — temp file, then <Mono>renameSync</Mono> — so a crash mid-write can't corrupt data. The directory comes from <Mono>app.getPath("documents")</Mono>, which follows Windows folder redirection (OneDrive included). <Mono>createBackup()</Mono> copies <Mono>data.json</Mono> into <Mono>backups\</Mono> at most hourly and on every renderer boot; <Mono>pruneBackups()</Mono> applies tiered retention — 24 hourlies, one per day for 7 days, one per week for 4 weeks.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The desktop app can also share that data live with other devices on your wifi — see Multi-Device Sharing below.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Use the Export function in Preferences to keep a portable backup regardless of which build you run — it's also how data moves from a browser install into the desktop app the first time.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem", color: "var(--fm-ink-mute)" }}>
-          For developers: all storage goes through <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span>, which maintains an in-memory cache populated at startup and detects the backend once at module load — <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>window.foreman?.isElectron</span> is set by <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/preload.cjs</span> only when running inside Electron. Every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>load*()</span> call reads from cache synchronously (no async/await required in React state initializers); every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>save*()</span> call writes to cache immediately and fires an async persist — to IndexedDB via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>idb-keyval</span> in the browser, or to <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>data.json</span>/<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>images.json</span> via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/storageFile.cjs</span> in the desktop app. A third backend covers LAN clients (detailed below). No other file touches any backend directly. Keys follow the convention <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman-{"{domain}"}</span> (e.g., foreman-chores, foreman-todos). A handful of older keys use shorter names for historical reasons (maintenance-dates, fp-data).
+          Storage keys follow the convention <Mono>foreman-{"{domain}"}</Mono> (e.g. <Mono>foreman-chores</Mono>, <Mono>foreman-services</Mono>); a handful of older keys keep shorter historical names (<Mono>maintenance-dates</Mono>, <Mono>fp-data</Mono>). The Export function in Preferences produces a portable JSON snapshot regardless of backend — it's also how data moves from a browser install into the desktop app the first time.
         </p>
       </ArchSection>
 
+      {/* ── Multi-device ────────────────────────────────────────────────────── */}
       <ArchSection id="arch-multidevice" label="Sharing" heading="Multi-Device Sharing" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          The Windows desktop app can share its live data with other devices on the same wifi network — a phone, a tablet, another computer — with no cloud service and no account. The architecture is hub-and-spoke: the desktop app is the single authoritative host, and other devices are windows into it rather than copies that need to stay in sync.
+          The desktop app can share its live data with any browser on the same wifi — no cloud, no account. The topology is hub-and-spoke: the Electron main process is the single authoritative host, and every other device is a live window into it rather than a replica. There is deliberately no sync engine, no merge, and no conflict resolution, because there is never a second copy to diverge.
         </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
-          {[
-            ["The host", "Turning on Multi-Device Sharing (Preferences → Integrations) starts a small web server inside the Electron app, bound to your LAN. It serves the same app bundle a browser would load, plus a token-guarded API for reading and writing the store. The token is a random ID generated on first use and stored with your other settings; a Regenerate button invalidates it and cuts off every paired device."],
-            ["Pairing", "Preferences shows a QR code encoding the host's local address and the current token. Scanning it opens the full Foreman app in the phone's browser and saves the token to that browser's storage, so reconnecting later doesn't require rescanning unless the code is regenerated or the browser's data is cleared."],
-            ["Live in both directions", "A client device sends its writes to the host as they happen; the host merges them into its single in-memory store, persists to data.json, and pushes the change back out over a live connection (server-sent events) to every other connected device — including the desktop app's own window. There's one source of truth, so there's nothing to merge or resolve later."],
-            ["The honest constraint", "Devices reach the data by reaching the host, so the desktop app has to be running (it lives in the system tray, so this is normally true whenever the computer is on) and every device has to be on the same network. Away from home, or with the host off, a paired device has no data to show — the tradeoff this design makes to keep everything local and account-free."],
-          ].map(([name, desc]) => (
-            <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
-              <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", minWidth: "1rem", paddingTop: "0.3rem" }}>›</span>
-              <p style={bodyText}>
-                <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>{name}: </span>
-                {desc}
-              </p>
-            </div>
-          ))}
+        <div style={stack}>
+          <ArchRow name="The server"><Mono>electron/lanServer.cjs</Mono> is a dependency-free <Mono>node:http</Mono> server started via the <Mono>lan:start</Mono> IPC handler (Preferences → Integrations). It binds <Mono>0.0.0.0</Mono> on port 8417 — incrementing up to +10 on <Mono>EADDRINUSE</Mono> — and serves the built SPA from <Mono>dist/</Mono> with an <Mono>index.html</Mono> fallback and a path-traversal guard on every static read.</ArchRow>
+          <ArchRow name="The API"><Mono>/api/ping</Mono> is the unauthenticated host-detection marker. Everything else requires the pairing token (query <Mono>?token=</Mono> or <Mono>x-foreman-token</Mono> header): <Mono>/api/all</Mono> returns the full store, <Mono>/api/set</Mono> accepts a per-key delta <Mono>{"{ updates, deletes, client }"}</Mono> with a 64&nbsp;MB body cap (image payloads), and <Mono>/api/events</Mono> is an SSE stream with a 30-second comment heartbeat and a per-client connection registry.</ArchRow>
+          <ArchRow name="The token">Generated as <Mono>crypto.randomUUID()</Mono> on first use and persisted under <Mono>foreman-lan-share</Mono> in the store itself. The <Mono>lan:regenerate</Mono> IPC handler mints a new one, instantly invalidating every paired device.</ArchRow>
+          <ArchRow name="Pairing">Preferences renders a QR code (the <Mono>qrcode</Mono> package) encoding <Mono>{"http://<lan-ip>:<port>/#pair=<token>"}</Mono>. On the client, <Mono>_pairingToken()</Mono> in <Mono>lib/storage.js</Mono> reads the <Mono>#pair=</Mono> hash, persists it to that browser's localStorage under <Mono>foreman-lan-token</Mono>, and strips the hash via <Mono>history.replaceState()</Mono>. A 401 clears the stored token and renders the pairing-required screen.</ArchRow>
+          <ArchRow name="Write fan-out">A client POST to <Mono>/api/set</Mono> invokes <Mono>applyRemoteDelta()</Mono> in <Mono>main.cjs</Mono> — merge into the store, schedule the disk flush, notify the host renderer over the <Mono>remote-storage-change</Mono> channel — while the server broadcasts the same delta to every other SSE client, excluding the originator. Host-side edits take the mirror path: <Mono>storage:setKeys</Mono> merges, then <Mono>_lan.broadcast()</Mono>. On each receiving device the delta lands in the storage cache and <Mono>onStorageRemoteChange</Mono> fires <Mono>reloadAll()</Mono> (wired in <Mono>src/App.jsx</Mono>), so every subscribed page re-renders.</ArchRow>
         </div>
-        <p style={{ ...bodyText, marginTop: "0.85rem", color: "var(--fm-ink-mute)" }}>
-          For developers: the host is <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/lanServer.cjs</span>, a dependency-free Node <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>http</span> server exposing <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/ping</span> (an unauthenticated marker a client uses to detect a Foreman host), <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/all</span> (full store read), <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/set</span> (a per-key delta write), and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/events</span> (an SSE stream fanning out every write to the other connected devices). On the client, <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/storage.js</span> probes <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>/api/ping</span> at startup; finding it switches the module into its third backend (remote mode) instead of IndexedDB, so the same renderer code runs unchanged on both the host and every client. Writes everywhere — host renderer, LAN clients — travel as per-key deltas rather than whole-store snapshots, which is what makes concurrent edits from different devices safe: nobody can clobber a change they never saw.
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          The honest constraint: devices reach the data by reaching the host, so the desktop app must be running (it lives in the system tray, so this is normally true) and every device must be on the same network. Away from home, a paired device has no data to show — the tradeoff this design makes to stay local and account-free.
         </p>
       </ArchSection>
 
+      {/* ── PWA ─────────────────────────────────────────────────────────────── */}
+      <ArchSection id="arch-pwa" label="PWA" heading="PWA & Offline Behavior" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          The web build is installable: <Mono>public/manifest.webmanifest</Mono> supplies the icons and standalone display mode, and <Mono>public/sw.js</Mono> is the service worker. Registration (bottom of <Mono>src/main.jsx</Mono>) is deliberately narrow — production builds only (the dev server would fight Vite HMR), never inside Electron, and only where <Mono>navigator.serviceWorker</Mono> exists, i.e. secure contexts. Over plain LAN HTTP the registration is a silent no-op and the app behaves exactly as before; phones still get Add-to-Home-Screen via the manifest.
+        </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
+          The worker's fetch strategy is three-tier. <Mono>/api/*</Mono> is never intercepted: data reads, writes, and the SSE stream must always reach the host — freshness beats offline support. Hashed build assets (<Mono>/assets/*</Mono>, fonts, images) are cache-first in a single <Mono>foreman-v1</Mono> cache, which is safe because Vite content-hashes every filename. Navigations are network-first with the cached shell as fallback, so a fresh deploy is picked up on the next load but the app still opens when the host is briefly unreachable. <Mono>install</Mono> calls <Mono>skipWaiting()</Mono>; <Mono>activate</Mono> deletes stale caches and claims open clients.
+        </p>
+      </ArchSection>
+
+      {/* ── Stack ───────────────────────────────────────────────────────────── */}
       <ArchSection id="arch-stack" label="Stack" heading="Built With" sectionRefs={sectionRefs}>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {[
-            ["React 18", "The UI library. React is the system that keeps the interface in sync with your data. When you mark a task done, React automatically updates every part of the screen that reflects that task without a page refresh."],
-            ["Zustand", "Lightweight global state management. A single store in lib/store.js holds named slices for every domain (rooms, projects, chores, spatial assignments, item fields, and more). Pages subscribe to slices using selectors — when a slice changes, every page that reads it re-renders automatically. This is what makes changes on the Floor Plan immediately visible in Inventory without a reload."],
-            ["Vite", "The build tool. Vite packages all the source code into the files your browser actually runs. During development it runs a local server that updates the page instantly when you save a file."],
-            ["Electron", "Wraps the same Vite/React app in a native Windows desktop shell (electron/ directory) — no browser required. Provides the system tray, native file dialogs, OS notification bridge, the foreman:// deep-link protocol, and the file-based storage backend described above. The browser dev build is entirely unaffected; Electron is an alternate shell around the same renderer code."],
-            ["idb-keyval", "A minimal wrapper over IndexedDB that provides a simple get/set/del API. Foreman uses this as its storage backend via lib/storage.js in the browser build, replacing localStorage to eliminate storage size limits."],
-            ["TipTap", "The rich-text editor that powers the Notebook page. Supports formatted notes with headings, lists, bold, italic, and code."],
-            ["PDF.js", "Used to parse equipment manuals uploaded as PDFs. Parsing happens locally; no file content is sent anywhere."],
-            ["Inter / Newsreader / JetBrains Mono", "The three typefaces used across the design system."],
+            ["React 18", <>UI layer, rendered under <Mono>StrictMode</Mono> from <Mono>src/main.jsx</Mono>. No router — navigation is a state variable (see App Structure).</>],
+            ["Zustand 5", <>Global state. One store (<Mono>lib/store.js</Mono>) with named slices and write-through persistence; detailed under State Management.</>],
+            ["Vite 6", <>Build tool and dev server. <Mono>base: "./"</Mono> lets the same bundle run from Electron's <Mono>file://</Mono>, the LAN server, or any subpath; <Mono>strictPort: 5173</Mono> so <Mono>electron:dev</Mono> can wait on it; a <Mono>define</Mono> shim pins <Mono>process.env.DRAGGABLE_DEBUG</Mono> because react-draggable reads it at drag-start and would throw in the browser (<Mono>vite.config.js</Mono>).</>],
+            ["Electron 42", <>Native Windows shell: <Mono>electron/main.cjs</Mono> (window, tray, IPC, LAN server lifecycle, <Mono>foreman://</Mono> protocol), <Mono>preload.cjs</Mono> (the entire renderer↔main API surface via <Mono>contextBridge</Mono>, with <Mono>contextIsolation</Mono> on and <Mono>nodeIntegration</Mono> off), <Mono>storageFile.cjs</Mono> (file backend + backups). Packaged by electron-builder 26 (NSIS target, <Mono>electron-dist/</Mono> output) via <Mono>npm run electron:build</Mono>.</>],
+            ["idb-keyval 6", <>Minimal IndexedDB wrapper — the browser backend behind <Mono>lib/storage.js</Mono>. Replaced localStorage to remove its size ceiling.</>],
+            ["TipTap 3", <>Rich-text editor powering the Notebook (<Mono>@tiptap/react</Mono>, starter kit, placeholder extension, plus <Mono>tiptap-markdown</Mono> for markdown round-tripping).</>],
+            ["pdfjs-dist 5", <>Local, in-browser text extraction from uploaded equipment manuals (<Mono>lib/pdfExtract.js</Mono>). No file content leaves the device.</>],
+            ["react-grid-layout 2.2", <>The Dashboard's draggable, resizable card grid.</>],
+            ["Recharts 3", <>Charting on the Dashboard and Finances pages.</>],
+            ["react-datepicker 9", <>Date entry, reskinned to the design system by <Mono>src/datepicker-theme.css</Mono>.</>],
+            ["qrcode 1.5", <>Renders the multi-device pairing QR code in Preferences.</>],
+            ["Inter / Newsreader / JetBrains Mono", <>The three typefaces, loaded via <Mono>@import</Mono> in <Mono>src/styles/theme.css</Mono>.</>],
           ].map(([name, desc]) => (
             <div key={name}>
               <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500 }}>{name}</span>
@@ -337,30 +378,36 @@ function ArchTab() {
           ))}
         </div>
         <p style={{ ...bodyText, marginTop: "1rem", color: "var(--fm-ink-mute)" }}>
-          No backend framework. No database server. No authentication. No external API is required for core functionality.
+          No backend framework, no database server, no authentication layer, no external API required for core functionality. Scripts: <Mono>npm run dev</Mono> (browser), <Mono>electron:dev</Mono> (chains Vite and Electron via concurrently + wait-on), <Mono>build</Mono>, and <Mono>electron:build</Mono>.
         </p>
       </ArchSection>
 
-      <ArchSection id="arch-structure" label="Architecture" heading="Application Structure" sectionRefs={sectionRefs}>
+      {/* ── Structure ───────────────────────────────────────────────────────── */}
+      <ArchSection id="arch-structure" label="Architecture" heading="Application Structure & Boot" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          Foreman has 16 pages. Each page is a standalone React component file at the root of the project (e.g., home-maintenance.jsx, inventory-page.jsx, workbench-page.jsx). Pages are registered in src/App.jsx and rendered based on a page state variable.
+          Foreman is a single-page app with 21 registered page keys (<Mono>PAGE_KEYS</Mono> in <Mono>src/App.jsx</Mono>), rendered by page components that live at the repository root (<Mono>home-maintenance.jsx</Mono>, <Mono>inventory-page.jsx</Mono>, <Mono>workbench-page.jsx</Mono>, …). Several keys share a component: <Mono>alerts</Mono> and <Mono>workbench</Mono> both render <Mono>workbench-page.jsx</Mono>, <Mono>timeline</Mono> renders <Mono>guide-page.jsx</Mono> pre-set to its Timeline tab, and <Mono>lifecycle-page.jsx</Mono> exports four pages (Spending, Forecast, Mortgage, Item Lifespans).
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Navigation is custom-built: a single state variable tracks which page is active, and a navigate() function switches between them. There is no URL routing and no browser history management. The entire app runs at a single URL. A React context object (FmNavContext) makes the current page name and navigate function available to every component. A global Command Palette (⌘K / Ctrl-K, or the header search box) is mounted above the pages and indexes every page and entity for instant search and jump-to navigation.
+          Navigation is a state variable, not a router: the whole app runs at a single URL with no history management. <Mono>navigate(pageOrKey, navState)</Mono> accepts either a key (<Mono>dashboard</Mono>) or a display title (<Mono>Dashboard</Mono>); <Mono>navState</Mono> is a per-navigation payload pages read on mount — pre-opening an Add modal, preselecting a record, choosing a tab. <Mono>FmNavContext</Mono> (<Mono>src/context/FmNavContext.js</Mono>) exposes <Mono>{"{ current, navigate }"}</Mono> to any component. Everything renders inside an <Mono>ErrorBoundary</Mono>, and <Mono>App.jsx</Mono> also subscribes to Electron <Mono>foreman://</Mono> deep links (<Mono>window.foreman.onDeepLink</Mono> → <Mono>navigate</Mono>) and to remote storage changes from other devices.
         </p>
+        <p style={{ ...bodyText, marginTop: "0.85rem" }}>The boot sequence in <Mono>src/main.jsx</Mono> is strictly ordered:</p>
+        <div style={stack}>
+          <ArchRow name="1 · Hydrate"><Mono>await storageInit()</Mono> — backend detection and cache hydration, described under Storage.</ArchRow>
+          <ArchRow name="2 · Migrate"><Mono>loadFpData()</Mono> runs before <Mono>loadRooms()</Mono> because the floor-plan v3 migration writes fresh room IDs; a floor-recovery pass rebuilds levels orphaned by old builds; <Mono>migrateCfvSplit()</Mono> splits the legacy custom-field store into the spatial and item stores; entity-type migrations and stable-key normalization follow (<Mono>lib/migration.js</Mono>, <Mono>lib/entityTypes.js</Mono>).</ArchRow>
+          <ArchRow name="3 · Theme">The saved theme and density are stamped onto <Mono>document.documentElement.dataset</Mono> before render, so there is no flash of the default theme.</ArchRow>
+          <ArchRow name="4 · Populate"><Mono>useForemanStore.getState().reloadAll()</Mono> fills every store slice from the now-correct cache.</ArchRow>
+          <ArchRow name="5 · Render"><Mono>createRoot(...).render(&lt;App /&gt;)</Mono>.</ArchRow>
+        </div>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Every page uses the same two layout components as its shell: FmHeader (the top bar — Workbench, Dashboard, and Calendar sit as direct top-level links; Property, Finances, and Work are grouped dropdown menus; Notebook and the meta links sit beside them) and FmSubnav (the tab bar below it with page-specific tabs and stat counters). Below those two rails, each page renders its own content independently.
-        </p>
-        <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          A single Zustand store in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>lib/store.js</span> serves as the authoritative source for all cross-page data. Pages subscribe to named slices of the store using selector functions; when a write happens in one place, every subscribed page updates automatically. Each store action persists its change to IndexedDB in the same operation — there is no separate "save" step. The store is seeded from IndexedDB at startup and can be fully reloaded after profile switches or bulk imports via <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>reloadAll()</span>.
+          Every page shares the same chrome: <Mono>FmHeader</Mono> (top bar — Workbench, Dashboard, and Calendar as direct links; Property, Finances, and Work as dropdown groups) and <Mono>FmSubnav</Mono> (page tabs and stat counters). The global Command Palette (<Mono>components/CommandPalette.jsx</Mono>, ⌘K / Ctrl-K) mounts above the pages in <Mono>App.jsx</Mono>. Its index is built by <Mono>buildCommandIndex()</Mono> in <Mono>lib/commandIndex.js</Mono>, which flattens pages, inventory items, maintenance tasks, chores, services, utilities, and projects into one searchable list; <Mono>rankCommands()</Mono> scores five tiers — label prefix, word-start, substring, sublabel/keyword, and a subsequence fuzzy match ("wh" finds Water Heater). Static <Mono>COMMAND_ACTIONS</Mono> deep-link into add-modals via <Mono>navState</Mono>.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>Code is organized into four layers:</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.6rem", paddingLeft: "0.75rem", borderLeft: "2px solid var(--fm-hairline2)" }}>
           {[
-            ["lib/store.js", "The global Zustand store. Holds slices for rooms, floors, floor plan data, spatial assignments, item field values, inventory state, projects, chores, services, and entity types. Pages read from slices via subscriptions; store actions handle all writes. Calling load*() directly in a page is a code smell after the refactor — the store is the source of truth."],
-            ["lib/", "Data utility modules, one per domain (chores, maintenance, inventory, rooms, floors, reminders, etc.). Pure functions that read and write data via lib/storage.js, parse and format values, and compute derived results. No React code. The storage.js module is the single point of contact with IndexedDB — all other lib files call storageGet/storageSet rather than touching the browser storage API directly."],
-            ["components/", "Domain-specific UI components: maintenance table, modals, date pickers, filter pills, schedule pickers."],
-            ["src/components/", "Design system components shared across all pages: FmHeader, FmSubnav, FmCard, FmStatusDot, FmSysTag."],
+            ["lib/store.js", "The global Zustand store — slices, write-through actions, selectors. Pages read via subscriptions; store actions handle all cross-page writes. Calling load*() directly in a page is a code smell."],
+            ["lib/", "67 data-utility modules, one per domain (chores.js, ledger.js, budgetForecast.js, geometry.js, …). Pure functions with no React: they read/write through storage.js, parse and format values, and compute derived results."],
+            ["components/", "38 domain components: the maintenance table, detail modals and panels, schedule pickers, filter pills, the command palette."],
+            ["src/components/", "Design-system primitives shared by every page: FmHeader, FmSubnav, FmCard, FmStatusDot, FmSysTag, FmCaps, FmSectionLabel."],
           ].map(([name, desc]) => (
             <div key={name}>
               <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem" }}>{name}</span>
@@ -370,79 +417,88 @@ function ArchTab() {
         </div>
       </ArchSection>
 
-      <ArchSection id="arch-datamodel" label="Data" heading="The Data Model" sectionRefs={sectionRefs}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Maintenance tasks</div>
-            <p style={bodyText}>421 built-in default tasks live in data/maintenance.json. Each task is identified by a composite key: category|item|task (the three values joined with a pipe character). This key is used as a stable reference across multiple storage entries — completion records, next due dates, notes, and custom field values all reference it. Custom tasks you create are stored separately and merged in at load time.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Inventory</div>
-            <p style={bodyText}>Uses a state map: each category and item carries a status of included, hidden, or archived. Items are referenced by a stable key — a generated ID for custom items (e.g., <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>custom-1748abc</span>) or a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>default:</span> prefix for built-in items — so renaming an item doesn't break any associated data.</p>
-            <p style={{ ...bodyText, marginTop: "0.6rem" }}>Associated data is split across two stores keyed by stable key. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Spatial assignments</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-spatial-assignments</span>) record which room or exterior zone each item is placed in — this is what the Floor Plan and Outline read to group items by location. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Item field values</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-item-field-values</span>) record detail fields like manufacturer, model number, serial number, warranty expiry, install date, and item type. Both are slices in the global store, so writes on any page propagate everywhere automatically.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Notebook articles</div>
-            <p style={bodyText}>Each inventory item has one free-form article. The note body is stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-guide-notes</span>, keyed by the item's <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>category|item</span> reference. Beyond the auto-created per-item articles, user-created standalone articles are stored in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-standalone-articles</span>, with their bodies in the same notes store under a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>standalone:&lt;id&gt;</span> key. Each article's classification — the item, location, system, project, and task it's about — lives in <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-article-associations</span>; derived associations (an item article's own location and system) are read live from the item rather than copied. The specs shown on an article are <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>not</span> stored with the note — editing them writes through the same <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>setCustomField</span> store action and the same stable-key stores Inventory uses (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-item-field-values</span> and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-spatial-assignments</span>), so a spec changed on either page appears on the other automatically. The sidebar's organization is its own small state: the chosen grouping mode (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-notebook-grouping</span> — system, room, recent, or custom) and, in custom mode, the user's drag order (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-notebook-order</span>).</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Floor plan</div>
-            <p style={bodyText}>The home's spatial structure spans three stores. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Levels</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-floors</span>) are an ordered list, each with a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>kind</span> — floor, basement, attic, roof, or yard — that sets its sort position and uniqueness (only one basement, attic, roof, or yard; floors are numbered and repeatable). <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Rooms</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-rooms</span>) are the zones placed on those levels — each carries a label, its level, the items inside it, and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>use</span> (room type: bedroom, full / ¾ / half bath, kitchen, …) that drives the bed/bath and finished-area rollups in the Property Details panel. The drawn zone polygons and on-canvas item markers persist under the historical <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data</span> key. Only zones whose category resolves to the spatial room class count toward finished living area; exteriors — garages, basements, attics, and yards — are tracked but excluded. Zones can be created four ways, all producing the same polygon record: clicking to place a <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>parametric shape</span> (rectangle, L, or U, sized in feet at 20 canvas units per foot); <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>dimension entry</span>, which auto-arranges a typed room into the first free spot; tracing on the canvas; or <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>address import</span> (opt-in, Online Mode), which geocodes via OpenStreetMap and projects the returned building footprint into canvas units. The footprint is stored not as a zone but as the plan's single <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>outline</span> (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>fp-data.outline</span>) — a floor-plan-only scaffold drawn on every floor as a neutral white border, never a room or category and never counted toward area; it's toggled by the Outline layer filter. While a room or vertex is dragged, its edges magnetically snap to neighboring zones' edges so rooms share walls cleanly.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Chores</div>
-            <p style={bodyText}>Stored as objects with a unique ID. Schedules use a human-readable string format ("every 1 weeks", "every 3 months"), and each chore carries an optional duration estimate (in minutes) that the Workbench reads and writes as a single shared value. Next occurrence dates and per-occurrence completion records (who completed it, when, any notes) are stored in separate localStorage keys and linked by chore ID. Unlike maintenance, chores track every occurrence, not just the most recent.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Services</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-services</span> as a single object with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>services</span> (id → Service) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>visits</span> (id → ServiceVisit). A Service carries provider name, phone, category (from a fixed 15-item taxonomy with an "Other" escape hatch), cost, billing cycle, renewal date, auto-renews flag, a "paying since" start date, and a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>costHistory</span> of dated cost segments (so a price change applies only from its effective date forward, leaving past Ledger months untouched). A ServiceVisit is a child record of a Service and records the date, technician, notes, and an optional cost override — which also corrects that month's generated charge in the Ledger. Monthly cost is normalized from the billing cycle — annual cost divided by 12, quarterly by 3, one-time excluded — and surfaced on the Dashboard and in the Services stats bar.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Utilities</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-utilities</span> with two sub-maps, mirroring Services: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>utilities</span> (id → Utility) and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>bills</span> (id → Bill). A Utility carries type (fixed list + "Other"), provider, account number, usage unit, an optional typical monthly amount, a payment cycle (monthly, every 2 months, quarterly, every 6 months, or annually), and a due day. A Bill is a child record holding the billing period, amount, optional usage in the utility's unit, due date, and paid flag. The estimated monthly cost is the trailing-12-month average bill divided by the payment-cycle length (so an every-2-months or annual bill normalizes correctly), summed across active utilities for the Dashboard and the Finances forecast; a non-monthly bill is split evenly across its cycle so it reads as a steady monthly expense rather than a lump.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Expenses</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-expenses</span> as a flat map keyed by id. Each expense records a date, amount, free-text description, an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedItem</span> (an inventory stable key, for system/room rollups), and an optional <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>linkedWork</span> (a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>{`{ kind, id }`}</span> pointing at a project or to-do). The Finances → Ledger (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/ledger.js</span>) consolidates these with utility bills, generated service charges, inventory purchases, and mortgage payments into one transaction list — computing a trailing-12-month repairs total and rolling spend up by type, by system/room, and by project.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Expected lifespan</div>
-            <p style={bodyText}>Curated default service lives live in code (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/lifespans.js</span>), keyed by item name. The Default Values tab can override a type's default, stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-lifespan-overrides</span> (item name → years). A specific item's lifespan lives on the item as an <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>estimated_lifespan</span> custom field, seeded from the type default when the item is created; the replacement forecast uses the item's own value, falling back to the type default.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Forecast (cash-flow projection)</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-budget</span>, which holds only what the user sets — the forward projection itself is derived at read time (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/budgetForecast.js</span>) from the services, utilities, expenses, and replacement-reserve data that already exist. The settings are a monthly <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>target</span>, two toggles (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>includeReserve</span>, <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>includeRepairsBaseline</span>) that fold the replacement set-aside and a trailing-12 repairs baseline into the run-rate, and <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>planned</span> one-off line items keyed by month (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>YYYY-MM</span>).</p>
-            <p style={{ ...bodyText, marginTop: "0.6rem" }}>The forecast builds one bucket per month over a 12-month horizon: services projected from each contract's billing cycle and renewal anchor, a seasonal per-calendar-month average of logged utility bills, the reserve and repairs baselines spread evenly, and any planned items — with warranty expiries riding along as non-dollar risk markers. The <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>mortgage</span> is modelled like a recurring bill rather than a fixed fact: a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>defaultMonthly</span> payment that fills any un-overridden month, a per-month <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>overrides</span> map for retroactive corrections and known future changes, and an <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>escrowMonthly</span> sub-amount that splits each payment into principal &amp; interest versus taxes &amp; insurance. The mortgage is kept out of the operating run-rate — it's financing, not upkeep — and surfaces separately as a total-monthly-outlay figure.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Supplies</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-supplies</span> with two sub-maps: <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>tracked</span> (keyed by the consuming maintenance task's key) holds the mutable on-hand count, reorder threshold, and product URL for auto-derived consumables; <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>manual</span> holds fully user-defined supplies. The supply list itself is derived at read time from a curated catalog (<span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>lib/supplies.js</span>) joined to inventory specs and maintenance cadence, so it stays in sync without duplicating data.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Work sessions</div>
-            <p style={bodyText}>Stored under <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>foreman-sessions</span> as a map keyed by id. A Session carries a title, assignee, status (active / done / abandoned), timestamps, and an array of SessionItems — each referencing its source task (a maintenance composite key, chore id, or to-do id) alongside a snapshot of its label and room so History still renders if the source is later renamed or deleted. Items record a per-item result (done / skipped / blocked), notes, and any spawned blocker to-do. Completions made during a session write the same records as completing the task from its home page — the session itself is purely additive bookkeeping.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Entity types</div>
-            <p style={bodyText}>Power the categorization system. Built-in types (room, exterior, system, HVAC, plumbing, electrical, safety, structure) each belong to a behavioral class: spatial (location-based, like rooms) or functional (system-based, like HVAC). This distinction controls how categories are grouped and filtered across all pages. Users can create custom types that extend the built-in hierarchy.</p>
-          </div>
+      {/* ── State ───────────────────────────────────────────────────────────── */}
+      <ArchSection id="arch-state" label="State" heading="State Management" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          A single Zustand store — <Mono>useForemanStore</Mono> in <Mono>lib/store.js</Mono> — holds every cross-page slice: <Mono>rooms</Mono>, <Mono>floors</Mono>, <Mono>fpData</Mono>, <Mono>spatialAssignments</Mono>, <Mono>itemFieldValues</Mono>, <Mono>inventory</Mono>, <Mono>projects</Mono>, <Mono>chores</Mono>, <Mono>services</Mono>, <Mono>expenses</Mono>, <Mono>lifespanOverrides</Mono>, <Mono>supplies</Mono>, <Mono>utilities</Mono>, <Mono>sessions</Mono>, <Mono>budget</Mono>, and <Mono>entityTypes</Mono>, plus per-page UI state. It initializes to safe empty defaults and is populated by <Mono>reloadAll()</Mono> once storage is ready.
+        </p>
+        <div style={stack}>
+          <ArchRow name="Write-through actions">Every mutation persists inside the action itself — <Mono>addProject()</Mono> calls <Mono>saveProjects()</Mono> and updates the slice in the same <Mono>set()</Mono>; there is no separate save step, so the UI can never get ahead of storage. Domain modules (<Mono>lib/services.js</Mono>, <Mono>lib/utilities.js</Mono>, <Mono>lib/budget.js</Mono>, …) export pure add/update/delete helpers that the store wraps, keeping business logic out of React.</ArchRow>
+          <ArchRow name="One routing seam for item details"><Mono>setCustomField(stableKey, fieldId, value)</Mono> checks <Mono>SPATIAL_FIELD_NAMES</Mono>: location fields write to the <Mono>spatialAssignments</Mono> slice (<Mono>foreman-spatial-assignments</Mono>), everything else to <Mono>itemFieldValues</Mono> (<Mono>foreman-item-field-values</Mono>). Inventory, the Floor Plan, and the Notebook all write through this one action — which is why a spec edited on any page appears on every other.</ArchRow>
+          <ArchRow name="reloadAll() as universal resync">Called at boot, after profile switches and imports, and whenever a multi-device delta lands (<Mono>onStorageRemoteChange</Mono> → <Mono>reloadAll()</Mono> in <Mono>App.jsx</Mono>). Internal order matters: <Mono>loadFpData()</Mono> precedes <Mono>loadRooms()</Mono> because the fpData migration can create rooms, and <Mono>runBackfillMigration()</Mono> backfills <Mono>spatialAssignments</Mono> from legacy <Mono>fpData.zoneItems</Mono> records.</ArchRow>
+          <ArchRow name="Selectors"><Mono>selectZoneItems</Mono> groups assignments by zone label (replacing all legacy <Mono>fpData.zoneItems</Mono> reads); <Mono>selectAllFieldValues</Mono> merges both field slices per key, with a documented caveat to prefer two separate subscriptions in hot components so each slice re-renders independently.</ArchRow>
+          <ArchRow name="Per-page UI state"><Mono>usePageUIState(pageId)</Mono> persists each page's active tab, sort, and filters under <Mono>foreman-page-ui-state</Mono>, so view configuration survives navigation and reloads. When a page has no stored state it returns a module-level <Mono>_EMPTY_PAGE_UI</Mono> constant, keeping Zustand's <Mono>Object.is</Mono> selector comparison stable and avoiding spurious re-renders on every store update.</ArchRow>
         </div>
       </ArchSection>
 
+      {/* ── Data model ──────────────────────────────────────────────────────── */}
+      <ArchSection id="arch-datamodel" label="Data" heading="The Data Model" sectionRefs={sectionRefs}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <ArchBlock title="Maintenance tasks">
+            <p style={bodyText}><Mono>data/maintenance.json</Mono> ships 164 default task rows, each <Mono>{"{ category, categoryType, item, task, schedule }"}</Mono>. <Mono>loadData()</Mono> in <Mono>lib/data.js</Mono> merges three layers at read time: the defaults (assigned <Mono>_id: "default-{"{idx}"}"</Mono> and a composite <Mono>_defaultKey</Mono> of <Mono>category|item|task</Mono>), sparse per-row edits from <Mono>foreman-overrides</Mono> keyed by that composite, and user-created rows from <Mono>foreman-custom-data</Mono>; <Mono>foreman-use-default-data</Mono> can exclude the defaults entirely. The composite key is the stable reference that completion dates (<Mono>maintenance-dates</Mono>), next-due dates (<Mono>maintenance-next-dates</Mono>), notes, follow flags, and per-completion records all join on.</p>
+          </ArchBlock>
+          <ArchBlock title="Inventory">
+            <p style={bodyText}>A state map under <Mono>foreman-inventory</Mono>: each category and item carries a status of included, hidden, or archived. Items are referenced by a stable key from <Mono>getItemStableKey()</Mono> (<Mono>lib/itemKeys.js</Mono>) — a generated ID for custom items (<Mono>custom-1748abc</Mono>) or a <Mono>default:</Mono> prefix for built-ins — so renaming an item never breaks associated data.</p>
+            <p style={{ ...bodyText, marginTop: "0.6rem" }}>Associated data splits across two stores keyed by stable key. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Spatial assignments</span> (<Mono>foreman-spatial-assignments</Mono>) record which room or exterior zone each item is placed in — what the Floor Plan and location groupings read. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Item field values</span> (<Mono>foreman-item-field-values</Mono>) hold detail fields: manufacturer, model, serial, warranty expiry, install date, item type. Both are store slices, so writes on any page propagate everywhere.</p>
+          </ArchBlock>
+          <ArchBlock title="Notebook articles">
+            <p style={bodyText}>Each inventory item has one free-form article, its body stored under <Mono>foreman-guide-notes</Mono> keyed by <Mono>category|item</Mono>. Standalone articles live in <Mono>foreman-standalone-articles</Mono> with bodies in the same notes store under <Mono>standalone:&lt;id&gt;</Mono> keys. Each article's classification — item, location, system, project, task — lives in <Mono>foreman-article-associations</Mono> (<Mono>lib/articleAssociations.js</Mono>); derived associations are read live from the item rather than copied. The specs shown on an article are <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>not</span> stored with the note: editing them writes through the same <Mono>setCustomField</Mono> action and the same stable-key stores Inventory uses, so a spec changed on either page appears on the other automatically. Sidebar organization is its own small state: grouping mode in <Mono>foreman-notebook-grouping</Mono> and, in custom mode, drag order in <Mono>foreman-notebook-order</Mono> (<Mono>lib/notebookOrg.js</Mono>).</p>
+          </ArchBlock>
+          <ArchBlock title="Floor plan">
+            <p style={bodyText}>The home's spatial structure spans three stores. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Levels</span> (<Mono>foreman-floors</Mono>, <Mono>lib/floors.js</Mono>) are an ordered list, each with a <Mono>kind</Mono> — floor, basement, attic, roof, or yard — that sets sort position and uniqueness (floors are numbered and repeatable; the rest are singletons). <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Rooms</span> (<Mono>foreman-rooms</Mono>, <Mono>lib/rooms.js</Mono>) are the zones placed on those levels — label, level, contained items, and an optional <Mono>use</Mono> (bedroom, full / ¾ / half bath, kitchen, …) that drives the bed/bath and finished-area rollups in the Property Details panel. Drawn zone polygons and on-canvas markers persist under the historical <Mono>fp-data</Mono> key (<Mono>lib/fpData.js</Mono>). Only zones whose category resolves to the spatial room class count toward finished living area; garages, basements, attics, and yards are tracked but excluded.</p>
+            <p style={{ ...bodyText, marginTop: "0.6rem" }}>Zones are created four ways, all producing the same polygon record: parametric shapes (rectangle, L, or U, sized in feet at 20 canvas units per foot); dimension entry, which auto-arranges a typed room into the first free spot; freehand tracing; or address import (opt-in Online Mode), which geocodes via OpenStreetMap Nominatim (<Mono>lib/buildingFootprint.js</Mono>) and projects the returned building footprint into canvas units. The footprint is stored as the plan's single <Mono>outline</Mono> (<Mono>fp-data.outline</Mono>) — a scaffold drawn on every floor, never a room, never counted toward area. During drags, edges magnetically snap to neighboring zones (<Mono>lib/geometry.js</Mono>) so rooms share walls cleanly.</p>
+          </ArchBlock>
+          <ArchBlock title="Chores">
+            <p style={bodyText}>Objects with unique IDs under <Mono>foreman-chores</Mono> (<Mono>lib/chores.js</Mono>). Schedules use a human-readable string format ("every 1 weeks", "every 3 months"), parsed by <Mono>lib/scheduleInterval.js</Mono>; each chore carries an optional duration estimate the Workbench reads and writes as a shared value. Next occurrences and per-occurrence completion records — who, when, notes — live in separate keys (<Mono>chore-next-dates</Mono>, <Mono>foreman-chore-completion-records</Mono>; see <Mono>lib/choreCompletions.js</Mono>) linked by chore ID. Unlike maintenance, chores keep every occurrence, not just the most recent.</p>
+          </ArchBlock>
+          <ArchBlock title="Services">
+            <p style={bodyText}>Stored under <Mono>foreman-services</Mono> (<Mono>lib/services.js</Mono>) as two sub-maps: <Mono>services</Mono> (id → Service) and <Mono>visits</Mono> (id → ServiceVisit). A Service carries provider, phone, category (fixed 15-item taxonomy plus "Other"), cost, billing cycle, renewal date, auto-renew flag, a "paying since" date, and a <Mono>costHistory</Mono> of dated cost segments — a price change applies only from its effective date forward, leaving past Ledger months untouched. A ServiceVisit records date, technician, notes, and an optional cost override that also corrects that month's generated charge (<Mono>lib/serviceCharges.js</Mono>). Monthly cost normalizes from the billing cycle — annual ÷ 12, quarterly ÷ 3, one-time excluded.</p>
+          </ArchBlock>
+          <ArchBlock title="Utilities">
+            <p style={bodyText}>Mirrors Services: <Mono>foreman-utilities</Mono> (<Mono>lib/utilities.js</Mono>) holds <Mono>utilities</Mono> (id → Utility) and <Mono>bills</Mono> (id → Bill). A Utility carries type, provider, account number, usage unit, an optional typical monthly amount, a payment cycle (monthly through annually), and a due day; a Bill holds billing period, amount, optional usage, due date, and paid flag. Estimated monthly cost is the trailing-12-month average divided by the cycle length, so a bimonthly or annual bill reads as a steady monthly expense rather than a lump.</p>
+          </ArchBlock>
+          <ArchBlock title="Expenses & the Ledger">
+            <p style={bodyText}>A flat map under <Mono>foreman-expenses</Mono> (<Mono>lib/expenses.js</Mono>), each expense recording date, amount, description, an optional <Mono>linkedItem</Mono> (inventory stable key, for system/room rollups) and <Mono>linkedWork</Mono> (a <Mono>{"{ kind, id }"}</Mono> pointing at a project or to-do). <Mono>lib/ledger.js</Mono> consolidates expenses, utility bills, generated service charges, inventory purchases, and mortgage payments into one transaction list — computing a trailing-12-month repairs total and rolling spend up by type, system/room, and project.</p>
+          </ArchBlock>
+          <ArchBlock title="Expected lifespan">
+            <p style={bodyText}>Curated default service lives live in code (<Mono>lib/lifespans.js</Mono>), keyed by item name; the Default Values tab overrides a type's default via <Mono>foreman-lifespan-overrides</Mono>. A specific item's lifespan is an <Mono>estimated_lifespan</Mono> custom field seeded from the type default at creation; the replacement forecast prefers the item's own value and falls back to the type default.</p>
+          </ArchBlock>
+          <ArchBlock title="Forecast (cash-flow projection)">
+            <p style={bodyText}><Mono>foreman-budget</Mono> stores only what the user sets — a monthly <Mono>target</Mono>, two run-rate toggles (<Mono>includeReserve</Mono>, <Mono>includeRepairsBaseline</Mono>), <Mono>planned</Mono> one-off items keyed by <Mono>YYYY-MM</Mono>, and the mortgage model. The 12-month projection itself is derived at read time by <Mono>lib/budgetForecast.js</Mono>: services projected from each contract's billing cycle and renewal anchor, a seasonal per-calendar-month average of logged utility bills, reserve and repairs baselines spread evenly, planned items, and warranty expiries riding along as non-dollar risk markers. The mortgage is modelled as a recurring bill — <Mono>defaultMonthly</Mono> filling un-overridden months, a per-month <Mono>overrides</Mono> map, and an <Mono>escrowMonthly</Mono> split of principal &amp; interest versus taxes &amp; insurance — and kept out of the operating run-rate, surfacing separately as total monthly outlay.</p>
+          </ArchBlock>
+          <ArchBlock title="Supplies">
+            <p style={bodyText}><Mono>foreman-supplies</Mono> holds two sub-maps: <Mono>tracked</Mono> (keyed by the consuming maintenance task's composite key) with on-hand count, reorder threshold, and product URL for auto-derived consumables; <Mono>manual</Mono> for fully user-defined supplies. The list itself is derived at read time from a curated catalog in <Mono>lib/supplies.js</Mono> joined to inventory specs and maintenance cadence, so it stays in sync without duplicating data.</p>
+          </ArchBlock>
+          <ArchBlock title="Work sessions">
+            <p style={bodyText}><Mono>foreman-sessions</Mono> (<Mono>lib/sessions.js</Mono>) maps id → Session: title, assignee, status (active / done / abandoned), timestamps, and an array of SessionItems — each referencing its source task (maintenance composite key, chore id, or to-do id) alongside a snapshot of its label and room so History still renders if the source is later renamed or deleted. Items record a per-item result (done / skipped / blocked), notes, and any spawned blocker to-do. Completions made in a session write the same records as completing the task on its home page — the session is purely additive bookkeeping.</p>
+          </ArchBlock>
+          <ArchBlock title="Images">
+            <p style={bodyText}>All photo attachments pass through <Mono>lib/images.js</Mono>: resized on a canvas to at most 1400&nbsp;px and re-encoded as JPEG (quality 0.82), then stored as data URLs under the single <Mono>foreman-images</Mono> key — the one key the desktop backend partitions into its own <Mono>images.json</Mono> so the main data file stays small.</p>
+          </ArchBlock>
+          <ArchBlock title="Profiles & export">
+            <p style={bodyText}><Mono>lib/profiles.js</Mono> defines <Mono>PROFILE_DATA_KEYS</Mono> — the explicit manifest of every storage key a profile snapshot or export contains. Device-identity keys (<Mono>foreman-household-id</Mono>, <Mono>foreman-sync-secret</Mono>) are deliberately excluded so switching profiles never severs the reminder Worker pairing. Legacy keys stay in the manifest so old export files round-trip correctly.</p>
+          </ArchBlock>
+          <ArchBlock title="Entity types">
+            <p style={bodyText}>The categorization system (<Mono>lib/entityTypes.js</Mono>). Built-in types (room, exterior, system, HVAC, plumbing, electrical, safety, structure) each belong to a behavioral class — spatial (location-based) or functional (system-based) — which controls how categories are grouped and filtered on every page. Users can define custom types that extend the built-in hierarchy.</p>
+          </ArchBlock>
+        </div>
+      </ArchSection>
+
+      {/* ── Design ──────────────────────────────────────────────────────────── */}
       <ArchSection id="arch-design" label="Design" heading="Design System" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          The entire visual language is defined by approximately 30 CSS custom properties declared in src/styles/theme.css. Every color, font, spacing value, border style, and corner radius in the application references one of these variables. No hardcoded values appear in component code.
+          The entire visual language is 37 CSS custom properties declared in <Mono>src/styles/theme.css</Mono>. Every color, font, spacing value, border, and radius in the app references a token; no hardcoded values appear in component code.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "1rem" }}>
           {[
             ["Backgrounds", "Four depth levels: --fm-bg (base), --fm-bg-raised, --fm-bg-panel, --fm-bg-sunk"],
-            ["Borders", "--fm-hairline and --fm-hairline2 for line weights; --fm-border and --fm-border-2 as composite shorthands"],
+            ["Borders", "--fm-hairline and --fm-hairline2 line weights; --fm-border / --fm-border-2 as composite shorthands"],
             ["Text", "Three levels: --fm-ink (primary), --fm-ink-dim (secondary), --fm-ink-mute (placeholder/disabled)"],
-            ["Brass accent", "--fm-brass, --fm-brass-dim, --fm-brass-bg — used for all active states, focus rings, and interactive highlights"],
-            ["Status colors", "--fm-red (overdue), --fm-amber (due soon), --fm-green (on schedule), --fm-cyan (utility/in-progress)"],
+            ["Brass accent", "--fm-brass, --fm-brass-dim, --fm-brass-bg — all active states, focus rings, interactive highlights"],
+            ["Status colors", "--fm-red (overdue), --fm-amber (due soon), --fm-green (on schedule), --fm-cyan (utility/in-progress), --fm-purple (reserved)"],
             ["Typography", "--fm-serif (Newsreader), --fm-sans (Inter), --fm-mono (JetBrains Mono)"],
             ["Spacing", "A 10-step scale from 4px to 30px (--fm-spacing-xs through --fm-spacing-5xl)"],
-            ["Radius", "--fm-radius (2px) and --fm-radius-lg (3px)"],
+            ["Radius & tags", "--fm-radius (2px), --fm-radius-lg (3px); --fm-tag-size / -spacing / -padding for mono caps labels"],
           ].map(([name, desc]) => (
             <div key={name} style={{ display: "flex", gap: "0.75rem" }}>
               <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", minWidth: "120px", paddingTop: "0.15rem" }}>{name}</span>
@@ -451,27 +507,28 @@ function ArchTab() {
           ))}
         </div>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          The brass color (#c9a96e) anchors the design's identity. Three typefaces divide the visual hierarchy: Newsreader for display headings, Inter for body content, and JetBrains Mono for labels, tags, filter pills, and data-dense UI elements.
+          The brass color (#c9a96e) anchors the identity. Three typefaces divide the hierarchy: Newsreader for display headings, Inter for body content, JetBrains Mono for labels, tags, filter pills, and data-dense UI.
         </p>
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
-          Two additional themes are available and selectable in Preferences. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Daylight</span> inverts the palette to a warm off-white background with dark ink — suited for bright environments. <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>Obsidian</span> uses a near-black background with indigo-tinted accents in place of brass. Themes are applied via a <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>data-theme</span> attribute on the root element before React renders, so there is no flash of unstyled content on load. A <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>density control</span> in Preferences scales the root font size (Compact: 14px, Default: 16px, Comfortable: 18px), which propagates through every <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>rem</span>-based measurement in the app.
+          The two alternate themes are pure token-override blocks — <Mono>:root[data-theme="daylight"]</Mono> and <Mono>:root[data-theme="obsidian"]</Mono> in the same file redefine only the variables (Daylight also softens radii to 4/5&nbsp;px; Obsidian swaps brass for indigo); nothing outside <Mono>theme.css</Mono> changes. Theme and density are stamped onto the root element in <Mono>src/main.jsx</Mono> before React renders, so there is no flash of unstyled content. Density (<Mono>:root[data-density]</Mono>) scales the root font size — Compact 14px, Default 16px, Comfortable 18px — which propagates through every <Mono>rem</Mono>-based measurement in the app.
         </p>
       </ArchSection>
 
+      {/* ── Integrations ────────────────────────────────────────────────────── */}
       <ArchSection id="arch-integrations" label="Integrations" heading="External Integrations" sectionRefs={sectionRefs}>
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>Reminders</div>
-            <p style={bodyText}>An optional Cloudflare Worker (a small program running in the cloud, separate from this app) can send daily reminder digests via Discord. You configure this in Preferences by supplying a Discord webhook URL and a send time. The worker authenticates using a household ID and sync secret generated locally. It reads only next-due dates, not your full data. DST-aware timezone handling is configured per household.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>AI Inspection</div>
-            <p style={bodyText}>The Preferences page supports photo-based home inspection analysis powered by Groq's AI API. Photos are sent to Groq's servers for analysis and return a structured list of potential issues and maintenance suggestions. This integration requires a Groq API key configured in Preferences.</p>
-          </div>
-          <div>
-            <div style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", fontWeight: 500, marginBottom: "0.2rem" }}>PDF Parsing</div>
-            <p style={bodyText}>Equipment manuals can be uploaded as PDFs. Text is extracted locally in your browser using PDF.js — no file content is transmitted. Extracted text can be searched and referenced when setting up inventory items or maintenance tasks.</p>
-          </div>
+          <ArchBlock title="Reminders (Cloudflare Worker)">
+            <p style={bodyText}>The <Mono>worker/</Mono> directory is a self-contained Cloudflare Worker (<Mono>worker/src/index.js</Mono>, configured by <Mono>wrangler.toml</Mono>) backed by Workers KV. The frontend (<Mono>lib/reminders.js</Mono>) POSTs a snapshot of upcoming due dates to <Mono>/sync</Mono>, authenticated by a household ID + sync secret generated locally and registered in KV on first sync. A cron trigger fires hourly (<Mono>0 * * * *</Mono>); the scheduled handler dispatches only households whose stored <Mono>sendHourUtc</Mono> matches the current UTC hour — effectively a daily Discord digest at each household's chosen local time, recomputed across DST. <Mono>/dispatch</Mono> fires a digest on demand, and webhook URLs are validated against the same Discord regex on both ends. The Worker only ever sees next-due summaries, never full data.</p>
+          </ArchBlock>
+          <ArchBlock title="AI Inspection (Groq)">
+            <p style={bodyText}><Mono>lib/inspectionGroq.js</Mono> sends inspection photos to Groq's chat-completions API (<Mono>llama-3.3-70b-versatile</Mono>) and parses a structured JSON list of findings back into the review flow (<Mono>components/InspectionReview.jsx</Mono>). Requires a user-supplied Groq API key in Preferences and is entirely opt-in — one of only two features that send data off-device.</p>
+          </ArchBlock>
+          <ArchBlock title="Address import (OpenStreetMap)">
+            <p style={bodyText}>The other: in the Floor Plan's opt-in Online Mode, <Mono>lib/buildingFootprint.js</Mono> geocodes the household address against OpenStreetMap Nominatim and projects the returned building footprint into canvas units to seed the plan outline. Only the address string is transmitted.</p>
+          </ArchBlock>
+          <ArchBlock title="PDF parsing (local)">
+            <p style={bodyText}>Equipment manuals uploaded as PDFs are parsed entirely in-browser by <Mono>pdfjs-dist</Mono> (<Mono>lib/pdfExtract.js</Mono>); no file content is transmitted. Extracted text is searchable when setting up inventory items or maintenance tasks.</p>
+          </ArchBlock>
         </div>
       </ArchSection>
     </div>
@@ -745,7 +802,7 @@ function RoadmapTab() {
 
       <ArchSection id="road-mobile" label="Mobile" heading="Mobile App" sectionRefs={sectionRefs}>
         <p style={bodyText}>
-          A native mobile companion app is planned for the major mobile platforms. The mobile experience is designed around the moments when you're standing in front of the thing, not sitting at a desk. Three core workflows drive the design:
+          The native Android app is <span style={{ color: "var(--fm-ink)", fontWeight: 500 }}>shipped</span> (July 2026): a Kotlin shell around the same renderer as the desktop app — the <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>android/</span> directory is to the phone what <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>electron/</span> is to Windows. It runs standalone (full Foreman with on-device files, atomic writes, and rolling backups) or connected (QR-paired live window into the desktop host), with native notifications, <span style={{ fontFamily: "var(--fm-mono)", fontSize: "0.8rem" }}>foreman://</span> deep links, and save/open dialogs. An iOS shell and the camera-first workflows below are what remains — designed around the moments when you're standing in front of the thing, not sitting at a desk:
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", marginTop: "0.85rem" }}>
           {[

@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { createPortal } from "react-dom";
+import useIsMobile from "../src/hooks/useIsMobile.js";
 import { storageGet, storageSet } from "../lib/storage.js";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides } from "../lib/data.js";
 import { loadDeletedRows, saveDeletedRows } from "../lib/deletedRows.js";
@@ -61,6 +62,11 @@ function compressImage(file, maxWidth = 1200, quality = 0.75) {
 // navigate:     page navigation fn (used by the "View all on …" footer links)
 // showClose:    whether to render the header × (default true)
 export default function ItemDetailPanel({ selectedItem, onClose, navigate, showClose = true, onMaintenanceChanged }) {
+  const isMobile = useIsMobile();
+  // Phones: the side panel becomes a full-screen takeover when an item is
+  // selected (and disappears entirely when none is), so it must always be
+  // closable there.
+  if (isMobile) showClose = true;
   // ── Store-backed data ────────────────────────────────────────────────────
   const _itemFieldValues    = useForemanStore(s => s.itemFieldValues);
   const _spatialAssignments = useForemanStore(s => s.spatialAssignments);
@@ -336,7 +342,11 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
   const resetTaskDraft = () => { setAddingTask(false); setEditingTask(null); setNewTask({ task: "", schedule: "", season: null, lastCompleted: null, nextDate: null, followSchedule: false, notes: "" }); };
 
   return (
-    <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+    <div style={isMobile
+      ? (selectedItem
+          ? { background: "var(--fm-bg)", display: "flex", flexDirection: "column", inset: 0, overflow: "hidden", padding: "10px 10px calc(10px + env(safe-area-inset-bottom))", position: "fixed", zIndex: 85 }
+          : { display: "none" })
+      : { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
       <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "8px", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
 
         {/* Panel header — item name */}

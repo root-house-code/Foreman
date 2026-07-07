@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { storageGet, storageSet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides, defaultData } from "./lib/data.js";
 import MaintenanceTable from "./components/MaintenanceTable.jsx";
 import Legend from "./components/Legend.jsx";
@@ -45,6 +46,7 @@ function saveDates(key, dates) {
 }
 
 export default function HomeMaintenanceTable({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const [rows, setRows] = useState(() => loadData());
   const [uiState, setUIState] = usePageUIState("maintenance");
 
@@ -656,7 +658,7 @@ export default function HomeMaintenanceTable({ navigate, navState }) {
 
   return (
     <div style={{
-      height: "100vh",
+      height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh",
       overflow: "hidden",
       display: "flex",
       flexDirection: "column",

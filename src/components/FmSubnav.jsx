@@ -1,4 +1,55 @@
+import useIsMobile from '../hooks/useIsMobile.js';
+
 export default function FmSubnav({ tabs, active, stats, onTabChange, filter }) {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    // Phone: tabs and stats become horizontally scrolling strips (momentum
+    // scroll, hidden scrollbar via .fm-hscroll) with taller touch targets.
+    return (
+      <div style={{ background: 'var(--fm-bg-raised)', borderBottom: 'var(--fm-border)' }}>
+        <div className="fm-hscroll" style={{ gap: 4, padding: '0 10px' }}>
+          {tabs.map((t) => {
+            const isActive = t === active;
+            return (
+              <button
+                key={t}
+                onClick={() => !isActive && onTabChange?.(t)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: isActive ? '2px solid var(--fm-brass)' : '2px solid transparent',
+                  color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-dim)',
+                  flexShrink: 0,
+                  fontFamily: 'var(--fm-mono)',
+                  fontSize: 11.5,
+                  letterSpacing: '0.12em',
+                  minHeight: 44,
+                  padding: '0 10px',
+                  textTransform: 'uppercase',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {t}
+              </button>
+            );
+          })}
+        </div>
+        {(stats || filter) && (
+          <div className="fm-hscroll" style={{ alignItems: 'center', borderTop: '1px solid var(--fm-hairline)', gap: 20, padding: '7px 14px' }}>
+            {stats?.map((s, i) => (
+              <span key={i} style={{ color: 'var(--fm-ink-dim)', flexShrink: 0, fontFamily: 'var(--fm-mono)', fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                <b style={{ color: s.color || 'var(--fm-ink)', fontFamily: 'var(--fm-serif)', fontSize: 13.5, fontWeight: 500 }}>{s.value}</b>{' '}
+                {s.label}
+              </span>
+            ))}
+            {filter && <span style={{ flexShrink: 0 }}>{filter}</span>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{

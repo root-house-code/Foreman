@@ -1,4 +1,6 @@
 import { createPortal } from "react-dom";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 
 function fmtDate(d) {
   if (!d) return null;
@@ -14,6 +16,7 @@ export default function MaintenanceDetailModal({
   onLogIt,
   onClose,
 }) {
+  const isMobile = useIsMobile();
   const meta = [
     row.schedule  && ["Schedule",   row.schedule],
     row.season    && ["Season",     row.season.charAt(0).toUpperCase() + row.season.slice(1)],
@@ -35,10 +38,12 @@ export default function MaintenanceDetailModal({
         right: 0,
         top: 0,
         zIndex: 1100,
+        ...(isMobile ? sheetOverlay : null),
       }}
     >
       <div
         onMouseDown={e => e.stopPropagation()}
+        className={isMobile ? "fm-sheet-panel" : undefined}
         style={{
           background: "#0f1117",
           border: "1px solid #a8a29c",
@@ -48,6 +53,7 @@ export default function MaintenanceDetailModal({
           maxWidth: "460px",
           padding: "1.75rem 2rem",
           width: "90%",
+          ...(isMobile ? sheetPanel : null),
         }}
       >
         {/* Breadcrumb + close */}

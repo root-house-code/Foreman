@@ -3,6 +3,8 @@ import { useForemanStore } from "./lib/store.js";
 import { FIXED_SERVICE_CATEGORIES, toMonthly } from "./lib/services.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell, { toDateInput } from "./components/InlineEditCell.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
@@ -166,6 +168,7 @@ const EMPTY_VISIT = {
 // ── ServiceModal ──────────────────────────────────────────────────────────────
 
 function ServiceModal({ initial, isEdit, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState(() => ({ ...EMPTY_SERVICE, ...initial }));
 
   function set(field, val) { setForm(f => ({ ...f, [field]: val })); }
@@ -183,8 +186,8 @@ function ServiceModal({ initial, isEdit, onSave, onClose }) {
   }
 
   return (
-    <div style={modalOverlay} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <form onSubmit={handleSubmit} style={modalBox}>
+    <div style={{ ...modalOverlay, ...(isMobile ? sheetOverlay : null) }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={handleSubmit} className={isMobile ? "fm-sheet-panel" : undefined} style={{ ...modalBox, ...(isMobile ? { ...sheetPanel, margin: "auto 0 0" } : null) }}>
         <div style={{ borderBottom: "1px solid var(--fm-hairline)", paddingBottom: "0.75rem" }}>
           <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.1rem" }}>
             {isEdit ? "Edit Service" : "Add Service"}
@@ -293,6 +296,7 @@ function ServiceModal({ initial, isEdit, onSave, onClose }) {
 // ── VisitModal ────────────────────────────────────────────────────────────────
 
 function VisitModal({ service, initial, isEdit, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState(() => ({ ...EMPTY_VISIT, ...(initial || {}), serviceId: service?.id || "" }));
 
   function set(field, val) { setForm(f => ({ ...f, [field]: val })); }
@@ -312,8 +316,8 @@ function VisitModal({ service, initial, isEdit, onSave, onClose }) {
   }
 
   return (
-    <div style={modalOverlay} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <form onSubmit={handleSubmit} style={modalBox}>
+    <div style={{ ...modalOverlay, ...(isMobile ? sheetOverlay : null) }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={handleSubmit} className={isMobile ? "fm-sheet-panel" : undefined} style={{ ...modalBox, ...(isMobile ? { ...sheetPanel, margin: "auto 0 0" } : null) }}>
         <div style={{ borderBottom: "1px solid var(--fm-hairline)", paddingBottom: "0.75rem" }}>
           <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.1rem" }}>
             {isEdit ? "Edit Visit" : "Log Visit"}
@@ -369,6 +373,7 @@ function VisitModal({ service, initial, isEdit, onSave, onClose }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ServicesPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const svcData       = useForemanStore(s => s.services);
   const addService    = useForemanStore(s => s.addService);
   const updateService = useForemanStore(s => s.updateService);
@@ -529,7 +534,7 @@ export default function ServicesPage({ navigate, navState }) {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
+    <div style={{ height: isMobile ? "calc(100dvh - 56px - env(safe-area-inset-bottom))" : "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
 
       <FmHeader active="Services" tagline="Services" />
 

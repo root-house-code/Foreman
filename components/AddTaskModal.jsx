@@ -1,6 +1,8 @@
 import { useState, useMemo } from "react";
 import FollowButton from "./FollowButton.jsx";
 import { SEASON_OPTIONS } from "../lib/scheduleOptions.js";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 
 const MAINTENANCE_SCHEDULE_OPTIONS = [
   "Monthly", "Every 3 months", "Every 6 months", "Twice a year", "Annually",
@@ -55,6 +57,7 @@ function ComboField({ label, value, suggestions, open, onInputChange, onFocus, o
 }
 
 export default function AddTaskModal({ categories = [], rows = [], onSave, onClose, initialCategory = "", initialItem = "", lockCategoryItem = false }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState({
     category:      initialCategory || (categories[0] ?? ""),
     item:          initialItem || "",
@@ -126,10 +129,10 @@ export default function AddTaskModal({ categories = [], rows = [], onSave, onClo
 
   return (
     <div
-      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 200 }}
+      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 200, ...(isMobile ? sheetOverlay : null) }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 560, padding: "1.75rem 2rem", width: "90%" }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 560, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
         <div style={{ color: "#8b7d6b", fontFamily: "monospace", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: "1.5rem", textTransform: "uppercase" }}>
           New Maintenance Task
           {lockCategoryItem && (

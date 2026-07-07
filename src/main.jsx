@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "react-datepicker/dist/react-datepicker.css";
 import "./datepicker-theme.css";
 import "./reminders-a11y.css";
+import "./styles/mobile.css";
 import App from "./App.jsx";
 import { storageInit, storageGet } from "../lib/storage.js";
 import { loadFpData } from "../lib/fpData.js";
@@ -152,15 +153,16 @@ storageInit().then(() => {
 });
 
 // ── PWA service worker ─────────────────────────────────────────────────────────
-// Registers only in a production build served over http(s) outside the Electron
-// shell (the desktop app has no use for it; the Vite dev server would fight HMR).
+// Registers only in a production build served over http(s) outside a native
+// shell — Electron or the Android app, both of which set window.foreman and
+// have no use for it (the Vite dev server would fight HMR).
 // Browsers only expose serviceWorker in secure contexts (HTTPS or localhost), so
 // over plain LAN HTTP this is a silent no-op — the app runs exactly as before,
 // and phones still get the manifest icon + standalone display via Add to Home
 // Screen. Where a secure context exists, assets cache for instant loads.
 if (
   import.meta.env.PROD &&
-  !window.foreman?.isElectron &&
+  !window.foreman &&
   window.location.protocol.startsWith("http") &&
   "serviceWorker" in navigator
 ) {

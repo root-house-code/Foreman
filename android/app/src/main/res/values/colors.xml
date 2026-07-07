@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native mirrors of the design tokens in src/styles/theme.css -->
+<resources>
+    <color name="fm_bg">#0e1014</color>
+    <color name="fm_bg_raised">#13161e</color>
+    <color name="fm_hairline">#22262f</color>
+    <color name="fm_hairline2">#2b3140</color>
+    <color name="fm_ink">#e8e4dd</color>
+    <color name="fm_ink_dim">#a8a29c</color>
+    <color name="fm_ink_mute">#5e6068</color>
+    <color name="fm_brass">#c9a96e</color>
+    <color name="fm_brass_dim">#8b7d6b</color>
+    <color name="fm_red">#e07b6a</color>
+</resources>

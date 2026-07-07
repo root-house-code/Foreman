@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/fm_bg">
+
+    <WebView
+        android:id="@+id/webview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- ── Mode chooser (first run / Preferences → This Phone) ─────────────── -->
+    <ScrollView
+        android:id="@+id/chooser"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/fm_bg"
+        android:fillViewport="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="28dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="40dp"
+                android:fontFamily="monospace"
+                android:letterSpacing="0.35"
+                android:text="@string/chooser_kicker"
+                android:textColor="@color/fm_brass"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="30dp"
+                android:fontFamily="serif"
+                android:gravity="center"
+                android:text="@string/chooser_title"
+                android:textColor="@color/fm_ink"
+                android:textSize="24sp" />
+
+            <LinearLayout
+                android:id="@+id/choose_standalone"
+                style="@style/ChooserCard"
+                android:orientation="vertical">
+                <TextView style="@style/ChooserCardTitle" android:text="@string/choose_standalone_title" />
+                <TextView style="@style/ChooserCardBody" android:text="@string/choose_standalone_body" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/choose_connected"
+                style="@style/ChooserCard"
+                android:orientation="vertical">
+                <TextView style="@style/ChooserCardTitle" android:text="@string/choose_connected_title" />
+                <TextView style="@style/ChooserCardBody" android:text="@string/choose_connected_body" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:fontFamily="monospace"
+                android:gravity="center"
+                android:text="@string/chooser_footnote"
+                android:textColor="@color/fm_ink_mute"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/chooser_cancel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:background="?attr/selectableItemBackground"
+                android:fontFamily="monospace"
+                android:letterSpacing="0.1"
+                android:padding="10dp"
+                android:text="@string/chooser_cancel"
+                android:textColor="@color/fm_brass_dim"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ── Connected-mode error (host unreachable) ─────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/error_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/fm_bg"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="serif"
+            android:gravity="center"
+            android:text="@string/error_title"
+            android:textColor="@color/fm_ink"
+            android:textSize="21sp" />
+
+        <TextView
+            android:id="@+id/error_body"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.5"
+            android:textColor="@color/fm_ink_dim"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/error_retry"
+            style="@style/ErrorButton"
+            android:layout_marginTop="26dp"
+            android:text="@string/error_retry"
+            android:textColor="@color/fm_brass" />
+
+        <TextView
+            android:id="@+id/error_rescan"
+            style="@style/ErrorButton"
+            android:text="@string/error_rescan"
+            android:textColor="@color/fm_ink_dim" />
+
+        <TextView
+            android:id="@+id/error_standalone"
+            style="@style/ErrorButton"
+            android:text="@string/error_standalone"
+            android:textColor="@color/fm_ink_mute" />
+    </LinearLayout>
+</FrameLayout>

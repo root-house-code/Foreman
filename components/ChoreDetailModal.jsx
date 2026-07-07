@@ -1,4 +1,6 @@
 import { useState, useRef } from "react";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 import { getScheduleColor } from "../lib/scheduleColor.js";
 import MultiAssigneeInput from "./MultiAssigneeInput.jsx";
 import ComboInput from "./ComboInput.jsx";
@@ -72,6 +74,7 @@ const segInputStyle = {
 };
 
 export default function ChoreDetailModal({ chore, date, isDone, onToggleDone, onMarkDone, roomItemsMap = {}, onClose }) {
+  const isMobile = useIsMobile();
   const [hovered, setHovered] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -136,10 +139,10 @@ export default function ChoreDetailModal({ chore, date, isDone, onToggleDone, on
 
   return (
     <div
-      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300 }}
+      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300, ...(isMobile ? sheetOverlay : null) }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 460, padding: "1.75rem 2rem", width: "90%" }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 460, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
 
         {/* Label row */}
         <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>

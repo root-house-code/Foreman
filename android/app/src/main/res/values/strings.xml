@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Foreman</string>
+    <string name="notif_channel">Foreman reminders</string>
+
+    <!-- Mode chooser -->
+    <string name="chooser_kicker">FOREMAN</string>
+    <string name="chooser_title">How should this phone run?</string>
+    <string name="choose_standalone_title">On its own</string>
+    <string name="choose_standalone_body">Full Foreman on this phone. Your data lives here as real files, with the same atomic writes and rolling backups as the desktop app.</string>
+    <string name="choose_connected_title">Paired with your desktop</string>
+    <string name="choose_connected_body">A live window into the Foreman running on your computer. On the desktop, open Preferences → Integrations → Multi-Device Sharing and scan the QR code.</string>
+    <string name="chooser_footnote">You can change this anytime in Preferences → Integrations.</string>
+    <string name="chooser_cancel">Cancel</string>
+    <string name="scan_prompt">Scan the QR code from Preferences → Multi-Device Sharing on your desktop</string>
+
+    <!-- Connected-mode error -->
+    <string name="error_title">Can\'t reach your desktop</string>
+    <string name="error_body">Foreman on this phone is a window into the desktop host at %1$s. Make sure that computer is on and both devices are on the same wifi, then retry.</string>
+    <string name="error_retry">Retry</string>
+    <string name="error_rescan">Re-scan QR</string>
+    <string name="error_standalone">Use this phone on its own instead</string>
+</resources>

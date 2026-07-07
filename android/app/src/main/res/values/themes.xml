@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Foreman" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/fm_bg</item>
+        <item name="android:statusBarColor">@color/fm_bg</item>
+        <item name="android:navigationBarColor">@color/fm_bg</item>
+        <item name="colorPrimary">@color/fm_brass</item>
+        <item name="colorOnPrimary">@color/fm_bg</item>
+        <item name="colorSurface">@color/fm_bg_raised</item>
+        <item name="colorOnSurface">@color/fm_ink</item>
+        <item name="android:colorBackground">@color/fm_bg</item>
+    </style>
+
+    <style name="Theme.Foreman.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/fm_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Foreman</item>
+    </style>
+</resources>

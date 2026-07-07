@@ -2,6 +2,7 @@ import { useState, useContext, useMemo, useEffect, useRef } from 'react';
 import { FmNavContext } from '../context/FmNavContext';
 import { openCommandPalette } from '../../lib/commandPalette.js';
 import PageInfoButton from '../../components/PageInfoButton.jsx';
+import useIsMobile from '../hooks/useIsMobile.js';
 import { useForemanStore } from '../../lib/store.js';
 import { buildAlerts, summarizeAlerts } from '../../lib/alerts.js';
 import { loadChoreNextDates } from '../../lib/chores.js';
@@ -112,7 +113,11 @@ function AlertsTray({ navigate }) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     }
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -172,7 +177,8 @@ function AlertsTray({ navigate }) {
           borderRadius: 4,
           boxShadow: '0 8px 32px #00000066',
           maxHeight: 440,
-          minWidth: 300,
+          maxWidth: 'calc(100vw - 24px)',
+          minWidth: 'min(300px, calc(100vw - 24px))',
           overflowY: 'auto',
           position: 'absolute',
           right: 0,
@@ -371,6 +377,227 @@ function NavGroup({ group, currentActive, open, setOpen, navigate }) {
   );
 }
 
+// ── Mobile chrome ─────────────────────────────────────────────────────────────
+// Phone-width variant: compact sticky top bar + thumb-reach bottom tab bar +
+// slide-up "Pages" sheet covering the full page list. Desktop is untouched.
+
+const BOTTOM_TABS = [
+  { page: 'Workbench', label: 'Workbench', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </svg>
+  ) },
+  { page: 'Dashboard', label: 'Dashboard', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" />
+    </svg>
+  ) },
+  { page: 'Calendar', label: 'Calendar', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  ) },
+  { page: 'Maintenance', label: 'Maint', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+    </svg>
+  ) },
+];
+
+const PagesIcon = (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="18" x2="20" y2="18" />
+  </svg>
+);
+
+function MobilePagesSheet({ currentActive, navigate, dateStrip, onClose }) {
+  const sections = [
+    ...NAV_GROUPS,
+    { label: 'More', pages: [...NAV_DIRECT, ...NAV_META] },
+  ];
+  return (
+    <div
+      className="fm-sheet-backdrop"
+      onClick={onClose}
+      style={{ background: 'rgba(0,0,0,0.6)', inset: 0, position: 'fixed', zIndex: 90 }}
+    >
+      <div
+        className="fm-sheet-panel"
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--fm-bg-raised)',
+          borderTop: '1px solid var(--fm-hairline2)',
+          borderRadius: '14px 14px 0 0',
+          bottom: 0,
+          left: 0,
+          maxHeight: '78vh',
+          overflowY: 'auto',
+          paddingBottom: 'calc(12px + env(safe-area-inset-bottom))',
+          position: 'fixed',
+          right: 0,
+        }}
+      >
+        <div style={{ background: 'var(--fm-hairline2)', borderRadius: 2, height: 4, margin: '10px auto 4px', width: 36 }} />
+        <div style={{ color: 'var(--fm-ink-mute)', fontFamily: 'var(--fm-mono)', fontSize: 9.5, letterSpacing: '0.2em', padding: '6px 20px 2px', textTransform: 'uppercase' }}>
+          {dateStrip}
+        </div>
+        {sections.map(group => (
+          <div key={group.label} style={{ padding: '10px 8px 0' }}>
+            <div style={{ color: 'var(--fm-brass-dim)', fontFamily: 'var(--fm-mono)', fontSize: 9.5, letterSpacing: '0.18em', padding: '4px 12px 6px', textTransform: 'uppercase' }}>
+              {group.label}
+            </div>
+            {group.pages.map(page => {
+              const isActive = page === currentActive;
+              return (
+                <button
+                  key={page}
+                  onClick={() => { onClose(); if (!isActive) navigate(page); }}
+                  style={{
+                    alignItems: 'center',
+                    background: isActive ? 'var(--fm-brass-bg)' : 'transparent',
+                    border: 'none',
+                    borderRadius: 6,
+                    color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-dim)',
+                    display: 'flex',
+                    fontFamily: 'var(--fm-mono)',
+                    fontSize: 13,
+                    justifyContent: 'space-between',
+                    letterSpacing: '0.08em',
+                    minHeight: 46,
+                    padding: '0 12px',
+                    textTransform: 'uppercase',
+                    width: '100%',
+                  }}
+                >
+                  {page}
+                  {isActive && <span style={{ fontSize: 11 }}>●</span>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MobileHeader({ currentActive, tagline, dateStrip, navigate }) {
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  const iconBtn = {
+    alignItems: 'center',
+    background: 'transparent',
+    border: '1px solid var(--fm-hairline)',
+    borderRadius: 6,
+    color: 'var(--fm-ink-dim)',
+    display: 'flex',
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  };
+
+  return (
+    <>
+      <header style={{
+        alignItems: 'center',
+        background: 'var(--fm-bg)',
+        borderBottom: 'var(--fm-border)',
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'space-between',
+        padding: '10px 14px',
+        paddingTop: 'calc(10px + env(safe-area-inset-top))',
+        position: 'sticky',
+        top: 0,
+        zIndex: 50,
+      }}>
+        <h1 style={{ color: 'var(--fm-ink)', font: '500 17px var(--fm-serif)', letterSpacing: '-0.01em', margin: 0, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          Foreman <span style={{ color: 'var(--fm-brass)' }}>/</span>{' '}
+          <span style={{ color: 'var(--fm-brass-dim)', fontStyle: 'italic' }}>{tagline}</span>
+        </h1>
+        <div style={{ alignItems: 'center', display: 'flex', flexShrink: 0, gap: 8 }}>
+          <button onClick={openCommandPalette} title="Search" aria-label="Search" style={iconBtn}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+          </button>
+          <AlertsTray navigate={navigate} />
+        </div>
+      </header>
+
+      {/* Bottom tab bar — thumb-first primary navigation */}
+      <nav style={{
+        background: 'var(--fm-bg-raised)',
+        borderTop: '1px solid var(--fm-hairline2)',
+        bottom: 0,
+        display: 'flex',
+        left: 0,
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        position: 'fixed',
+        right: 0,
+        zIndex: 80,
+      }}>
+        {BOTTOM_TABS.map(({ page, label, icon }) => {
+          const isActive = page === currentActive;
+          return (
+            <button
+              key={page}
+              onClick={() => { setSheetOpen(false); if (!isActive) navigate(page); }}
+              aria-label={page}
+              style={{
+                alignItems: 'center',
+                background: 'transparent',
+                border: 'none',
+                borderTop: `2px solid ${isActive ? 'var(--fm-brass)' : 'transparent'}`,
+                color: isActive ? 'var(--fm-brass)' : 'var(--fm-ink-mute)',
+                display: 'flex',
+                flex: 1,
+                flexDirection: 'column',
+                gap: 3,
+                minHeight: 56,
+                justifyContent: 'center',
+                padding: '6px 0 8px',
+              }}
+            >
+              {icon}
+              <span style={{ fontFamily: 'var(--fm-mono)', fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</span>
+            </button>
+          );
+        })}
+        <button
+          onClick={() => setSheetOpen(o => !o)}
+          aria-label="All pages"
+          style={{
+            alignItems: 'center',
+            background: 'transparent',
+            border: 'none',
+            borderTop: `2px solid ${sheetOpen ? 'var(--fm-brass)' : 'transparent'}`,
+            color: sheetOpen ? 'var(--fm-brass)' : 'var(--fm-ink-mute)',
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            gap: 3,
+            minHeight: 56,
+            justifyContent: 'center',
+            padding: '6px 0 8px',
+          }}
+        >
+          {PagesIcon}
+          <span style={{ fontFamily: 'var(--fm-mono)', fontSize: 8.5, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Pages</span>
+        </button>
+      </nav>
+
+      {sheetOpen && (
+        <MobilePagesSheet
+          currentActive={currentActive}
+          navigate={navigate}
+          dateStrip={dateStrip}
+          onClose={() => setSheetOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 // ── Header ────────────────────────────────────────────────────────────────────
 
 export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline = 'your house, in order' }) {
@@ -378,6 +605,11 @@ export default function FmHeader({ active, dateStrip = buildDateStrip(), tagline
   const currentActive = active || nav.current;
   const onlineMode = readOnlineMode();
   const [open, setOpen] = useState(null);
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return <MobileHeader currentActive={currentActive} tagline={tagline} dateStrip={dateStrip} navigate={nav.navigate} />;
+  }
 
   return (
     <header style={{

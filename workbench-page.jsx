@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 import { useForemanStore, usePageUIState } from "./lib/store.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import { loadData } from "./lib/data.js";
@@ -277,6 +279,7 @@ function QueueRow({ item, sessions, onMaintLog, onChoreLog, onTodoDone, onProjec
 // ── NewSessionModal ───────────────────────────────────────────────────────────
 
 function NewSessionModal({ onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [title, setTitle] = useState("Work Session");
   const [date, setDate]   = useState("");
   const [startHH, setStartHH] = useState("");
@@ -320,9 +323,9 @@ function NewSessionModal({ onSave, onClose }) {
   );
 
   return (
-    <div style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300 }}
+    <div style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300, ...(isMobile ? sheetOverlay : null) }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: 6, maxWidth: 420, padding: "1.75rem 2rem", width: "90%" }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: 6, maxWidth: 420, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
         <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.14em", marginBottom: "1rem", textTransform: "uppercase" }}>New Work Session</div>
 
         {fieldRow("Title",
@@ -466,6 +469,7 @@ function SessionCard({ session, onStart, onComplete, onDelete }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function WorkbenchPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const chores          = useForemanStore(s => s.chores);
   const projects        = useForemanStore(s => s.projects);
   const inventory       = useForemanStore(s => s.inventory);
@@ -718,7 +722,7 @@ export default function WorkbenchPage({ navigate, navState }) {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
       <FmHeader active="Workbench" tagline="Workbench" />
 
       <FmSubnav
@@ -733,11 +737,17 @@ export default function WorkbenchPage({ navigate, navState }) {
       />
 
       {/* ── Queue tab ── */}
+      {/* Phones: the queue + session planner stack in one scroll instead of
+          side-by-side panes with independent scrollbars. */}
       {activeTab === "Queue" && (
-        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        <div style={isMobile
+          ? { flex: 1, overflowY: "auto" }
+          : { display: "flex", flex: 1, overflow: "hidden" }}>
 
           {/* Work Queue */}
-          <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflowY: "auto", padding: "1.25rem 1.5rem 3rem" }}>
+          <div style={isMobile
+            ? { padding: "1rem 0.9rem 1.25rem" }
+            : { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflowY: "auto", padding: "1.25rem 1.5rem 3rem" }}>
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginBottom: "1rem" }}>
               {["All", "Maintenance", "Chores", "To Dos", "Projects"].map(t => (
                 <button key={t} onClick={() => setTypeFilter(t)} style={pillStyle(typeFilter === t)}>
@@ -773,7 +783,9 @@ export default function WorkbenchPage({ navigate, navState }) {
           </div>
 
           {/* Session Planner */}
-          <div style={{ background: "var(--fm-bg-panel)", borderLeft: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflowY: "auto", padding: "1.25rem 1.25rem 2rem", width: "28%" }}>
+          <div style={isMobile
+            ? { background: "var(--fm-bg-panel)", borderTop: "var(--fm-border)", padding: "1rem 0.9rem calc(24px + env(safe-area-inset-bottom))" }
+            : { background: "var(--fm-bg-panel)", borderLeft: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflowY: "auto", padding: "1.25rem 1.25rem 2rem", width: "28%" }}>
             <div style={{ alignItems: "center", display: "flex", marginBottom: "0.85rem" }}>
               <div style={{ color: "var(--fm-brass-dim)", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>Work Sessions</div>
               <button
@@ -805,7 +817,7 @@ export default function WorkbenchPage({ navigate, navState }) {
 
       {/* ── History tab ── */}
       {activeTab === "History" && (
-        <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem 3rem" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "1rem 0.9rem calc(72px + env(safe-area-inset-bottom))" : "1.5rem 2rem 3rem" }}>
           {completedSessions.length === 0 ? (
             <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", margin: 0 }}>
               No completed sessions yet. Complete a work session to start your history.

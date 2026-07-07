@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 
 const fieldLabel = {
   color: "var(--fm-brass-dim)",
@@ -29,6 +31,7 @@ const fieldSelect = { ...fieldInput, cursor: "pointer" };
 
 // presetWork = { kind: "project" | "todo", id, name } — pre-fills and hides the linkedWork selector.
 export default function ExpenseModal({ expense, presetWork, itemOptions = [], onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState({
     date: expense?.date || new Date().toISOString().slice(0, 10),
     amount: expense?.amount != null ? String(expense.amount) : "",
@@ -66,15 +69,18 @@ export default function ExpenseModal({ expense, presetWork, itemOptions = [], on
         alignItems: "center", background: "rgba(0,0,0,0.65)", bottom: 0,
         display: "flex", justifyContent: "center", left: 0,
         position: "fixed", right: 0, top: 0, zIndex: 1100,
+        ...(isMobile ? sheetOverlay : null),
       }}
     >
       <div
         onClick={e => e.stopPropagation()}
+        className={isMobile ? "fm-sheet-panel" : undefined}
         style={{
           background: "var(--fm-bg-panel)", border: "var(--fm-border)",
           borderRadius: "var(--fm-radius-lg)", maxWidth: 480,
           padding: "1.75rem 2rem", width: "90%",
           boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+          ...(isMobile ? sheetPanel : null),
         }}
       >
         {/* Header */}

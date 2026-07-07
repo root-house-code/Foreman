@@ -7,6 +7,12 @@ import "react-resizable/css/styles.css";
 // the container automatically — no manual width wiring needed. The v2 config
 // API (gridConfig/dragConfig/resizeConfig) is a beta; legacy is stable + documented.
 const GridLayout = WidthProvider(RGL);
+
+// Phone-width replacement for the grid: same panel children, stacked in a
+// single scrolling column at their natural heights. Grid props are ignored.
+function MobileStack({ children }) {
+  return <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>;
+}
 import { useForemanStore } from "./lib/store.js";
 import { toMonthly } from "./lib/services.js";
 import { buildRoster, computeForecast, computeReserve, computeInvested, computeRepairs12mo } from "./lib/lifecycleStats.js";
@@ -15,6 +21,7 @@ import { buildSupplyRows } from "./lib/supplies.js";
 import { monthlyUtilitiesTotal } from "./lib/utilities.js";
 import { storageGet, storageSet } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
+import useIsMobile from "./src/hooks/useIsMobile.js";
 import { loadTodos } from "./lib/todos.js";
 import { loadData } from "./lib/data.js";
 import { loadDeletedCategories } from "./lib/deletedCategories.js";
@@ -128,6 +135,8 @@ function DashboardPanel({ title, children, onDeepLink, deepLinkLabel, isEditMode
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage({ navigate }) {
+  const isMobile = useIsMobile();
+  const DashGrid = isMobile ? MobileStack : GridLayout; // same children, no grid on phones
   const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const in7Days  = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 7); return d; }, [today]);
   const in30Days = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 30); return d; }, [today]);
@@ -439,12 +448,14 @@ export default function DashboardPage({ navigate }) {
             onMouseEnter={e => e.currentTarget.style.background = "var(--fm-brass)22"}
             onMouseLeave={e => e.currentTarget.style.background = "var(--fm-brass-bg)"}
           >+ Add Visualization</button>
-          <button
-            onClick={() => setIsEditMode(true)}
-            style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.06em", padding: "0.2rem 0.75rem", transition: "all 0.12s" }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
-          >⊞ Arrange Panels</button>
+          {!isMobile && (
+            <button
+              onClick={() => setIsEditMode(true)}
+              style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.06em", padding: "0.2rem 0.75rem", transition: "all 0.12s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-ink-dim)"; }}
+            >⊞ Arrange Panels</button>
+          )}
         </div>
       )}
 
@@ -466,8 +477,8 @@ export default function DashboardPage({ navigate }) {
         `}</style>
       )}
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0.75rem 1rem 3rem" }}>
-        <GridLayout
+      <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "0.75rem 0.75rem calc(72px + env(safe-area-inset-bottom))" : "0.75rem 1rem 3rem" }}>
+        <DashGrid
           layout={layout}
           cols={12}
           rowHeight={36}
@@ -593,7 +604,7 @@ export default function DashboardPage({ navigate }) {
               />
             </div>
           ))}
-        </GridLayout>
+        </DashGrid>
       </div>
 
       {/* Visualization builder modal */}

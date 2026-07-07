@@ -7,6 +7,8 @@ import { loadCategoryTypeOverrides } from "./lib/categoryTypes.js";
 import { buildDefaultCategoryTypes, buildItemMetaByName } from "./lib/itemLocationSystem.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -179,6 +181,7 @@ const modalBox = {
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SuppliesPage({ navigate }) {
+  const isMobile = useIsMobile();
   const [copied, setCopied] = useState(false);
 
   const itemFieldValues = useForemanStore(s => s.itemFieldValues);
@@ -253,7 +256,7 @@ export default function SuppliesPage({ navigate }) {
   }
 
   return (
-    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
+    <div style={{ height: isMobile ? "calc(100dvh - 56px - env(safe-area-inset-bottom))" : "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
       <FmHeader active="Supplies" tagline="stock & resupply" />
 
       <FmSubnav
@@ -414,6 +417,7 @@ export default function SuppliesPage({ navigate }) {
 }
 
 function SupplyModal({ supply, onClose, setSupplyState, addManualSupply, updateManualSupply, deleteManualSupply }) {
+  const isMobile = useIsMobile();
   const isManual = supply.source === "manual";
   const isNew = !!supply.__new;
 
@@ -456,8 +460,8 @@ function SupplyModal({ supply, onClose, setSupplyState, addManualSupply, updateM
   }
 
   return (
-    <div style={modalOverlay} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={modalBox}>
+    <div style={{ ...modalOverlay, ...(isMobile ? sheetOverlay : null) }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ ...modalBox, ...(isMobile ? sheetPanel : null) }}>
         <div style={{ marginBottom: "1.1rem" }}>
           <span style={sectionTitle}>{isNew ? "Add Supply" : isManual ? "Edit Supply" : "Supply Settings"}</span>
           {!isManual && (

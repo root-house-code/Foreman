@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 import DatePicker from "react-datepicker";
 import AssigneeInput from "./AssigneeInput.jsx";
 import ImageAttachments from "./ImageAttachments.jsx";
 import { fieldLabel, fieldInput, fieldSelect, DueDateBtn } from "./ModalShared.jsx";
 
 export default function ProjectModal({ project, categories, categoryItems, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState(project ? {
     ...project,
     estimatedCostText: project.estimatedCost != null ? String(project.estimatedCost) : "",
@@ -34,13 +37,16 @@ export default function ProjectModal({ project, categories, categoryItems, onSav
         alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0,
         display: "flex", justifyContent: "center", left: 0,
         position: "fixed", right: 0, top: 0, zIndex: 1100,
+        ...(isMobile ? sheetOverlay : null),
       }}
     >
       <div
         onClick={e => e.stopPropagation()}
+        className={isMobile ? "fm-sheet-panel" : undefined}
         style={{
           background: "#1a1f2e", border: "1px solid #a8a29c", borderRadius: "8px",
           maxHeight: "90vh", maxWidth: 540, overflowY: "auto", padding: "2rem", width: "90%",
+          ...(isMobile ? sheetPanel : null),
         }}
       >
         <div style={{ color: "#f0e6d3", fontFamily: "monospace", fontSize: "0.72rem", letterSpacing: "0.15em", marginBottom: "1.5rem", textTransform: "uppercase" }}>

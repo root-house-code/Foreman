@@ -3,6 +3,8 @@ import { computeNextDate } from "../lib/scheduleInterval.js";
 import { useForemanStore } from "../lib/store.js";
 import { consumingTaskInfo } from "../lib/supplies.js";
 import AssigneeInput from "./AssigneeInput.jsx";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 
 const CAL_DOWS_LONG   = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const CAL_MONTHS_LONG = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -73,6 +75,7 @@ function buildInitialNext(completedAt, schedule, season) {
 }
 
 export default function MaintenanceCompleteModal({ row, date, isCompleted, lastDate, onMarkDone, onClose, onRowEdit }) {
+  const isMobile = useIsMobile();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(() => {
     const completedAt = toISODate(date);
@@ -139,10 +142,10 @@ export default function MaintenanceCompleteModal({ row, date, isCompleted, lastD
 
   return (
     <div
-      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300 }}
+      style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 300, ...(isMobile ? sheetOverlay : null) }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 460, padding: "1.75rem 2rem", width: "90%" }}>
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "#0f1117", border: "1px solid #a8a29c", borderRadius: "6px", maxWidth: 460, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
 
         {/* Label row */}
         <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.3rem" }}>

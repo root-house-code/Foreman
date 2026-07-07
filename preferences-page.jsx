@@ -756,6 +756,51 @@ function MultiDeviceCard() {
   );
 }
 
+// ─── ThisPhoneCard ────────────────────────────────────────────────────────────
+// Android app only: shows which mode this phone is in (standalone with its own
+// on-device data, or connected as a live window into a desktop host) and hands
+// off to the native mode chooser to switch. The native side owns the actual
+// mode state; window.foreman.getAppInfo() reads it synchronously.
+
+function ThisPhoneCard() {
+  const info = (() => {
+    try { return window.foreman?.getAppInfo?.() ?? {}; } catch { return {}; }
+  })();
+  const connected = info.mode === "connected";
+
+  return (
+    <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
+        <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>This Phone</span>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", marginLeft: "auto" }}>
+          <span style={{ background: connected ? "var(--fm-cyan)" : "var(--fm-green)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+          <span style={{ color: connected ? "var(--fm-cyan)" : "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em" }}>
+            {connected ? "Connected to desktop" : "Standalone"}
+          </span>
+        </div>
+      </div>
+      <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.55, margin: 0 }}>
+        {connected
+          ? `Live window into the desktop host${info.hostUrl ? ` at ${info.hostUrl.replace(/\/#.*$/, "")}` : ""}. Data lives on that computer; this phone shows and edits it in real time.`
+          : "Full Foreman running on this phone. Data is stored on the device as real files, with the same atomic writes and rolling backups as the desktop app."}
+      </p>
+      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.7rem" }}>
+        <button
+          onClick={() => window.foreman?.openModeSettings?.()}
+          style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-brass-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.06em", padding: "0.3rem 0.7rem", transition: "all 0.15s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--fm-brass)"; e.currentTarget.style.color = "var(--fm-brass)"; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--fm-hairline2)"; e.currentTarget.style.color = "var(--fm-brass-dim)"; }}
+        >{connected ? "Change host / go standalone" : "Connect to a desktop host"}</button>
+      </div>
+      {!connected && info.dataDir && (
+        <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", lineHeight: 1.6, marginTop: "0.6rem", overflowWrap: "anywhere" }}>
+          Data: {info.dataDir}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── IntegrationsSettings ─────────────────────────────────────────────────────
 
 const REMINDER_HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: formatHour12(h) }));
@@ -885,6 +930,13 @@ function IntegrationsSettings() {
       {window.foreman?.isElectron && (
         <div style={{ marginBottom: "1.5rem" }}>
           <MultiDeviceCard />
+        </div>
+      )}
+
+      {/* This Phone (Android app only) — standalone vs connected-to-desktop mode */}
+      {window.foreman?.isAndroid && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <ThisPhoneCard />
         </div>
       )}
 

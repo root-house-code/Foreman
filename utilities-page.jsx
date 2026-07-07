@@ -3,6 +3,8 @@ import { useForemanStore } from "./lib/store.js";
 import { FIXED_UTILITY_TYPES, DEFAULT_UNIT, estimatedMonthly, monthlyUtilitiesTotal, UTILITY_BILLING_CYCLES, utilityCycleLabel } from "./lib/utilities.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 import { FilterDropdown } from "./components/FilterPill.jsx";
 import InlineEditCell from "./components/InlineEditCell.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
@@ -174,6 +176,7 @@ const EMPTY_BILL = {
 // ── UtilityModal ───────────────────────────────────────────────────────────────
 
 function UtilityModal({ initial, isEdit, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState(() => ({ ...EMPTY_UTILITY, ...initial }));
   function set(field, val) { setForm(f => ({ ...f, [field]: val })); }
 
@@ -195,8 +198,8 @@ function UtilityModal({ initial, isEdit, onSave, onClose }) {
   }
 
   return (
-    <div style={modalOverlay} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <form onSubmit={handleSubmit} style={modalBox}>
+    <div style={{ ...modalOverlay, ...(isMobile ? sheetOverlay : null) }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={handleSubmit} className={isMobile ? "fm-sheet-panel" : undefined} style={{ ...modalBox, ...(isMobile ? { ...sheetPanel, margin: "auto 0 0" } : null) }}>
         <div style={{ borderBottom: "1px solid var(--fm-hairline)", paddingBottom: "0.75rem" }}>
           <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.1rem" }}>
             {isEdit ? "Edit Utility" : "Add Utility"}
@@ -293,6 +296,7 @@ function UtilityModal({ initial, isEdit, onSave, onClose }) {
 // ── BillModal ──────────────────────────────────────────────────────────────────
 
 function BillModal({ utility, initial, isEdit, onSave, onClose }) {
+  const isMobile = useIsMobile();
   const [form, setForm] = useState(() => ({ ...EMPTY_BILL, ...(initial || {}), utilityId: utility?.id || initial?.utilityId || "" }));
   function set(field, val) { setForm(f => ({ ...f, [field]: val })); }
 
@@ -315,8 +319,8 @@ function BillModal({ utility, initial, isEdit, onSave, onClose }) {
   }
 
   return (
-    <div style={modalOverlay} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <form onSubmit={handleSubmit} style={modalBox}>
+    <div style={{ ...modalOverlay, ...(isMobile ? sheetOverlay : null) }} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={handleSubmit} className={isMobile ? "fm-sheet-panel" : undefined} style={{ ...modalBox, ...(isMobile ? { ...sheetPanel, margin: "auto 0 0" } : null) }}>
         <div style={{ borderBottom: "1px solid var(--fm-hairline)", paddingBottom: "0.75rem" }}>
           <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.1rem" }}>
             {isEdit ? "Edit Bill" : "Log Bill"}
@@ -642,7 +646,7 @@ function UtilityHistoryChart({ bills, utilitiesById }) {
         )}
 
         {mode === "totals" && (
-          <div style={{ alignItems: "center", display: "grid", gap: "1.75rem", gridTemplateColumns: "repeat(3, 1fr)", height: "100%" }}>
+          <div style={{ alignItems: "center", display: "grid", gap: isMobile ? "0.9rem" : "1.75rem", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", height: "100%" }}>
             <MiniPie title="By Type" slices={toSlices(sumBy(rows, r => r.type), t => typeColor[t] || "var(--fm-ink-dim)")} />
             <MiniPie title="By Season" slices={toSlices(sumBy(rows, r => seasonOf(r.month)), s => SEASON_COLOR[s], { order: SEASON_ORDER })} />
             <MiniPie title="By Year" slices={toSlices(sumBy(rows, r => String(r.year)), y => yearColor[y] || "var(--fm-ink-dim)", { cap: 8 })} />
@@ -656,6 +660,7 @@ function UtilityHistoryChart({ bills, utilitiesById }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function UtilitiesPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const utilData      = useForemanStore(s => s.utilities);
   const addUtility    = useForemanStore(s => s.addUtility);
   const updateUtility = useForemanStore(s => s.updateUtility);
@@ -798,7 +803,7 @@ export default function UtilitiesPage({ navigate, navState }) {
   const searchInputStyle = { background: "var(--fm-bg-sunk)", border: "var(--fm-border-2)", borderRadius: "var(--fm-radius)", color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", outline: "none", padding: "0.35rem 0.7rem", width: 200 };
 
   return (
-    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
+    <div style={{ height: isMobile ? "calc(100dvh - 56px - env(safe-area-inset-bottom))" : "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
 
       <FmHeader active="Utilities" tagline="Utilities" />
 

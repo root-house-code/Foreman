@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, forwardRef } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 import DatePicker from "react-datepicker";
 import { loadTodos, saveTodos, createTodo } from "./lib/todos.js";
 import { createProject } from "./lib/projects.js";
@@ -69,6 +70,7 @@ function statusBadgeStyle(status) {
 }
 
 export default function ProjectsPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const projects = useForemanStore(s => s.projects);
   const expenses = useForemanStore(s => s.expenses);
   const addExpense = useForemanStore(s => s.addExpense);
@@ -332,7 +334,7 @@ export default function ProjectsPage({ navigate, navState }) {
   const projectPct = projectTodos.length === 0 ? 0 : Math.round((projectDoneCount / projectTodos.length) * 100);
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
 
       {expenseModalOpen && selectedProject && (
         <ExpenseModal
@@ -389,10 +391,13 @@ export default function ProjectsPage({ navigate, navState }) {
         />
       </div>
 
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      {/* Phones: the three panes stack in one scroll instead of side-by-side */}
+      <div style={isMobile ? { flex: 1, overflowY: "auto" } : { display: "flex", flex: 1, overflow: "hidden" }}>
 
         {/* Left sidebar */}
-        <aside style={{ borderRight: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 240 }}>
+        <aside style={isMobile
+          ? { borderBottom: "var(--fm-border)", display: "flex", flexDirection: "column" }
+          : { borderRight: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 240 }}>
 
           {/* Projects widget */}
           <div style={{ borderBottom: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, maxHeight: "45%", minHeight: 100 }}>
@@ -525,7 +530,9 @@ export default function ProjectsPage({ navigate, navState }) {
         </aside>
 
         {/* Center panel */}
-        <main style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        <main style={isMobile
+          ? { display: "flex", flexDirection: "column", minWidth: 0 }
+          : { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           {!selectedProject ? (
             <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", gap: "0.5rem", justifyContent: "center" }}>
               <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>No project selected</div>
@@ -680,7 +687,9 @@ export default function ProjectsPage({ navigate, navState }) {
         </main>
 
         {/* Right panel */}
-        <aside style={{ borderLeft: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 300 }}>
+        <aside style={isMobile
+          ? { borderTop: "var(--fm-border)", display: "flex", flexDirection: "column" }
+          : { borderLeft: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 300 }}>
           {rightPanelType === "project" && rightProjectForm ? (
             <div style={{ flex: 1, overflowY: "auto", padding: "1.25rem 1rem 2rem" }}>
               <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.15em", marginBottom: "0.75rem", textTransform: "uppercase" }}>Project Details</div>

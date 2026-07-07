@@ -5,6 +5,7 @@ import Placeholder from "@tiptap/extension-placeholder";
 import { Markdown } from "tiptap-markdown";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 import { defaultData, loadData, loadUseDefaultData } from "./lib/data.js";
 import { loadDeletedRows, saveDeletedRows } from "./lib/deletedRows.js";
 import { loadDeletedItems } from "./lib/deletedItems.js";
@@ -242,6 +243,7 @@ function RestoreButton({ onRestore }) {
 }
 
 export default function GuidePage({ navigate, navState = null }) {
+  const isMobile = useIsMobile();
   const [deletedRows, setDeletedRows] = useState(() => loadDeletedRows());
   const [deletedItems]      = useState(() => loadDeletedItems());
   const [deletedCategories] = useState(() => loadDeletedCategories());
@@ -774,7 +776,7 @@ export default function GuidePage({ navigate, navState = null }) {
   const showDetail = isEditing || articleChips.length > 0 || hasItemSpecs;
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
       <style>{EDITOR_STYLES}</style>
 
       <FmHeader active="Notebook" tagline="Notebook" />

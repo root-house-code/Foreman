@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, forwardRef } from "react";
 import { storageGet, storageSet } from "./lib/storage.js";
-import { fieldLabel, fieldInput, DueDateBtn, STATUS_COLUMNS, PRIORITY_LABELS } from "./components/ModalShared.jsx";
+import { fieldLabel, fieldInput, DueDateBtn, STATUS_COLUMNS, PRIORITY_LABELS, sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import { createPortal } from "react-dom";
@@ -152,6 +153,7 @@ function TodoCard({ todo, onEdit, isDragging, onDragStart, onDragEnd, onStatusCh
 }
 
 function MaintenanceCompletionModal({ todo, rowDataByKey, onConfirm, onClose }) {
+  const isMobile = useIsMobile();
   const rowData = todo._maintenanceKey ? rowDataByKey[todo._maintenanceKey] : null;
   const { schedule, season } = rowData || {};
   const [lastCompleted, setLastCompleted] = useState(new Date());
@@ -166,11 +168,12 @@ function MaintenanceCompletionModal({ todo, rowDataByKey, onConfirm, onClose }) 
   return createPortal(
     <div
       onClick={onClose}
-      style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1100 }}
+      style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1100, ...(isMobile ? sheetOverlay : null) }}
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 420, padding: "1.75rem 2rem", width: "90%" }}
+        className={isMobile ? "fm-sheet-panel" : undefined}
+        style={{ background: "var(--fm-bg-panel)", border: "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", maxWidth: 420, padding: "1.75rem 2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}
       >
         <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.15em", marginBottom: "0.35rem", textTransform: "uppercase" }}>
           Log Maintenance Completion
@@ -244,6 +247,7 @@ function MaintenanceCompletionModal({ todo, rowDataByKey, onConfirm, onClose }) 
 }
 
 export default function BoardPage({ navigate, navState }) {
+  const isMobile = useIsMobile();
   const [todos, setTodos] = useState(() => loadTodos());
   const projects = useForemanStore(s => s.projects);
   const chores   = useForemanStore(s => s.chores);
@@ -597,7 +601,7 @@ export default function BoardPage({ navigate, navState }) {
   const pillBase = { borderRadius: "var(--fm-radius)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.08em", padding: "0.22rem 0.6rem", textTransform: "uppercase", transition: "all 0.12s" };
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
 
       {modalState !== null && (
         <TodoModal
@@ -633,10 +637,13 @@ export default function BoardPage({ navigate, navState }) {
         ]}
       />
 
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      {/* Phones: sidebar stacks above the board in one scroll */}
+      <div style={isMobile ? { flex: 1, overflowY: "auto" } : { display: "flex", flex: 1, overflow: "hidden" }}>
 
         {/* Sidebar */}
-        <aside style={{ borderRight: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 220 }}>
+        <aside style={isMobile
+          ? { borderBottom: "var(--fm-border)", display: "flex", flexDirection: "column" }
+          : { borderRight: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 220 }}>
 
           {/* Projects */}
           <div style={{ borderBottom: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, maxHeight: "45%", minHeight: 100 }}>
@@ -730,8 +737,12 @@ export default function BoardPage({ navigate, navState }) {
         </aside>
 
         {/* Main content area */}
-        <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
-          <div style={{ flex: 1, overflowY: "auto", padding: "1.25rem 1.5rem 4rem" }}>
+        <div style={isMobile
+          ? { display: "flex", flexDirection: "column" }
+          : { display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+          <div style={isMobile
+            ? { padding: "1rem 0.9rem 1.5rem" }
+            : { flex: 1, overflowY: "auto", padding: "1.25rem 1.5rem 4rem" }}>
 
             {activeTab === "Board" && (<>
               {/* Filter + action bar */}
@@ -772,8 +783,9 @@ export default function BoardPage({ navigate, navState }) {
                 </button>
               </div>
 
-              {/* Kanban columns */}
-              <div style={{ alignItems: "flex-start", display: "flex", gap: "0.85rem" }}>
+              {/* Kanban columns — stacked vertically on phones (cards move via
+                  their own status controls; drag-and-drop is a desktop affordance) */}
+              <div style={{ alignItems: isMobile ? "stretch" : "flex-start", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.85rem" }}>
                 {STATUS_COLUMNS.map(col => {
                   const colTodos = todosByStatus[col.key];
                   const isDragTarget = !!dragging && dragOverCol === col.key;
@@ -783,7 +795,7 @@ export default function BoardPage({ navigate, navState }) {
                       onDragEnter={() => dragging && setDragOverCol(col.key)}
                       onDragOver={e => e.preventDefault()}
                       onDrop={() => handleDrop(col.key)}
-                      style={{ background: isDragTarget ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)", border: isDragTarget ? "1px solid rgba(201,169,110,0.4)" : "var(--fm-border)", borderRadius: "var(--fm-radius)", flex: 1, minHeight: 240, padding: "0.7rem", transition: "background 0.15s, border-color 0.15s" }}
+                      style={{ background: isDragTarget ? "var(--fm-bg-raised)" : "var(--fm-bg-panel)", border: isDragTarget ? "1px solid rgba(201,169,110,0.4)" : "var(--fm-border)", borderRadius: "var(--fm-radius)", flex: 1, minHeight: isMobile ? 0 : 240, padding: "0.7rem", transition: "background 0.15s, border-color 0.15s" }}
                     >
                       <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between", marginBottom: "0.85rem" }}>
                         <span style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>
