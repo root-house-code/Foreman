@@ -12,7 +12,7 @@
     "fetch-manuals": "node scripts/fetch-manuals.js",
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "vite build && electron-builder",
-    "android:build": "vite build && cd android && gradlew assembleDebug"
+    "android:build": "vite build && cd android && .\\gradlew.bat assembleDebug"
   },
   "dependencies": {
     "@tiptap/extension-placeholder": "^3.23.1",
