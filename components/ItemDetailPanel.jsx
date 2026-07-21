@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 import { storageGet, storageSet } from "../lib/storage.js";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides } from "../lib/data.js";
 import { loadDeletedRows, saveDeletedRows } from "../lib/deletedRows.js";
@@ -21,6 +22,7 @@ import { loadTodos, saveTodos, createTodo } from "../lib/todos.js";
 import { createProject } from "../lib/projects.js";
 import { useForemanStore } from "../lib/store.js";
 import { SEASON_OPTIONS } from "../lib/scheduleOptions.js";
+import { loadGroqApiKey } from "../lib/groqConfig.js";
 import FollowButton from "./FollowButton.jsx";
 import SchedulePicker from "./SchedulePicker.jsx";
 import AddTaskModal from "./AddTaskModal.jsx";
@@ -262,6 +264,11 @@ export default function ItemDetailPanel({ selectedItem, onClose, navigate, showC
   }
 
   async function handleFetchTasks(manufacturer, model, item, category) {
+    const apiKey = loadGroqApiKey();
+    if (!apiKey) {
+      setFetchError("Groq API key not configured. Add one in Preferences → Integrations.");
+      return;
+    }
     setFetchingTasks(true);
     setFetchError(null);
     setSuggestedTasks(null);
@@ -282,7 +289,7 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
-        headers: { "Authorization": `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`, "Content-Type": "application/json" },
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: 1024 }),
       });
       if (!res.ok) throw new Error(`Groq API error ${res.status}`);
@@ -813,8 +820,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
 
       {/* Add / Edit maintenance task modal */}
       {addingTask && selectedItem && createPortal(
-        <div onClick={resetTaskDraft} style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: "min(95vw, 1120px)", overflow: "hidden", width: "95vw" }}>
+        <div onClick={resetTaskDraft} style={{ alignItems: "center", background: "rgba(0,0,0,0.75)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000, ...(isMobile ? sheetOverlay : null) }}>
+          <div onClick={e => e.stopPropagation()} className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: "min(95vw, 1120px)", overflow: "hidden", width: "95vw", ...(isMobile ? sheetPanel : null) }}>
             <div style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", justifyContent: "space-between", padding: "0.85rem 1.25rem" }}>
               <div>
                 <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>{editingTask ? "Edit Maintenance Task" : "Add Maintenance Task"}</span>
@@ -885,8 +892,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       )}
 
       {deleteTaskPrompt && createPortal(
-        <div onClick={() => setDeleteTaskPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 440, padding: "2rem", width: "90%" }}>
+        <div onClick={() => setDeleteTaskPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000, ...(isMobile ? sheetOverlay : null) }}>
+          <div onClick={e => e.stopPropagation()} className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 440, padding: "2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
             <div style={{ color: "var(--fm-ink)", fontSize: "1.05rem", marginBottom: "0.75rem" }}>Delete "{deleteTaskPrompt.task}"?</div>
             <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", lineHeight: 1.7, margin: "0 0 1.75rem" }}>
               {deleteTaskPrompt?._isCustom ? "This will permanently remove this task from the maintenance schedule. This action cannot be undone." : "This will remove this task from your maintenance schedule. It can be restored from the Guide page."}
@@ -901,8 +908,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       )}
 
       {deleteProjectPrompt && createPortal(
-        <div onClick={() => setDeleteProjectPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 440, padding: "2rem", width: "90%" }}>
+        <div onClick={() => setDeleteProjectPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000, ...(isMobile ? sheetOverlay : null) }}>
+          <div onClick={e => e.stopPropagation()} className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 440, padding: "2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
             <div style={{ color: "var(--fm-ink)", fontSize: "1.05rem", marginBottom: "0.75rem" }}>Delete "{deleteProjectPrompt.name}"?</div>
             <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", lineHeight: 1.7, margin: "0 0 1.75rem" }}>This will permanently delete this project. This action cannot be undone.</p>
             <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
@@ -915,8 +922,8 @@ Return 5–12 tasks. Include only tasks that are standard for this appliance typ
       )}
 
       {deleteTodoPrompt && createPortal(
-        <div onClick={() => setDeleteTodoPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 440, padding: "2rem", width: "90%" }}>
+        <div onClick={() => setDeleteTodoPrompt(null)} style={{ alignItems: "center", background: "rgba(0,0,0,0.7)", bottom: 0, display: "flex", justifyContent: "center", left: 0, position: "fixed", right: 0, top: 0, zIndex: 1000, ...(isMobile ? sheetOverlay : null) }}>
+          <div onClick={e => e.stopPropagation()} className={isMobile ? "fm-sheet-panel" : undefined} style={{ background: "var(--fm-bg-panel)", border: "1px solid var(--fm-hairline2)", borderRadius: "8px", maxWidth: 440, padding: "2rem", width: "90%", ...(isMobile ? sheetPanel : null) }}>
             <div style={{ color: "var(--fm-ink)", fontSize: "1.05rem", marginBottom: "0.75rem" }}>Delete "{deleteTodoPrompt.title}"?</div>
             <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.8rem", lineHeight: 1.7, margin: "0 0 1.75rem" }}>This will permanently delete this to do. This action cannot be undone.</p>
             <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>

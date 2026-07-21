@@ -34,4 +34,13 @@ contextBridge.exposeInMainWorld("foreman", {
   onRemoteChange: (cb) => {
     ipcRenderer.on("remote-storage-change", (_event, delta) => cb(delta));
   },
+
+  // ── Gmail Bill Import ──────────────────────────────────────────────────────
+  gmailConnect: () => ipcRenderer.invoke("gmail:connect"),
+  gmailDisconnect: () => ipcRenderer.invoke("gmail:disconnect"),
+  gmailStatus: () => ipcRenderer.invoke("gmail:status"),
+  gmailGetAccessToken: () => ipcRenderer.invoke("gmail:getAccessToken"),
+  gmailSetClientConfig: (config) => ipcRenderer.invoke("gmail:setClientConfig", config),
+  gmailGetClientConfigStatus: () => ipcRenderer.invoke("gmail:getClientConfigStatus"),
+  gmailClearClientConfig: () => ipcRenderer.invoke("gmail:clearClientConfig"),
 });

@@ -225,6 +225,7 @@ function TenetsTab() {
 const ARCH_SECTIONS = [
   { id: "arch-storage",      label: "Data Storage" },
   { id: "arch-multidevice",  label: "Multi-Device" },
+  { id: "arch-gmailbills",   label: "Gmail Bills" },
   { id: "arch-pwa",          label: "PWA & Offline" },
   { id: "arch-stack",        label: "Built With" },
   { id: "arch-structure",    label: "App Structure" },
@@ -342,6 +343,21 @@ function ArchTab() {
         <p style={{ ...bodyText, marginTop: "0.85rem" }}>
           The honest constraint: devices reach the data by reaching the host, so the desktop app must be running (it lives in the system tray, so this is normally true) and every device must be on the same network. Away from home, a paired device has no data to show — the tradeoff this design makes to stay local and account-free.
         </p>
+      </ArchSection>
+
+      {/* ── Gmail Bill Import ───────────────────────────────────────────────── */}
+      <ArchSection id="arch-gmailbills" label="Gmail Bills" heading="Gmail Bill Import" sectionRefs={sectionRefs}>
+        <p style={bodyText}>
+          Utility bills that arrive in Gmail can be turned into Foreman bill records without manual entry. Foreman connects to a Google account, scans a single Gmail label, extracts each candidate email's data, and surfaces the results in a review queue — nothing is written to Utilities until you confirm it. This is a desktop-only feature: OAuth needs the system browser and a loopback redirect, which only the Electron shell provides. Imported bills sync to paired phones and browsers through the normal multi-device hub.
+        </p>
+        <div style={stack}>
+          <ArchRow name="No shared credential">Foreman is a public repo, so there is no Google OAuth client baked into the codebase — a Testing-status app is capped at 100 test users and getting a restricted scope like <Mono>gmail.readonly</Mono> verified for production means a real security assessment, not something to carry on every user's behalf. Each user instead creates their own free Google Cloud OAuth client (Preferences walks through it) and pastes the Client ID/Secret in — never a build-time env var, so nothing Google-specific ever ships in the app bundle.</ArchRow>
+          <ArchRow name="Least-privilege by label">Google offers no per-label read scope — the consent screen always says "read all your email." Foreman's mitigation is that its own search is <em>always</em> scoped to one label (default <Mono>Foreman/Bills</Mono>), never the inbox. You create that label once with a Gmail filter that routes bill senders to it; Foreman searches <Mono>label:"Foreman/Bills"</Mono> and nothing else.</ArchRow>
+          <ArchRow name="Where the secrets live">Both the pasted Client Secret and the OAuth refresh token are handled entirely in the Electron main process (<Mono>electron/gmailAuth.cjs</Mono>: PKCE authorization-code flow, a temporary <Mono>127.0.0.1</Mono> loopback server for the redirect, token exchange over <Mono>node:https</Mono>) and encrypted with Electron's <Mono>safeStorage</Mono> (OS-level DPAPI on Windows) before being written to their own file, <Mono>Documents/Foreman/gmail-auth.json</Mono> — deliberately outside <Mono>data.json</Mono> so neither ever rides along in LAN broadcasts to paired devices or in the backup rotation. This is stricter than the existing LAN pairing token, which is plaintext in the shared store. Changing the saved Client ID invalidates any existing refresh token, since Google rejects a refresh issued to a different client; disconnecting the Gmail account alone leaves the app credentials in place so reconnecting doesn't require re-entering them.</ArchRow>
+          <ArchRow name="Local parsing by default">Fetching from Gmail is itself a network call, so Online Mode stays required either way — but what happens to the email <em>content</em> is a user choice. The default, <Mono>lib/billsHeuristics.js</Mono>, extracts amount/due date/period/vendor/usage with regex against common bill phrasing ("total due," "payment due by," a sender-domain lookup for the vendor) entirely on-device — nothing is transmitted. Switching the toggle to AI parsing sends each candidate's text to Groq (<Mono>lib/billsGroq.js</Mono>, same pattern as the inspection importer) for a strict JSON extraction instead, trading that privacy for better recall on bill formats the regex doesn't recognize. Both paths return the identical shape, so <Mono>lib/gmailSync.js</Mono> swaps between them with no other code changes.</ArchRow>
+          <ArchRow name="Review, never auto-write"><Mono>lib/gmailSync.js</Mono> orchestrates one "Sync Now": dedupes against already-processed message IDs, flags likely duplicates of existing bills (dimmed and pre-deselected, never dropped), and returns candidates to <Mono>components/GmailBillReview.jsx</Mono>. Only rows you keep and confirm call <Mono>addBill</Mono>/<Mono>addUtility</Mono>. Every candidate links back to its source email in Gmail so you can verify.</ArchRow>
+          <ArchRow name="Weekly reconnect is expected">Because each user's OAuth app stays in Google's "Testing" publishing status (avoiding the CASA security assessment that restricted scopes otherwise require), refresh tokens expire seven days after consent. Sync is manual and the UI has a distinct "reconnect" state, so this surfaces as a quick re-consent roughly once a week — by design, not a fault.</ArchRow>
+        </div>
       </ArchSection>
 
       {/* ── PWA ─────────────────────────────────────────────────────────────── */}
@@ -899,6 +915,18 @@ function RoadmapTab() {
 // ─── Updates tab ──────────────────────────────────────────────────────────────
 
 const UPDATES = [
+  {
+    date: "July 19, 2026",
+    heading: "Dashboard: Visualization Builder, Rebuilt",
+    bullets: [
+      ["One workspace instead of eight steps", "The chart builder is no longer a wizard. Every control — chart type, data, measure, group-by, filters, range, appearance — sits in one left rail with a full-size live preview beside it, Metabase-style. Change anything, watch the chart update, save when it looks right. The panel is named inline in the header."],
+      ["Split by a second dimension", "Bar, line, area, and table charts accept an optional Split By field: completions by month split by assignee become stacked bars, one color per person. Up to six series get fixed colors from a colorblind-validated palette; anything beyond folds into “Other” instead of inventing new hues. Multi-series charts always carry a legend."],
+      ["A Stat tile and more math", "A new Stat chart type renders one big number — total spend this year, distinct items serviced — sized to a compact tile. Measures grow from count/sum/average to include min, max, and distinct count."],
+      ["Time reads like time", "Grouping by month now sorts chronologically instead of alphabetically, and months with no records show as zero instead of silently vanishing from the axis — a spending trend can't hide a quiet month anymore."],
+      ["Values formatted like values", "Panels can format as plain numbers, currency, or durations — axes, labels, tooltips, tables, and stat tiles all follow. Filter values now suggest from your real data, so you pick “Plumbing” instead of guessing its spelling, and filters gain ≥ and ≤ operators."],
+      ["Utility bills fixed as a source", "The Utility Bills data source now actually reads your bills (it was wired to a stale data shape), including usage, provider name, and billing month. Inventory charts resolve each item's real room from the floor plan. Panels also gained a Duplicate action in their ⋯ menu."],
+    ],
+  },
   {
     date: "July 3, 2026",
     heading: "Mobile: Install Foreman to Your Home Screen",

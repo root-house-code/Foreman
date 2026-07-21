@@ -4,8 +4,9 @@ import QRCode from "qrcode";
 import { storageGet, storageSet, storageDel } from "./lib/storage.js";
 import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 import {
-  PROFILES, PROFILE_DATA_KEYS,
+  PROFILE_DATA_KEYS,
   getAllProfiles, loadUserProfiles,
   loadActiveProfile, switchProfile,
   exportProfile, importProfileData, hasProfileSnapshot,
@@ -33,6 +34,8 @@ import { MANUFACTURERS_BY_ITEM } from "./lib/manufacturers.js";
 import { getModels } from "./lib/models.js";
 import { expectedYears, EXPECTED_LIFESPAN } from "./lib/lifespans.js";
 import InspectionReview from "./components/InspectionReview.jsx";
+import GmailBillsImport from "./components/GmailBillsImport.jsx";
+import { loadGroqApiKey, saveGroqApiKey } from "./lib/groqConfig.js";
 import {
   getWebhookUrl, setWebhookUrl,
   getSendHourLocal, setSendHourLocal,
@@ -285,13 +288,17 @@ function ProfileSettings() {
       <div style={{ alignItems: "flex-start", display: "flex", gap: "1.5rem", marginBottom: "1.5rem" }}>
         <div style={{ flexShrink: 0 }}>
           <label style={labelStyle}>Active Profile</label>
-          <select
-            value={selected}
-            onChange={e => { setSelected(e.target.value); setSwitching(false); setRenamingKey(null); setConfirmDelete(false); }}
-            style={selectStyle}
-          >
-            {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </select>
+          {allProfiles.length > 0 ? (
+            <select
+              value={selected}
+              onChange={e => { setSelected(e.target.value); setSwitching(false); setRenamingKey(null); setConfirmDelete(false); }}
+              style={selectStyle}
+            >
+              {allProfiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          ) : (
+            <div style={{ ...selectStyle, alignItems: "center", color: "var(--fm-ink-mute)", cursor: "default", display: "flex" }}>None yet</div>
+          )}
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -366,53 +373,64 @@ function ProfileSettings() {
       </div>
 
       {/* Profile description card */}
-      <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", marginBottom: "1.5rem", padding: "0.9rem 1rem" }}>
-        {renamingKey === selected ? (
-          <input
-            autoFocus
-            value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
-            onFocus={() => setRenameFocused(true)}
-            onBlur={() => { setRenameFocused(false); handleCommitRename(); }}
-            onKeyDown={e => {
-              if (e.key === "Enter") { e.preventDefault(); handleCommitRename(); }
-              if (e.key === "Escape") { e.preventDefault(); setRenamingKey(null); }
-            }}
-            style={{ ...inputStyle(renameFocused), marginBottom: "0.35rem" }}
-          />
-        ) : (
-          <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", marginBottom: "0.35rem", textTransform: "uppercase" }}>
-            {selectedMeta?.label}
-          </div>
-        )}
-        <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", lineHeight: 1.55, margin: 0 }}>
-          {selectedMeta?.description}
-        </p>
-        <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginTop: "0.6rem" }}>
-          {selected === activeProfile && (
-            <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
-              <span style={{ background: "var(--fm-brass)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
-              <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em" }}>Currently active</span>
+      {allProfiles.length > 0 ? (
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "4px", marginBottom: "1.5rem", padding: "0.9rem 1rem" }}>
+          {renamingKey === selected ? (
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onFocus={() => setRenameFocused(true)}
+              onBlur={() => { setRenameFocused(false); handleCommitRename(); }}
+              onKeyDown={e => {
+                if (e.key === "Enter") { e.preventDefault(); handleCommitRename(); }
+                if (e.key === "Escape") { e.preventDefault(); setRenamingKey(null); }
+              }}
+              style={{ ...inputStyle(renameFocused), marginBottom: "0.35rem" }}
+            />
+          ) : (
+            <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", marginBottom: "0.35rem", textTransform: "uppercase" }}>
+              {selectedMeta?.label}
             </div>
           )}
-          {isUserProfile && (
-            <>
-              <button
-                onClick={handleStartRename}
-                style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: 0, transition: "color 0.12s" }}
-                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
-                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-              >Rename</button>
-              <button
-                onClick={() => setConfirmDelete(true)}
-                style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: 0, transition: "color 0.12s" }}
-                onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
-                onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
-              >Delete</button>
-            </>
-          )}
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", lineHeight: 1.55, margin: 0 }}>
+            {selectedMeta?.description}
+          </p>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", marginTop: "0.6rem" }}>
+            {selected === activeProfile && (
+              <div style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+                <span style={{ background: "var(--fm-brass)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+                <span style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.08em" }}>Currently active</span>
+              </div>
+            )}
+            {isUserProfile && (
+              <>
+                <button
+                  onClick={handleStartRename}
+                  style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: 0, transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >Rename</button>
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  style={{ background: "none", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.05em", padding: 0, transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >Delete</button>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px dashed var(--fm-hairline2)", borderRadius: "4px", marginBottom: "1.5rem", padding: "0.9rem 1rem" }}>
+          <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.12em", marginBottom: "0.35rem", textTransform: "uppercase" }}>
+            No profile yet
+          </div>
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem", lineHeight: 1.55, margin: 0 }}>
+            Your data isn't tied to a named profile until you create one. Use + New Profile below to get started — a guided setup is on the way.
+          </p>
+        </div>
+      )}
 
       {/* Delete confirmation */}
       {confirmDelete && (
@@ -421,9 +439,11 @@ function ProfileSettings() {
             Delete "{selectedMeta?.label}"?
           </div>
           <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 0.9rem" }}>
-            {selected === activeProfile
-              ? "This will delete the profile and switch you to Foreman. This cannot be undone."
-              : "All saved data for this profile will be permanently removed. This cannot be undone."}
+            {selected !== activeProfile
+              ? "All saved data for this profile will be permanently removed. This cannot be undone."
+              : selected === "foreman"
+              ? "This will delete the profile and reset it to a clean slate. This cannot be undone."
+              : "This will delete the profile and switch you to Foreman. This cannot be undone."}
           </p>
           <div style={{ display: "flex", gap: "0.6rem" }}>
             <button
@@ -810,7 +830,11 @@ function isWebhookValid(url) {
 }
 
 function IntegrationsSettings() {
+  const isMobile = useIsMobile();
   const [onlineMode, setOnlineMode]       = useState(() => storageGet("foreman-online-mode") === true);
+  const [groqKey, setGroqKey]             = useState(() => loadGroqApiKey());
+  const [showGroqKey, setShowGroqKey]     = useState(false);
+  const [groqKeyFocused, setGroqKeyFocused] = useState(false);
   const [webhook, setWebhook]             = useState(() => getWebhookUrl());
   const [showWebhook, setShowWebhook]     = useState(false);
   const [hour, setHour]                   = useState(() => getSendHourLocal());
@@ -848,6 +872,16 @@ function IntegrationsSettings() {
     setWebhook("");
     setWebhookUrl("");
     setStatus(null);
+  }
+
+  const trimmedGroqKey = groqKey.trim();
+  const groqKeyDirty = trimmedGroqKey !== loadGroqApiKey();
+  function handleGroqKeySave() {
+    saveGroqApiKey(trimmedGroqKey);
+  }
+  function handleGroqKeyClear() {
+    setGroqKey("");
+    saveGroqApiKey("");
   }
 
   async function handleSync() {
@@ -941,6 +975,65 @@ function IntegrationsSettings() {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        {/* Groq API Key — powers AI Inspection, item task suggestions, and Gmail Bill Import */}
+        <div style={{ opacity: onlineMode ? 1 : 0.45, pointerEvents: onlineMode ? "auto" : "none", transition: "opacity 0.2s" }}>
+        <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", marginBottom: "0.4rem" }}>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem" }}>Groq (AI features)</span>
+            {trimmedGroqKey && (
+              <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", marginLeft: "auto" }}>
+                <span style={{ background: "var(--fm-green)", borderRadius: "50%", display: "inline-block", height: "6px", width: "6px" }} />
+                <span style={{ color: "var(--fm-green)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", letterSpacing: "0.08em" }}>Configured</span>
+              </div>
+            )}
+          </div>
+          <p style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 1.1rem" }}>
+            Powers AI Inspection import, manufacturer task suggestions, and Gmail Bill Import. Get a free key at console.groq.com/keys — it's stored locally on this device only, never shipped in the app itself.
+          </p>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <label style={labelStyle} htmlFor="integ-groq-input">API Key</label>
+            <div style={{ alignItems: "stretch", display: "flex", gap: "0.4rem" }}>
+              <input
+                id="integ-groq-input"
+                type={showGroqKey ? "text" : "password"}
+                value={groqKey}
+                onChange={e => setGroqKey(e.target.value)}
+                onFocus={() => setGroqKeyFocused(true)}
+                onBlur={() => setGroqKeyFocused(false)}
+                placeholder="gsk_..."
+                style={inputStyle(groqKeyFocused)}
+              />
+              <button
+                type="button"
+                onClick={() => setShowGroqKey(s => !s)}
+                style={{ background: "transparent", border: "1px solid var(--fm-hairline2)", borderRadius: "3px", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.66rem", letterSpacing: "0.06em", padding: "0 0.7rem", textTransform: "uppercase", whiteSpace: "nowrap" }}
+              >
+                {showGroqKey ? "Hide" : "Show"}
+              </button>
+            </div>
+          </div>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+            <div>
+              {trimmedGroqKey && (
+                <button
+                  onClick={handleGroqKeyClear}
+                  style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.67rem", padding: 0, transition: "color 0.12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "var(--fm-red)"}
+                  onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-dim)"}
+                >Remove</button>
+              )}
+            </div>
+            <button
+              onClick={handleGroqKeySave}
+              disabled={!groqKeyDirty}
+              style={{ background: groqKeyDirty ? "#c9a96e22" : "transparent", border: `1px solid ${groqKeyDirty ? "var(--fm-brass)" : "var(--fm-ink-dim)"}`, borderRadius: "3px", color: groqKeyDirty ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: groqKeyDirty ? "pointer" : "default", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", letterSpacing: "0.05em", padding: "0.4rem 1rem", transition: "all 0.15s" }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+        </div>
+
         {/* Discord / Reminder Agent card */}
         <div style={{ opacity: onlineMode ? 1 : 0.45, pointerEvents: onlineMode ? "auto" : "none", transition: "opacity 0.2s" }}>
         <div style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderRadius: "6px", padding: "1.1rem 1.25rem" }}>
@@ -991,14 +1084,14 @@ function IntegrationsSettings() {
             </p>
           </div>
 
-          <div style={{ display: "flex", gap: "1rem", marginBottom: "1.1rem" }}>
+          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: "1rem", marginBottom: "1.1rem" }}>
             <div>
               <label style={labelStyle} htmlFor="integ-hour-select">Send time</label>
               <select
                 id="integ-hour-select"
                 value={hour}
                 onChange={e => setHour(parseInt(e.target.value, 10))}
-                style={{ ...selectStyle, width: "150px" }}
+                style={{ ...selectStyle, width: isMobile ? "100%" : "150px" }}
               >
                 {REMINDER_HOURS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
               </select>
@@ -1081,6 +1174,11 @@ function IntegrationsSettings() {
             </div>
           </details>
         </div>
+        </div>
+
+        {/* Gmail Bill Import (desktop app only — self-gates via window.foreman?.isElectron) */}
+        <div style={{ opacity: onlineMode ? 1 : 0.45, pointerEvents: onlineMode ? "auto" : "none", transition: "opacity 0.2s" }}>
+          <GmailBillsImport />
         </div>
 
         {/* ICS Export card */}
@@ -1617,8 +1715,8 @@ function ImportExportSettings() {
 
   async function handleProcess() {
     if (!file) return;
-    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-    if (!apiKey) { setProcessError("Groq API key not configured. Set VITE_GROQ_API_KEY in your .env file."); return; }
+    const apiKey = loadGroqApiKey();
+    if (!apiKey) { setProcessError("Groq API key not configured. Add one in Preferences → Integrations."); return; }
 
     setProcessError(null);
     setPhase("extracting");
@@ -2655,6 +2753,7 @@ function DefaultValuesSettings() {
 }
 
 export default function PreferencesPage({ navigate }) {
+  const isMobile = useIsMobile();
   const [activeSection, setActiveSection] = useState("profile");
 
   const activeLabel = NAV_ITEMS.find(i => i.key === activeSection)?.label ?? NAV_ITEMS[0].label;
@@ -2665,7 +2764,7 @@ export default function PreferencesPage({ navigate }) {
   }
 
   return (
-    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: "100vh", overflow: "hidden" }}>
+    <div style={{ background: "var(--fm-bg)", color: "var(--fm-ink)", display: "flex", flexDirection: "column", fontFamily: "var(--fm-sans)", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
 
       <FmHeader active="Preferences" tagline="Preferences" />
       <FmSubnav
@@ -2674,9 +2773,9 @@ export default function PreferencesPage({ navigate }) {
         onTabChange={handleTabChange}
       />
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "2rem 2.5rem" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "1rem 0.9rem calc(1.5rem + env(safe-area-inset-bottom))" : "2rem 2.5rem" }}>
         {activeSection === "profile" && (
-          <div style={{ alignItems: "start", display: "grid", gap: "0 3rem", gridTemplateColumns: "1fr 1fr 1fr" }}>
+          <div style={{ alignItems: "start", display: "grid", gap: isMobile ? "1.75rem" : "0 3rem", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr" }}>
             <ProfileSettings />
             <HouseholdSettings />
             <CategoryTypesSettings />

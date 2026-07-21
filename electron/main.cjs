@@ -3,6 +3,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { readAllSync, flush, createBackup } = require("./storageFile.cjs");
 const { createLanServer, lanAddresses } = require("./lanServer.cjs");
+const gmailAuth = require("./gmailAuth.cjs");
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
@@ -208,6 +209,21 @@ ipcMain.handle("lan:start", () => startLan().catch(err => ({ running: false, err
 ipcMain.handle("lan:stop", () => stopLan());
 ipcMain.handle("lan:status", () => lanStatus());
 ipcMain.handle("lan:regenerate", () => { saveLanSettings({ token: crypto.randomUUID() }); return lanStatus(); });
+
+// ── Gmail Bill Import ─────────────────────────────────────────────────────────
+// OAuth + refresh-token storage live in main (only process that can hold the
+// client secret). The renderer calls the Gmail REST API itself with tokens minted
+// here — see lib/gmailApi.js. The encrypted refresh token is kept in its own file
+// (gmailAuthStore.cjs), outside the LAN-broadcast store.
+ipcMain.handle("gmail:connect", () => gmailAuth.connect());
+ipcMain.handle("gmail:disconnect", () => { gmailAuth.disconnect(); return gmailAuth.getStatus(); });
+ipcMain.handle("gmail:status", () => gmailAuth.getStatus());
+ipcMain.handle("gmail:getAccessToken", () => gmailAuth.getAccessToken());
+// The user's own Google Cloud OAuth client (Client ID/Secret) — Foreman ships no
+// shared credential since it's a public repo; see gmailAuth.cjs for why.
+ipcMain.handle("gmail:setClientConfig", (_event, config) => gmailAuth.setClientConfig(config));
+ipcMain.handle("gmail:getClientConfigStatus", () => gmailAuth.getClientConfigStatus());
+ipcMain.handle("gmail:clearClientConfig", () => { gmailAuth.clearClientConfig(); return gmailAuth.getClientConfigStatus(); });
 
 // ── Notifications IPC ─────────────────────────────────────────────────────────
 ipcMain.on("notify", (_event, title, body) => {
