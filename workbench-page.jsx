@@ -11,7 +11,6 @@ import { loadDeletedItems } from "./lib/deletedItems.js";
 import { getEffectiveRowState } from "./lib/inventory.js";
 import { getItemStableKey } from "./lib/itemKeys.js";
 import { maintenanceKey, saveMaintenanceCompletionRecord } from "./lib/maintenance.js";
-import { computeNextDate } from "./lib/scheduleInterval.js";
 import { loadChoreNextDates, saveChoreNextDates, computeChoreNextDate } from "./lib/chores.js";
 import { toggleChoreCompletion, saveChoreCompletions, loadChoreCompletions, saveChoreCompletionRecord } from "./lib/choreCompletions.js";
 import { loadTodos, saveTodos } from "./lib/todos.js";
@@ -681,20 +680,18 @@ export default function WorkbenchPage({ navigate, navState }) {
 
   // ── Completion handlers ────────────────────────────────────────────────────
 
-  function handleMaintDone(form) {
-    const { key, row } = completingMaint;
-    saveMaintenanceCompletionRecord(key, form);
-    if (form.nextDate) {
-      const updated = { ...nextDatesMap, [key]: new Date(form.nextDate + "T12:00:00").toISOString() };
+  // MaintenanceCompleteModal calls onMarkDone with these four positional args
+  // (see components/MaintenanceTable.jsx's handleModalMarkDone for the same
+  // contract) — the modal already computes nextDate itself from completedAt +
+  // schedule + season, so there's nothing left to derive here.
+  function handleMaintDone(completedDate, notes, nextDateOverride, assignee) {
+    const { key } = completingMaint;
+    if (!completedDate) { setCompletingMaint(null); return; }
+    saveMaintenanceCompletionRecord(key, { completedAt: completedDate.toISOString(), assignee, notes });
+    if (nextDateOverride) {
+      const updated = { ...nextDatesMap, [key]: nextDateOverride.toISOString() };
       storageSet("maintenance-next-dates", updated);
       setNextDatesMap(updated);
-    } else if (form.completedAt && (form.schedule || row.schedule)) {
-      const next = computeNextDate(new Date(form.completedAt + "T12:00:00"), form.schedule || row.schedule, form.season ?? row.season ?? null);
-      if (next) {
-        const updated = { ...nextDatesMap, [key]: next.toISOString() };
-        storageSet("maintenance-next-dates", updated);
-        setNextDatesMap(updated);
-      }
     }
     setCompletingMaint(null);
   }
