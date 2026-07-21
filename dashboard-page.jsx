@@ -30,12 +30,9 @@ import {
   loadChoreNextDates, loadChoreCompletedDates, computeNextOccurrenceFromStart,
 } from "./lib/chores.js";
 import { loadCategoryTypeOverrides, BUILT_IN_CATEGORY_TYPES } from "./lib/categoryTypes.js";
-import { runQuery } from "./lib/dashboardQuery.js";
-import VisualizationBuilderModal, { fmtLabelValue, renderPieValueLabel, LEGEND_PROPS } from "./components/VisualizationBuilderModal.jsx";
-import {
-  BarChart, Bar, LineChart, Line, AreaChart, Area,
-  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, Legend,
-} from "recharts";
+import { runQuery, MEASURES, DATA_SOURCES } from "./lib/dashboardQuery.js";
+import VisualizationBuilderModal from "./components/VisualizationBuilderModal.jsx";
+import DashChart, { DEFAULT_COLOR } from "./components/DashChart.jsx";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -380,11 +377,25 @@ export default function DashboardPage({ navigate }) {
     const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newPanels = [...customPanels, { id, ...config }];
     persistCustomPanels(newPanels);
-    const newLayout = [...cleanLayout(layout), { i: id, x: 0, y: Infinity, w: 6, h: 6, minW: 3, minH: 3 }];
+    // Stat tiles are a single number — give them a compact default footprint.
+    const size = config.chartType === "stat" ? { w: 3, h: 4, minW: 2, minH: 3 } : { w: 6, h: 6, minW: 3, minH: 3 };
+    const newLayout = [...cleanLayout(layout), { i: id, x: 0, y: Infinity, ...size }];
     setLayout(newLayout);
     storageSet("foreman-dashboard-layout", newLayout);
     setBuilderOpen(false);
     setEditingPanel(null);
+  }
+
+  function handleDuplicatePanel(id) {
+    const src = customPanels.find(p => p.id === id);
+    if (!src) return;
+    const newId = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    persistCustomPanels([...customPanels, { ...src, id: newId, title: `${src.title} (copy)` }]);
+    const srcLayout = layout.find(l => l.i === id);
+    const size = srcLayout ? { w: srcLayout.w, h: srcLayout.h, minW: srcLayout.minW, minH: srcLayout.minH } : { w: 6, h: 6, minW: 3, minH: 3 };
+    const newLayout = [...cleanLayout(layout), { i: newId, x: 0, y: Infinity, ...size }];
+    setLayout(newLayout);
+    storageSet("foreman-dashboard-layout", newLayout);
   }
 
   function handleUpdatePanel(config) {
@@ -600,6 +611,7 @@ export default function DashboardPage({ navigate }) {
                 isEditMode={isEditMode}
                 panel={panel}
                 onEdit={() => { setEditingPanel(panel.id); setBuilderOpen(true); }}
+                onDuplicate={() => handleDuplicatePanel(panel.id)}
                 onDelete={() => handleDeletePanel(panel.id)}
               />
             </div>
@@ -621,45 +633,19 @@ export default function DashboardPage({ navigate }) {
 
 // ── Custom panel ─────────────────────────────────────────────────────────────
 
-const CUSTOM_COLORS_HEX = ["#c9a96e", "#5fb6c5", "#7fb087", "#e0b266", "#e07b6a", "#6b6560"];
-
-function CustomPanel({ panel, onEdit, onDelete, isEditMode = false }) {
+function CustomPanel({ panel, onEdit, onDuplicate, onDelete, isEditMode = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const data = useMemo(() => {
+  const result = useMemo(() => {
     try { return runQuery(panel.query); }
-    catch { return []; }
+    catch { return { rows: [], series: ["value"] }; }
   }, [panel.query]);
 
-  const tooltipStyle = { background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline2)", borderRadius: 3, fontFamily: "var(--fm-mono)", fontSize: "0.65rem" };
-  const ct = panel.chartType;
-  const showLabels = panel.showLabels ?? false;
-  const showLegend = panel.showLegend ?? false;
-  const barLabel  = (pos) => showLabels ? <LabelList dataKey="value" position={pos} fill="var(--fm-ink-dim)" fontFamily="var(--fm-mono)" fontSize={9} formatter={fmtLabelValue} /> : null;
-
-  function renderChart() {
-    if (!data || data.length === 0) {
-      return <div style={{ alignItems: "center", color: "var(--fm-ink-mute)", display: "flex", fontFamily: "var(--fm-mono)", fontSize: "0.72rem", height: "100%", justifyContent: "center" }}>No data</div>;
-    }
-    if (ct === "bar-v") {
-      return <ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[2,2,0,0]}>{barLabel("top")}</Bar></BarChart></ResponsiveContainer>;
-    }
-    if (ct === "bar-h") {
-      return <ResponsiveContainer width="100%" height="100%"><BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 70, bottom: 4 }}><XAxis type="number" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><YAxis type="category" dataKey="label" tick={{ fill: "var(--fm-ink-dim)", fontSize: 9, fontFamily: "var(--fm-mono)" }} width={68} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" fill="#c9a96e" fillOpacity={0.75} radius={[0,2,2,0]}>{barLabel("right")}</Bar></BarChart></ResponsiveContainer>;
-    }
-    if (ct === "line") {
-      return <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Line dataKey="value" stroke="#c9a96e" strokeWidth={2} dot={{ r: 3, fill: "#c9a96e" }}>{barLabel("top")}</Line></LineChart></ResponsiveContainer>;
-    }
-    if (ct === "area") {
-      return <ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}><XAxis dataKey="label" tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} angle={-30} textAnchor="end" interval={0} /><YAxis tick={{ fill: "var(--fm-ink-mute)", fontSize: 9, fontFamily: "var(--fm-mono)" }} /><Tooltip contentStyle={tooltipStyle} /><Area dataKey="value" stroke="#c9a96e" fill="#c9a96e" fillOpacity={0.15} strokeWidth={2}>{barLabel("top")}</Area></AreaChart></ResponsiveContainer>;
-    }
-    if (ct === "pie" || ct === "donut") {
-      return <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius="70%" innerRadius={ct === "donut" ? "50%" : "0%"} paddingAngle={2} label={showLabels ? renderPieValueLabel : false} labelLine={false}>{data.map((_, i) => <Cell key={i} fill={CUSTOM_COLORS_HEX[i % CUSTOM_COLORS_HEX.length]} fillOpacity={0.8} />)}</Pie>{showLegend && <Legend {...LEGEND_PROPS} />}<Tooltip contentStyle={tooltipStyle} /></PieChart></ResponsiveContainer>;
-    }
-    if (ct === "table") {
-      return <div style={{ height: "100%", overflow: "auto" }}><table style={{ borderCollapse: "collapse", width: "100%" }}><thead><tr>{["Label","Value"].map(h=><th key={h} style={{ borderBottom: "1px solid var(--fm-hairline2)", color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", fontWeight: 400, letterSpacing: "0.1em", padding: "0.25rem 0.5rem", textAlign: "left", textTransform: "uppercase" }}>{h}</th>)}</tr></thead><tbody>{data.map((row,i)=><tr key={i} style={{ borderBottom: "1px solid var(--fm-hairline)" }}><td style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.28rem 0.5rem" }}>{row.label}</td><td style={{ color: "var(--fm-brass)", fontFamily: "var(--fm-mono)", fontSize: "0.68rem", padding: "0.28rem 0.5rem", textAlign: "right" }}>{typeof row.value === "number" ? row.value.toFixed(row.value % 1 === 0 ? 0 : 2) : row.value}</td></tr>)}</tbody></table></div>;
-    }
-    return null;
-  }
+  const statSub = useMemo(() => {
+    if (panel.chartType !== "stat") return "";
+    const m = MEASURES.find(x => x.id === (panel.query?.measure ?? "count"));
+    const src = DATA_SOURCES[panel.query?.source];
+    return `${m?.label ?? ""}${panel.query?.measureField ? ` · ${panel.query.measureField}` : ""}${src ? ` — ${src.label}` : ""}`;
+  }, [panel]);
 
   return (
     <div style={{ background: "var(--fm-bg-panel)", border: isEditMode ? "1px dashed var(--fm-brass)" : "var(--fm-border)", borderRadius: "var(--fm-radius-lg)", cursor: isEditMode ? "grab" : "default", display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", transition: "border 0.15s", userSelect: isEditMode ? "none" : "auto" }}>
@@ -679,7 +665,7 @@ function CustomPanel({ panel, onEdit, onDelete, isEditMode = false }) {
                 onMouseLeave={() => setMenuOpen(false)}
                 style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline2)", borderRadius: 4, boxShadow: "0 6px 20px #00000055", display: "flex", flexDirection: "column", gap: 1, minWidth: 110, padding: 4, position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 50 }}
               >
-                {[["Edit", onEdit], ["Delete", onDelete]].map(([label, fn]) => (
+                {[["Edit", onEdit], ["Duplicate", onDuplicate], ["Delete", onDelete]].map(([label, fn]) => (
                   <button key={label} onClick={e => { e.stopPropagation(); setMenuOpen(false); fn(); }}
                     style={{ background: "transparent", border: "none", borderRadius: 3, color: label === "Delete" ? "var(--fm-red)" : "var(--fm-ink-dim)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", padding: "0.35rem 0.6rem", textAlign: "left" }}
                     onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-panel)"}
@@ -692,7 +678,16 @@ function CustomPanel({ panel, onEdit, onDelete, isEditMode = false }) {
         </div>
       </div>
       <div style={{ flex: 1, overflow: "hidden", padding: "0.75rem 1.25rem 1rem" }}>
-        {renderChart()}
+        <DashChart
+          chartType={panel.chartType}
+          data={result.rows}
+          series={result.series}
+          showLabels={panel.showLabels ?? false}
+          showLegend={panel.showLegend ?? false}
+          format={panel.format ?? "number"}
+          color={panel.color ?? DEFAULT_COLOR}
+          statSub={statSub}
+        />
       </div>
     </div>
   );
