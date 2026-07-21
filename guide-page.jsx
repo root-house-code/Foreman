@@ -818,7 +818,9 @@ export default function GuidePage({ navigate, navState = null }) {
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
           {/* Left panel: article tree */}
-          <div style={{ borderRight: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: "300px" }}>
+          <div style={isMobile
+            ? { display: selectedItem ? "none" : "flex", flex: 1, flexDirection: "column", overflow: "hidden", width: "100%" }
+            : { borderRight: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: "300px" }}>
             {/* Search + organization controls */}
             <div style={{ borderBottom: "var(--fm-border)", display: "flex", flexDirection: "column", flexShrink: 0, gap: "0.45rem", padding: "0.65rem 0.85rem" }}>
               <input
@@ -945,7 +947,16 @@ export default function GuidePage({ navigate, navState = null }) {
           </div>
 
           {/* Main panel */}
-          <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+          <div style={isMobile
+            ? { display: selectedItem ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden", width: "100%" }
+            : { display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+
+            {isMobile && selectedItem && (
+              <button
+                onClick={() => setSelectedItem(null)}
+                style={{ background: "transparent", border: "none", borderBottom: "var(--fm-border)", color: "var(--fm-brass-dim)", cursor: "pointer", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.06em", padding: "0.65rem 0.85rem", textAlign: "left" }}
+              >‹ All Articles</button>
+            )}
 
             {/* Empty state */}
             {!selectedItem && (

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import useIsMobile from "../src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./ModalShared.jsx";
 import {
   getWebhookUrl, setWebhookUrl,
   getSendHourLocal, setSendHourLocal,
@@ -41,6 +43,7 @@ function isWebhookValid(url) {
 }
 
 export default function ReminderSettings({ open, onClose, onSync, enabledCount }) {
+  const isMobile = useIsMobile();
   const [webhook, setWebhook]       = useState(() => getWebhookUrl());
   const [showWebhook, setShowWebhook] = useState(false);
   const [hour, setHour]             = useState(() => getSendHourLocal());
@@ -184,11 +187,13 @@ export default function ReminderSettings({ open, onClose, onSync, enabledCount }
         right: 0,
         top: 0,
         zIndex: 1000,
+        ...(isMobile ? sheetOverlay : null),
       }}
     >
       <div
         ref={dialogRef}
         onClick={e => e.stopPropagation()}
+        className={isMobile ? "fm-sheet-panel" : undefined}
         style={{
           background: "#0f1117",
           border: "1px solid #a8a29c",
@@ -196,6 +201,7 @@ export default function ReminderSettings({ open, onClose, onSync, enabledCount }
           maxWidth: "560px",
           padding: "1.75rem 2rem",
           width: "92%",
+          ...(isMobile ? sheetPanel : null),
         }}
       >
         <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between", marginBottom: "0.4rem" }}>
@@ -269,7 +275,7 @@ export default function ReminderSettings({ open, onClose, onSync, enabledCount }
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: "1rem", marginBottom: "1.1rem" }}>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: "1rem", marginBottom: "1.1rem" }}>
           <div style={{ flex: 1 }}>
             <label style={LABEL_STYLE} htmlFor="hour-select">Send time</label>
             <select

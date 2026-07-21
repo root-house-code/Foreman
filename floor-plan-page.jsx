@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import FmHeader from "./src/components/FmHeader.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import { FloorPlan } from "./inventory-page.jsx";
 import { loadData, loadCustomData, saveCustomData, loadOverrides, saveOverrides, defaultData } from "./lib/data.js";
@@ -16,6 +17,7 @@ import { loadTodos, saveTodos } from "./lib/todos.js";
 import { loadProjects, saveProjects } from "./lib/projects.js";
 
 export default function FloorPlanPage({ navigate }) {
+  const isMobile = useIsMobile();
   useEffect(() => { useForemanStore.getState().reloadAll(); }, []);
 
   const [rows, setRows] = useState(() => loadData());
@@ -266,7 +268,7 @@ export default function FloorPlanPage({ navigate }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden" }}>
       <FmHeader active="Floor Plan" tagline="Floor Plan" />
       <FloorPlan
         categories={CATEGORIES}

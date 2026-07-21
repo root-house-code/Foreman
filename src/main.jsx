@@ -12,6 +12,7 @@ import { loadFloors, saveFloors, sortFloors, getDefaultFloors } from "../lib/flo
 import { useForemanStore } from "../lib/store.js";
 import { migrateCfvSplit, loadItemFieldValues, saveItemFieldValues, loadItemFieldSchemas, saveItemFieldSchemas } from "../lib/customFields.js";
 import { migrateStructureCategories } from "../lib/entityTypes.js";
+import { migrateLegacyBuiltInProfiles } from "../lib/profiles.js";
 
 storageInit().then(() => {
   // Run fpData first so migrateToV3 (if needed) writes fresh room IDs to storage
@@ -82,6 +83,7 @@ storageInit().then(() => {
   // Must run after storageInit so the cache has the real data, and before reloadAll.
   migrateCfvSplit();
   migrateStructureCategories();
+  migrateLegacyBuiltInProfiles();
 
   // Normalize itemFieldSchemas and itemFieldValues keys written by the old legacy
   // itemDetails migration. That migration used raw "HVAC::Furnace" keys copied

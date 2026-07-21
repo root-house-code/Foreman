@@ -28,6 +28,8 @@ import FmHeader from "./src/components/FmHeader.jsx";
 import FmSubnav from "./src/components/FmSubnav.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import ItemDetailPanel from "./components/ItemDetailPanel.jsx";
+import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -108,6 +110,7 @@ const sectionTitle = {
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 function FinancesPage({ navigate, navState, view }) {
+  const isMobile = useIsMobile();
 
   const itemFieldValues = useForemanStore(s => s.itemFieldValues);
   const inventory       = useForemanStore(s => s.inventory);
@@ -437,7 +440,7 @@ function FinancesPage({ navigate, navState, view }) {
   const fillHeight = (view === "ledger" && ledgerTab === "Ledger") || view === "mortgage";
 
   return (
-    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
+    <div style={{ height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
       <FmHeader active={view === "ledger" ? "Spending" : view === "mortgage" ? "Mortgage" : "Forecast"} tagline={view === "ledger" ? "spending & history" : view === "mortgage" ? "financing" : "forward projection"} />
 
       {view === "ledger" && (
@@ -452,12 +455,12 @@ function FinancesPage({ navigate, navState, view }) {
         />
       )}
 
-      <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: fillHeight ? "hidden" : "auto" }}>
-        <div style={{ display: fillHeight ? "flex" : undefined, flex: fillHeight ? 1 : undefined, flexDirection: "column", maxWidth: (view === "ledger" && ledgerTab === "Ledger") || view === "forecast" ? "none" : 1000, minHeight: 0, padding: "1.75rem 2.25rem" }}>
+      <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: (fillHeight && !isMobile) ? "hidden" : "auto" }}>
+        <div style={{ display: (fillHeight && !isMobile) ? "flex" : undefined, flex: (fillHeight && !isMobile) ? 1 : undefined, flexDirection: "column", maxWidth: (view === "ledger" && ledgerTab === "Ledger") || view === "forecast" ? "none" : 1000, minHeight: 0, padding: isMobile ? "1rem 0.9rem calc(1.5rem + env(safe-area-inset-bottom))" : "1.75rem 2.25rem" }}>
 
           {view === "ledger" && ledgerTab === "Ledger" && (
             <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
-            <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: 8, marginBottom: "0.75rem" }}>
+            <div style={{ alignItems: "center", display: "flex", flexShrink: 0, flexWrap: isMobile ? "wrap" : undefined, gap: 8, marginBottom: "0.75rem" }}>
               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>Date range</span>
               {/* All-time pill */}
               <button
@@ -503,13 +506,13 @@ function FinancesPage({ navigate, navState, view }) {
                 <button onClick={() => { setFilterMode("allTime"); setGlobalDateStart(""); setGlobalDateEnd(""); }} style={{ background: "none", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", lineHeight: 1, padding: "0 2px" }}>×</button>
               )}
             </div>
-            <div style={{ alignItems: "stretch", display: "flex", flex: 1, gap: "1.5rem", minHeight: 0 }}>
+            <div style={{ alignItems: isMobile ? "stretch" : "stretch", display: "flex", flex: 1, flexDirection: isMobile ? "column" : "row", gap: "1.5rem", minHeight: 0, overflowY: isMobile ? "auto" : undefined }}>
               {/* Left: summary sidebar — sticky (full height, scrollable if tall) */}
-              <div style={{ flexShrink: 0, minHeight: 0, overflowY: "auto", paddingTop: "0.1rem", width: 720 }}>
+              <div style={{ flexShrink: 0, minHeight: 0, overflowY: isMobile ? "visible" : "auto", paddingTop: "0.1rem", width: isMobile ? "100%" : 720 }}>
                 <SpendByType summary={ledgerSummary} rows={ledger} classGroups={classGroups} customStart={globalDateStart} customEnd={globalDateEnd} trailingMonths={trailingMonths} onTrailingMonthsChange={setTrailingMonths} />
               </div>
               {/* Right: transaction table — flex column, ledger rows scroll */}
-              <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0 }}>
+              <div style={{ display: "flex", flex: isMobile ? "0 0 auto" : 1, flexDirection: "column", minHeight: 0, minWidth: 0 }}>
                 {pendingPlanned.length > 0 && (
                   <div style={{ ...card, flexShrink: 0, marginBottom: "1rem" }}>
                     <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
@@ -671,7 +674,7 @@ function FinancesPage({ navigate, navState, view }) {
                   <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>months</span>
                 </div>
                 {/* Two-column layout: left = hero + chart stacked, right = month-by-month */}
-                <div style={{ alignItems: "stretch", display: "flex", gap: "1.5rem", marginBottom: "1.5rem" }}>
+                <div style={{ alignItems: "stretch", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "1.5rem", marginBottom: "1.5rem" }}>
 
                 {/* Left column: Total Forecasted Spend + chart */}
                 <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "1.5rem", minWidth: 0 }}>
@@ -1056,6 +1059,7 @@ function EditableYears({ stableKey, value, overridden, onSave }) {
 // store, builds the roster, and projects replacement timing. The "Life" column
 // edits each item's own estimated_lifespan (which overrides its type default).
 export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
+  const isMobile = useIsMobile();
   const itemFieldValues     = useForemanStore(s => s.itemFieldValues);
   const spatialAssignments  = useForemanStore(s => s.spatialAssignments);
   const inventory           = useForemanStore(s => s.inventory);
@@ -1100,8 +1104,8 @@ export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
   return (
     <div style={{ maxWidth: 1000, paddingTop: "0.25rem", width: "100%" }}>
       {/* Reserve callout */}
-      <div style={{ ...card, alignItems: "center", display: "flex", gap: "1.5rem", marginBottom: "1.5rem" }}>
-        <div style={{ borderRight: "1px solid var(--fm-hairline2)", paddingRight: "1.5rem" }}>
+      <div style={{ ...card, alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? "0.9rem" : "1.5rem", marginBottom: "1.5rem" }}>
+        <div style={{ borderRight: isMobile ? "none" : "1px solid var(--fm-hairline2)", borderBottom: isMobile ? "1px solid var(--fm-hairline2)" : "none", paddingBottom: isMobile ? "0.9rem" : 0, paddingRight: isMobile ? 0 : "1.5rem" }}>
           <div style={sectionTitle}>Replacement Reserve</div>
           <div style={{ color: "var(--fm-amber)", fontFamily: "var(--fm-serif)", fontSize: "1.9rem", fontWeight: 500, letterSpacing: "-0.01em", margin: "0.3rem 0 0.1rem", whiteSpace: "nowrap" }}>
             {reserve.annual > 0 ? fmtMoney(reserve.annual) : "—"}<span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.7rem" }}> / yr</span>
@@ -1129,9 +1133,9 @@ export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
             {warranties.map(w => {
               const expired = w.days < 0;
               return (
-                <div key={w.stableKey} style={{ alignItems: "center", display: "flex", gap: "0.75rem" }}>
+                <div key={w.stableKey} style={{ alignItems: "center", display: "flex", flexWrap: isMobile ? "wrap" : "nowrap", gap: "0.75rem" }}>
                   <span style={{ background: expired ? "var(--fm-red)" : "var(--fm-amber)", borderRadius: "50%", flexShrink: 0, height: 6, width: 6 }} />
-                  <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", minWidth: 200 }}>{w.item}</span>
+                  <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", minWidth: isMobile ? "auto" : 200 }}>{w.item}</span>
                   <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.62rem", flex: 1 }}>{w.category}</span>
                   <span style={{ color: expired ? "var(--fm-red)" : "var(--fm-amber)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", whiteSpace: "nowrap" }}>
                     {expired ? `expired ${Math.abs(w.days)}d ago` : `${w.days}d left`}
@@ -1151,6 +1155,33 @@ export function ReplacementForecast({ onSelectItem, selectedKey } = {}) {
         {forecast.length === 0 ? (
           <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.82rem", lineHeight: 1.7, padding: "0.5rem 0" }}>
             Nothing to forecast yet. Add an <span style={{ color: "var(--fm-ink-dim)" }}>Install Date</span> (or Purchase Date) to items in Inventory and Foreman will project their replacement timing against expected lifespans.
+          </div>
+        ) : isMobile ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {sortedForecast.map(f => {
+              const color = lifeColor(f.remaining, f.pct);
+              return (
+                <div
+                  key={f.stableKey}
+                  onClick={() => onSelectItem?.({ category: f.category, item: f.item, stableKey: f.stableKey })}
+                  style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderLeft: `3px solid ${color}`, borderRadius: "4px", cursor: onSelectItem ? "pointer" : "default", padding: "0.6rem 0.75rem" }}
+                >
+                  <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.item}</span>
+                    <span style={{ alignItems: "center", color, display: "flex", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.62rem", gap: "0.4rem" }}>
+                      {remainingLabel(f.remaining)}
+                      <LifeBar pct={f.pct} color={color} />
+                    </span>
+                  </div>
+                  <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginTop: "0.25rem" }}>
+                    {[f.location, f.system, f.type].filter(Boolean).join(" · ") || "—"}
+                  </div>
+                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginTop: "0.15rem" }}>
+                    {f.age.toFixed(1)} yr old · {f.exp != null ? `${f.exp} yr life` : "—"}{f.estCost != null ? ` · ${fmtMoney(f.estCost)} est.` : ""}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <>
@@ -1732,12 +1763,13 @@ export function MortgagePage(props) { return <FinancesPage {...props} view="mort
 // Selecting a row opens the shared item detail panel on the right, the same
 // UI/UX as the Inventory list.
 export function ItemLifespansPage({ navigate }) {
+  const isMobile = useIsMobile();
   const [selectedItem, setSelectedItem] = useState(null);
   return (
-    <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
+    <div style={{ height: isMobile ? MOBILE_SHELL_HEIGHT : "100vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--fm-bg)", fontFamily: "var(--fm-sans)", color: "var(--fm-ink)" }}>
       <FmHeader active="Item Lifespans" tagline="Item Lifespans" />
-      <div style={{ display: "flex", flex: 1, gap: "1.25rem", overflow: "hidden", padding: "1.75rem 2.25rem" }}>
-        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+      <div style={{ display: "flex", flex: 1, gap: isMobile ? 0 : "1.25rem", overflow: "hidden", padding: isMobile ? "1rem 0.9rem" : "1.75rem 2.25rem" }}>
+        <div style={{ display: isMobile && selectedItem ? "none" : "block", flex: 1, minWidth: 0, overflowY: "auto" }}>
           <div style={{ maxWidth: 1000 }}>
             <ReplacementForecast
               onSelectItem={setSelectedItem}
@@ -1746,7 +1778,7 @@ export function ItemLifespansPage({ navigate }) {
           </div>
         </div>
         {selectedItem && (
-          <div style={{ display: "flex", flexShrink: 0, width: "clamp(320px, 32%, 420px)" }}>
+          <div style={isMobile ? { display: "flex", flex: 1, minWidth: 0 } : { display: "flex", flexShrink: 0, width: "clamp(320px, 32%, 420px)" }}>
             <ItemDetailPanel
               selectedItem={selectedItem}
               onClose={() => setSelectedItem(null)}

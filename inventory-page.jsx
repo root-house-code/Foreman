@@ -78,6 +78,7 @@ import ModelComboField from "./components/ModelComboField.jsx";
 import TodoModal from "./components/TodoModal.jsx";
 import ItemDetailPanel from "./components/ItemDetailPanel.jsx";
 import useIsMobile, { MOBILE_SHELL_HEIGHT } from "./src/hooks/useIsMobile.js";
+import { sheetOverlay, sheetPanel } from "./components/ModalShared.jsx";
 
 const PRIORITY_COLORS = {
   low:    "var(--fm-green)",
@@ -492,6 +493,9 @@ const LAYER_TOGGLES  = [
 const FP_OUTLINE_STROKE = "rgba(255,255,255,0.8)";
 
 export function FloorPlan({ categories, categoryTypes, categoryItems, entityTypeData, onCreateCategory, onRenameCategory, onDeleteCategory, onChangeCategoryType, onAddItem, onCreateLinkedItem, onDeleteLinkedItem, onRenameLinkedItem, reverseItemKeyMap, onSelectItem }) {
+  // Phones are view-first: pan/pinch the plan, tap a zone for a detail sheet.
+  // Drawing, dragging, and canvas-building stay desktop affordances.
+  const isMobile = useIsMobile();
   const [fpData, setFpData] = useState(() => loadFpData());
   const [floors, setFloors] = useState(() => getFloorsInOrder());
   const rooms = useForemanStore(s => s.rooms);
@@ -2129,7 +2133,8 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
   return (
     <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
-      {/* Left sidebar */}
+      {/* Left sidebar (desktop only — phones get the floor-pill strip instead) */}
+      {!isMobile && (
       <div style={{ borderRight: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: 200 }}>
 
         {/* Add to canvas */}
@@ -2414,10 +2419,30 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           </div>
         </div>
       </div>
+      )}
 
       {/* SVG canvas */}
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", position: "relative" }}>
-        {/* Draw toolbar */}
+        {/* Mobile strip: floor switcher + fit-to-view (replaces the desktop draw toolbar) */}
+        {isMobile ? (
+        <div className="fm-hscroll" style={{ alignItems: "center", background: "var(--fm-bg)", borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0, gap: "0.4rem", padding: "0.45rem 0.75rem" }}>
+          {floors.map(level => {
+            const isActive = level.id === activeLevel;
+            return (
+              <button
+                key={level.id}
+                onClick={() => { setActiveLevel(level.id); setSelected(null); setSelectedOutline(false); }}
+                style={{ background: isActive ? "var(--fm-brass-bg)" : "var(--fm-bg-sunk)", border: `1px solid ${isActive ? "var(--fm-brass)" : "var(--fm-hairline2)"}`, borderRadius: 999, color: isActive ? "var(--fm-brass)" : "var(--fm-ink-dim)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", letterSpacing: "0.05em", padding: "0.4rem 0.9rem", whiteSpace: "nowrap" }}
+              >{level.label}</button>
+            );
+          })}
+          <button
+            onClick={() => setViewBox({ x: 0, y: 0, w: FP_W, h: FP_H })}
+            title="Fit the whole plan on screen"
+            style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: 999, color: "var(--fm-ink-dim)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.68rem", marginLeft: "auto", padding: "0.4rem 0.9rem", whiteSpace: "nowrap" }}
+          >⤢ Fit</button>
+        </div>
+        ) : (
         <div style={{ alignItems: "center", background: "var(--fm-bg)", borderBottom: "1px solid var(--fm-hairline)", display: "flex", flexShrink: 0, gap: "0.4rem", padding: "0.35rem 0.75rem", flexWrap: "wrap" }}>
           <select
             value={drawMode}
@@ -2709,6 +2734,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
             );
           })()}
         </div>
+        )}
 
         <svg
           ref={svgRef}
@@ -2751,31 +2777,56 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           }}
           onDoubleClick={e => { if (drawMode === "path") handleDrawDoubleClick(e); }}
           onTouchStart={e => {
-            if (e.touches.length !== 2) return;
-            e.preventDefault();
-            touchRef.current = {
-              dist: Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY),
-              midX: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-              midY: (e.touches[0].clientY + e.touches[1].clientY) / 2,
-              startVb: { ...viewBoxRef.current },
-            };
+            if (e.touches.length === 2) {
+              e.preventDefault();
+              touchRef.current = {
+                pinch: true,
+                dist: Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY),
+                midX: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                midY: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+                startVb: { ...viewBoxRef.current },
+              };
+            } else if (e.touches.length === 1 && drawModeRef.current === "move" && !ghostZoneRef.current) {
+              // One-finger pan. Taps still select zones: the browser only synthesizes
+              // the mousedown/click pair when the finger doesn't travel, so a drag
+              // pans without selecting and a tap selects without panning.
+              touchRef.current = {
+                pan: true,
+                startX: e.touches[0].clientX,
+                startY: e.touches[0].clientY,
+                startVb: { ...viewBoxRef.current },
+              };
+            }
           }}
           onTouchMove={e => {
-            if (!touchRef.current || e.touches.length !== 2) return;
-            e.preventDefault();
+            const t = touchRef.current;
+            if (!t || !svgRef.current) return;
             const rect = svgRef.current.getBoundingClientRect();
-            const newDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            const scale = touchRef.current.dist / newDist;
-            const { startVb, midX, midY } = touchRef.current;
-            const cx = startVb.x + (midX - rect.left) / rect.width * startVb.w;
-            const cy = startVb.y + (midY - rect.top) / rect.height * startVb.h;
-            const nw = Math.max(200, Math.min(FP_W, startVb.w * scale));
-            const nh = nw * (FP_H / FP_W);
-            const nx = Math.max(0, Math.min(FP_W - nw, cx - (cx - startVb.x) / startVb.w * nw));
-            const ny = Math.max(0, Math.min(FP_H - nh, cy - (cy - startVb.y) / startVb.h * nh));
-            const newVb = { x: nx, y: ny, w: nw, h: nh };
-            viewBoxRef.current = newVb;
-            setViewBox(newVb);
+            if (t.pinch && e.touches.length === 2) {
+              e.preventDefault();
+              const newDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+              const scale = t.dist / newDist;
+              const { startVb, midX, midY } = t;
+              const cx = startVb.x + (midX - rect.left) / rect.width * startVb.w;
+              const cy = startVb.y + (midY - rect.top) / rect.height * startVb.h;
+              const nw = Math.max(200, Math.min(FP_W, startVb.w * scale));
+              const nh = nw * (FP_H / FP_W);
+              const nx = Math.max(0, Math.min(FP_W - nw, cx - (cx - startVb.x) / startVb.w * nw));
+              const ny = Math.max(0, Math.min(FP_H - nh, cy - (cy - startVb.y) / startVb.h * nh));
+              const newVb = { x: nx, y: ny, w: nw, h: nh };
+              viewBoxRef.current = newVb;
+              setViewBox(newVb);
+            } else if (t.pan && e.touches.length === 1) {
+              e.preventDefault();
+              const { startX, startY, startVb } = t;
+              const dx = (startX - e.touches[0].clientX) / rect.width * startVb.w;
+              const dy = (startY - e.touches[0].clientY) / rect.height * startVb.h;
+              const nx = Math.max(0, Math.min(FP_W - startVb.w, startVb.x + dx));
+              const ny = Math.max(0, Math.min(FP_H - startVb.h, startVb.y + dy));
+              const newVb = { ...startVb, x: nx, y: ny };
+              viewBoxRef.current = newVb;
+              setViewBox(newVb);
+            }
           }}
           onTouchEnd={() => { touchRef.current = null; }}
         >
@@ -3370,7 +3421,9 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
 
         {Object.keys(currentPlaced).length === 0 && (
           <div style={{ alignItems: "center", display: "flex", height: "100%", justifyContent: "center", left: 0, pointerEvents: "none", position: "absolute", top: 0, width: "100%" }}>
-            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.08em" }}>Click items in the sidebar to place them on this level</div>
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", letterSpacing: "0.08em", padding: "0 2rem", textAlign: "center" }}>
+              {isMobile ? "Nothing placed on this level yet — build your plan from a desktop, then browse it here" : "Click items in the sidebar to place them on this level"}
+            </div>
           </div>
         )}
       </div>
@@ -3426,8 +3479,23 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
         );
       })()}
 
-      {/* Right detail panel */}
-      <div style={{ borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, width: 280 }}>
+      {/* Right detail panel — desktop side column; on phones it becomes a bottom
+          sheet that appears only when a zone or the outline is selected, so the
+          canvas keeps the full screen otherwise. */}
+      {(!isMobile || selected || selectedOutline) && (
+      <div className={isMobile ? "fm-sheet-panel" : undefined} style={isMobile
+        ? { background: "var(--fm-bg)", borderRadius: "14px 14px 0 0", borderTop: "1px solid var(--fm-hairline2)", bottom: "calc(56px + env(safe-area-inset-bottom))", boxShadow: "0 -10px 30px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", left: 0, maxHeight: "52vh", overflowY: "auto", position: "fixed", right: 0, zIndex: 75 }
+        : { borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, width: 280 }}>
+        {isMobile && (
+          <div style={{ alignItems: "center", display: "flex", flexShrink: 0, justifyContent: "center", padding: "0.5rem 0.75rem 0", position: "relative" }}>
+            <div style={{ background: "var(--fm-hairline2)", borderRadius: 2, height: 4, width: 36 }} />
+            <button
+              onClick={() => { setSelected(null); setSelectedOutline(false); }}
+              aria-label="Close details"
+              style={{ background: "transparent", border: "none", color: "var(--fm-ink-dim)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0 0.75rem", position: "absolute", right: 0, top: "0.3rem" }}
+            >×</button>
+          </div>
+        )}
         {selectedOutline && fpData.outline?.points?.length > 0 ? (() => {
           const opts = fpData.outline.points;
           const xs = opts.map(p => p.x), ys = opts.map(p => p.y);
@@ -3952,6 +4020,7 @@ export function FloorPlan({ categories, categoryTypes, categoryItems, entityType
           </div>
         )}
       </div>
+      )}
 
       {/* Address → building footprint import modal (only reachable in Online Mode) */}
       {addrModalOpen && (() => {
@@ -4023,6 +4092,7 @@ function getInvSysTag(cat) {
 }
 
 function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, onRefreshEntityTypes, onCreateCategory, onAddItem, customFieldValues, reverseItemKeyMap, onSelectItem, onDeleteCategory, onRenameCategory }) {
+  const isMobile = useIsMobile();
   const [addingChildOf,       setAddingChildOf]       = useState(null);
   const [newChildLabel,       setNewChildLabel]       = useState("");
   const [editingTypeId,       setEditingTypeId]       = useState(null);
@@ -4481,20 +4551,20 @@ function OutlineTab({ categories, categoryTypes, categoryItems, entityTypeData, 
   };
 
   return (
-    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: isMobile ? "visible" : "hidden" }}>
       {/* Columns */}
-      <div style={{ display: "flex", flex: 1, gap: "0", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ display: "flex", flex: 1, flexDirection: isMobile ? "column" : "row", gap: "0", minHeight: 0, overflow: isMobile ? "visible" : "hidden" }}>
       {["spatial", "functional"].map((cls, ci) => {
         const rootTypes = getRootTypesForClass(cls, entityTypeData);
         return (
-          <div key={cls} style={{ borderRight: ci === 0 ? "1px solid var(--fm-hairline)" : "none", display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden", paddingRight: ci === 0 ? "2rem" : 0, paddingLeft: ci === 1 ? "2rem" : 0 }}>
+          <div key={cls} style={{ borderRight: !isMobile && ci === 0 ? "1px solid var(--fm-hairline)" : "none", borderTop: isMobile && ci === 1 ? "1px solid var(--fm-hairline)" : "none", display: "flex", flex: isMobile ? "0 0 auto" : 1, flexDirection: "column", minWidth: 0, overflow: isMobile ? "visible" : "hidden", paddingRight: !isMobile && ci === 0 ? "2rem" : 0, paddingLeft: !isMobile && ci === 1 ? "2rem" : 0, paddingTop: isMobile && ci === 1 ? "1rem" : 0, marginBottom: isMobile ? "1rem" : 0 }}>
             <div style={{ alignItems: "baseline", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.65rem", marginBottom: "0.6rem", paddingBottom: "0.35rem" }}>
               <span style={{ color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.14em", textTransform: "uppercase" }}>{cls === "spatial" ? "Spatial" : "Functional"}</span>
               <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-sans)", fontSize: "0.65rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{CLASS_DESCS[cls]}</span>
             </div>
-            <div style={{ display: "flex", flex: 1, gap: "1.5rem", minHeight: 0, overflow: "hidden" }}>
+            <div style={{ display: "flex", flex: isMobile ? "0 0 auto" : 1, flexDirection: isMobile ? "column" : "row", gap: isMobile ? "1rem" : "1.5rem", minHeight: 0, overflow: isMobile ? "visible" : "hidden" }}>
               {rootTypes.map(type => (
-                <div key={type.id} style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflowY: "auto", paddingBottom: "2rem" }}>
+                <div key={type.id} style={{ display: "flex", flex: isMobile ? "0 0 auto" : 1, flexDirection: "column", minWidth: 0, overflowY: isMobile ? "visible" : "auto", paddingBottom: "2rem" }}>
                   {renderNode(type, 0)}
                 </div>
               ))}
@@ -4531,6 +4601,7 @@ function columnTypeBinding(label) {
 }
 
 function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseItemKeyMap, effectiveCategoryTypes, entityTypeData, onAddItem, onFieldChange, onCreated, onSelectItem }) {
+  const isMobile = useIsMobile();
   const [order, setOrder] = useState(() => loadOverviewOrder());
   const [dragCol, setDragCol] = useState(null);     // { id: string } — parent item type only
   const [dragOverCol, setDragOverCol] = useState(null);
@@ -4884,11 +4955,13 @@ function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseI
   }
 
   return (
-    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflow: isMobile ? "visible" : "hidden" }}>
       <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.06em", marginBottom: "0.4rem", paddingLeft: "0.1rem" }}>
-        Drag item type headers to reorder · Click ▶/▼ to expand or collapse subtypes · Double-click a cell to add an item
+        {isMobile
+          ? "Scroll to browse · Tap ▶/▼ to expand or collapse subtypes · Desktop for reordering & adding items"
+          : "Drag item type headers to reorder · Click ▶/▼ to expand or collapse subtypes · Double-click a cell to add an item"}
       </div>
-      <div style={{ flex: 1, overflow: "auto" }}>
+      <div className={isMobile ? "fm-hscroll" : undefined} style={{ flex: isMobile ? "0 0 auto" : 1, overflow: "auto", WebkitOverflowScrolling: "touch" }}>
         <table style={{ borderCollapse: "collapse", tableLayout: "fixed", width: "max-content" }}>
           <thead>
             <tr>
@@ -5018,6 +5091,7 @@ function OverviewTab({ rooms, exteriors, categories, customFieldValues, reverseI
 }
 
 function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTypeData, itemDetails, customFieldValues, onSelectItem, onAddItem, onDeleteItem, onRenameItem, onFieldChange, itemStableKeyMap }) {
+  const isMobile = useIsMobile();
   const [listUiState, setListUIState] = usePageUIState("inventory-list");
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -5179,14 +5253,14 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
   };
 
   return (
-    <div style={{ padding: "0 var(--fm-spacing-5xl)" }}>
+    <div style={{ padding: isMobile ? "0" : "0 var(--fm-spacing-5xl)" }}>
       {/* Toolbar */}
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.75rem", marginBottom: "1.25rem" }}>
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Search items, systems…"
-          style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-ink-dim)", borderRadius: "4px", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", marginLeft: "auto", outline: "none", padding: "0.5rem 0.85rem", width: "260px" }}
+          style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-ink-dim)", borderRadius: "4px", color: "var(--fm-ink)", fontFamily: "var(--fm-mono)", fontSize: "0.82rem", marginLeft: isMobile ? 0 : "auto", outline: "none", padding: "0.5rem 0.85rem", width: isMobile ? "100%" : "260px" }}
         />
         <span style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.78rem" }}>{filtered.length} results</span>
         <button
@@ -5303,6 +5377,47 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
         </FilterRow>
       </div>
 
+      {/* Mobile: card list (tap opens the full item detail panel for editing) */}
+      {isMobile ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {filtered.length === 0 && (
+            <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.75rem", padding: "2rem 0.5rem", textAlign: "center" }}>
+              No items match the current filters.
+            </div>
+          )}
+          {filtered.map(({ cat, item, key }) => {
+            const status = getInvItemStatus(itemDetails, cat, item, key);
+            const { color, label } = INV_STATUS_META[status];
+            const catOldType = categoryTypes?.[cat] || "system";
+            const catTypeId = resolveTypeId(cat, catOldType);
+            const catIsSpatial = isSpatial(catTypeId, entityTypeData);
+            const catIsFunctional = isFunctional(catTypeId, entityTypeData);
+            const cfVals = customFieldValues?.[key] || {};
+            const resolvedLocation = cfVals.roomLabel || cfVals.exteriorLabel || cfVals.room || (catIsSpatial ? cat : "");
+            const resolvedSystem = catIsFunctional ? cat : (cfVals.systemCategory || cfVals.system || "");
+            const mfrModel = [cfVals.manufacturer, cfVals.model].filter(Boolean).join(" · ");
+            return (
+              <div
+                key={key}
+                onClick={() => onSelectItem?.({ category: cat, item })}
+                style={{ background: "var(--fm-bg-raised)", border: "1px solid var(--fm-hairline)", borderLeft: `3px solid ${color}`, borderRadius: "4px", cursor: "pointer", padding: "0.6rem 0.75rem" }}
+              >
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.85rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
+                  <span style={{ color, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.06em" }}>{label}</span>
+                </div>
+                <div style={{ color: "var(--fm-ink-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", marginTop: "0.25rem" }}>
+                  {[cat, resolvedLocation, resolvedSystem && getInvSysTag(resolvedSystem)].filter(Boolean).join(" · ")}
+                </div>
+                {mfrModel && (
+                  <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginTop: "0.15rem" }}>{mfrModel}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+      <>
       {/* Table */}
       <table style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
@@ -5564,6 +5679,8 @@ function ItemInventoryView({ categories, categoryItems, categoryTypes, entityTyp
           )}
         </tbody>
       </table>
+      </>
+      )}
     </div>
   );
 }
@@ -6800,10 +6917,12 @@ export default function InventoryPage({ navigate, navState }) {
             right: 0,
             top: 0,
             zIndex: 1000,
+            ...(isMobile ? sheetOverlay : null),
           }}
         >
           <div
             onClick={e => e.stopPropagation()}
+            className={isMobile ? "fm-sheet-panel" : undefined}
             style={{
               background: "var(--fm-bg-panel)",
               border: "1px solid var(--fm-hairline2)",
@@ -6811,6 +6930,7 @@ export default function InventoryPage({ navigate, navState }) {
               maxWidth: 440,
               padding: "2rem",
               width: "90%",
+              ...(isMobile ? sheetPanel : null),
             }}
           >
             <div style={{ color: "var(--fm-ink)", fontSize: "1.05rem", marginBottom: "0.75rem" }}>
@@ -6885,8 +7005,8 @@ export default function InventoryPage({ navigate, navState }) {
       />
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ display: "flex", flex: 1, gap: "2rem", overflow: "hidden", padding: "0.75rem 2rem 0" }}>
-        <div style={(activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
+        <div style={{ display: "flex", flex: 1, gap: isMobile ? 0 : "2rem", overflow: isMobile ? "auto" : "hidden", padding: isMobile ? "0.6rem 0.75rem 0" : "0.75rem 2rem 0" }}>
+        <div style={isMobile ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, paddingBottom: "4rem" } : (activeTab === "Overview" && !selectedItem) ? { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" } : (activeTab === "Overview" || activeTab === "Outline") ? { display: "flex", flex: "0 0 75%", flexDirection: "column", minWidth: 0, overflow: "hidden" } : { flex: "0 0 75%", minWidth: 0, overflowY: "auto", paddingBottom: "4rem", scrollbarGutter: "stable" }}>
 
         {activeTab === "Item List" ? (
           <ItemInventoryView

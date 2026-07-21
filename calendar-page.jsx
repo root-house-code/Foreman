@@ -370,6 +370,7 @@ export default function CalendarPage({ navigate }) {
   const [maintenanceDates, setMaintenanceDates]         = useState(() => storageGet("maintenance-dates") ?? {});
   const [maintenanceNextDates, setMaintenanceNextDates] = useState(() => storageGet("maintenance-next-dates") ?? {});
   const [view, setView]         = useState({ y: todayYear, m: todayMonth });
+  const [selectedDay, setSelectedDay] = useState(null); // day-of-month tapped in mobile month view
   const [createDate, setCreateDate]       = useState(null);
   const [selectedTaskKey, setSelectedTaskKey] = useState(null); // maintenance task awaiting start date
   const [sidebarTab, setSidebarTab] = useState("month");
@@ -675,12 +676,12 @@ export default function CalendarPage({ navigate }) {
           </div>
           <CategoryTabs special={["All"]} groups={[ ...(choreRooms.length > 0 ? [{ type: "room", label: "Rooms", tabs: choreRooms }] : []), ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []) ]} active={activeFilter} onSelect={setActiveFilter} />
         </div>
-        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-          <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", padding: "0 1.25rem 0.75rem" }}>
+        <div style={{ display: "flex", flex: 1, flexDirection: isMobile ? "column" : "row", overflow: isMobile ? "auto" : "hidden" }}>
+          <div style={{ display: "flex", flex: isMobile ? "0 0 auto" : 1, flexDirection: "column", overflow: isMobile ? "visible" : "hidden", padding: isMobile ? "0 0.6rem 0.5rem" : "0 1.25rem 0.75rem" }}>
             <div style={{ display: "grid", flexShrink: 0, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: "2px" }}>
               {CAL_DOWS.map(d => <div key={d} style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.65rem", letterSpacing: "0.06em", padding: "0.15rem 0.4rem", textAlign: "center" }}>{d}</div>)}
             </div>
-            <div style={{ display: "grid", flex: 1, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", gridTemplateRows: `repeat(${numRows}, 1fr)`, overflow: "hidden" }}>
+            <div style={{ display: "grid", flex: isMobile ? "0 0 auto" : 1, gap: "2px", gridTemplateColumns: "repeat(7, 1fr)", gridTemplateRows: isMobile ? `repeat(${numRows}, 46px)` : `repeat(${numRows}, 1fr)`, overflow: isMobile ? "visible" : "hidden" }}>
               {Array.from({ length: firstDow }, (_, i) => {
                 const day = prevMonthDays - firstDow + i + 1;
                 return <div key={`prev${i}`} style={{ border: "1px solid var(--fm-hairline)", borderRadius: "3px", opacity: 0.3, padding: "3px 4px 2px" }}><div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-serif)", fontSize: "0.75rem", textAlign: "center" }}>{day}</div></div>;
@@ -692,27 +693,41 @@ export default function CalendarPage({ navigate }) {
                 const visible = dayEvents.slice(0, MAX_CHIPS);
                 const overflow = dayEvents.length - visible.length;
                 const awaitingDate = !!selectedTaskKey;
+                const isSelected = isMobile && selectedDay === day;
                 return (
-                  <div key={day} onClick={() => handleCellClick(day)} style={{ background: isToday ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "3px", cursor: "pointer", overflow: "hidden", padding: "3px 4px 2px", transition: "background 0.1s" }} onMouseEnter={e => { if (!isToday) e.currentTarget.style.background = awaitingDate ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)"; }} onMouseLeave={e => { if (!isToday) e.currentTarget.style.background = "transparent"; }}>
+                  <div key={day} onClick={() => { handleCellClick(day); if (isMobile) setSelectedDay(day); }} style={{ background: isToday ? "var(--fm-brass-bg)" : "transparent", border: `1px solid ${isSelected ? "var(--fm-brass)" : isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "3px", cursor: "pointer", overflow: "hidden", padding: isMobile ? "4px 2px" : "3px 4px 2px", transition: "background 0.1s" }} onMouseEnter={e => { if (!isToday) e.currentTarget.style.background = awaitingDate ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)"; }} onMouseLeave={e => { if (!isToday) e.currentTarget.style.background = "transparent"; }}>
                     <div style={{ fontFamily: "var(--fm-serif)", fontSize: "0.75rem", marginBottom: "2px", textAlign: "center" }}>
                       {isToday ? <span style={{ alignItems: "center", background: "var(--fm-brass)", borderRadius: "50%", color: "var(--fm-bg)", display: "inline-flex", height: "18px", justifyContent: "center", width: "18px" }}>{day}</span> : <span style={{ color: "var(--fm-ink-dim)" }}>{day}</span>}
                     </div>
-                    {visible.map((evt, idx) => {
-                      if (evt.type === "renewal") {
-                        return <div key={idx} style={{ borderLeft: "3px solid var(--fm-brass)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-brass)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name}</span></div>;
-                      }
-                      if (evt.type === "warranty") {
-                        return <div key={idx} style={{ borderLeft: "3px solid var(--fm-amber)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-amber)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>⚠ {evt.item}</span></div>;
-                      }
-                      const isMaint = evt.type === "maintenance";
-                      const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
-                      const label = isMaint ? evt.row.item : evt.chore.title;
-                      const onClick = isMaint
-                        ? e => { e.stopPropagation(); setCompletionEvent({ row: evt.row, key: evt.key, date: new Date(view.y, view.m, day), isCompleted: evt.isCompleted }); }
-                        : e => { e.stopPropagation(); setDetailEvent({ chore: evt.chore, date: evt.date }); };
-                      return <div key={idx} onClick={onClick} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: "pointer", marginBottom: "1px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "1px 3px" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}><span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span></div>;
-                    })}
-                    {overflow > 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", padding: "0 3px" }}>+{overflow} more</div>}
+                    {isMobile ? (
+                      dayEvents.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px", justifyContent: "center" }}>
+                          {dayEvents.slice(0, 6).map((evt, idx) => {
+                            const dotColor = evt.type === "renewal" ? "var(--fm-brass)" : evt.type === "warranty" ? "var(--fm-amber)" : evt.type === "maintenance" ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
+                            return <span key={idx} style={{ background: dotColor, borderRadius: "50%", flexShrink: 0, height: "4px", opacity: evt.isCompleted ? 0.35 : 1, width: "4px" }} />;
+                          })}
+                        </div>
+                      )
+                    ) : (
+                      <>
+                        {visible.map((evt, idx) => {
+                          if (evt.type === "renewal") {
+                            return <div key={idx} style={{ borderLeft: "3px solid var(--fm-brass)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-brass)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>↻ {evt.service.name}</span></div>;
+                          }
+                          if (evt.type === "warranty") {
+                            return <div key={idx} style={{ borderLeft: "3px solid var(--fm-amber)", borderRadius: "0 2px 2px 0", marginBottom: "1px", overflow: "hidden", padding: "1px 3px" }}><span style={{ color: "var(--fm-amber)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>⚠ {evt.item}</span></div>;
+                          }
+                          const isMaint = evt.type === "maintenance";
+                          const color = isMaint ? "var(--fm-brass-dim)" : "var(--fm-cyan)";
+                          const label = isMaint ? evt.row.item : evt.chore.title;
+                          const onClick = isMaint
+                            ? e => { e.stopPropagation(); setCompletionEvent({ row: evt.row, key: evt.key, date: new Date(view.y, view.m, day), isCompleted: evt.isCompleted }); }
+                            : e => { e.stopPropagation(); setDetailEvent({ chore: evt.chore, date: evt.date }); };
+                          return <div key={idx} onClick={onClick} style={{ borderLeft: `3px solid ${color}`, borderRadius: "0 2px 2px 0", cursor: "pointer", marginBottom: "1px", opacity: evt.isCompleted ? 0.4 : 1, overflow: "hidden", padding: "1px 3px" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}><span style={{ color: "var(--fm-ink-dim)", display: "block", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", overflow: "hidden", textDecoration: evt.isCompleted ? "line-through" : "none", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span></div>;
+                        })}
+                        {overflow > 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.56rem", padding: "0 3px" }}>+{overflow} more</div>}
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -720,7 +735,7 @@ export default function CalendarPage({ navigate }) {
             </div>
           </div>
           {/* Right panel */}
-          <div style={{ borderLeft: "1px solid var(--fm-hairline)", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", width: "320px" }}>
+          <div style={{ borderLeft: isMobile ? "none" : "1px solid var(--fm-hairline)", borderTop: isMobile ? "1px solid var(--fm-hairline)" : "none", display: "flex", flexDirection: "column", flexShrink: 0, overflow: isMobile ? "visible" : "hidden", width: isMobile ? "100%" : "320px" }}>
             {selectedTaskKey && selectedTaskRow && (
               <div style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", flexShrink: 0, margin: "0.75rem", padding: "0.65rem 0.75rem" }}>
                 <div style={{ color: "var(--fm-brass-dim)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", marginBottom: "0.2rem", textTransform: "uppercase" }}>Set Start Date</div>
@@ -734,7 +749,7 @@ export default function CalendarPage({ navigate }) {
                 <button key={tab.id} onClick={() => setSidebarTab(tab.id)} style={{ background: "transparent", border: "none", borderBottom: sidebarTab === tab.id ? "2px solid var(--fm-brass)" : "2px solid transparent", color: sidebarTab === tab.id ? "var(--fm-brass)" : "var(--fm-ink-dim)", cursor: "pointer", flex: 1, fontFamily: "var(--fm-mono)", fontSize: "0.6rem", letterSpacing: "0.1em", padding: "0.6rem 0.5rem", textTransform: "uppercase", transition: "color 0.12s" }}>{tab.label}</button>
               ))}
             </div>
-            <div style={{ flex: 1, overflowY: "auto", padding: "0.75rem 1.25rem" }}>
+            <div style={{ flex: isMobile ? "0 0 auto" : 1, overflowY: isMobile ? "visible" : "auto", padding: isMobile ? "0.75rem 1rem calc(1.5rem + env(safe-area-inset-bottom))" : "0.75rem 1.25rem" }}>
               {sidebarTab === "month" && (
                 <>
                   {Object.keys(eventsByDay).length === 0 ? (
@@ -805,27 +820,28 @@ export default function CalendarPage({ navigate }) {
 
       {/* ── WEEK VIEW ──────────────────────────────────────────────────────── */}
       {calView === "Week" && <>
-        <div style={{ flexShrink: 0, padding: "2rem 2rem 0" }}>
+        <div style={{ flexShrink: 0, padding: isMobile ? "1rem 1rem 0" : "2rem 2rem 0" }}>
           <div style={{ alignItems: "center", display: "flex", marginBottom: "1.25rem", minHeight: "36px" }}>
             <button style={navBtnStyle(false)} onClick={() => setWeekStart(d => { const n = new Date(d); n.setDate(d.getDate() - 7); return n; })} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>‹</button>
-            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.05rem", letterSpacing: "0.02em", minWidth: "16rem", textAlign: "center" }}>
+            <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: isMobile ? "0.9rem" : "1.05rem", letterSpacing: "0.02em", minWidth: isMobile ? "auto" : "16rem", textAlign: "center" }}>
               {CAL_MONTHS_SHORT[weekStart.getMonth()]} {weekStart.getDate()} – {(() => { const e = new Date(weekStart); e.setDate(weekStart.getDate() + 6); return `${CAL_MONTHS_SHORT[e.getMonth()]} ${e.getDate()}, ${e.getFullYear()}`; })()}
             </span>
             <button style={navBtnStyle(false)} onClick={() => setWeekStart(d => { const n = new Date(d); n.setDate(d.getDate() + 7); return n; })} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>›</button>
           </div>
           <CategoryTabs special={["All"]} groups={[ ...(choreRooms.length > 0 ? [{ type: "room", label: "Rooms", tabs: choreRooms }] : []), ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []) ]} active={activeFilter} onSelect={setActiveFilter} />
         </div>
-        <div style={{ display: "flex", flex: 1, overflow: "hidden", padding: "0 1.25rem 0.75rem" }}>
-          <div style={{ display: "grid", flex: 1, gap: "4px", gridTemplateColumns: "repeat(7, 1fr)", overflow: "hidden" }}>
+        <div style={{ display: "flex", flex: 1, overflow: isMobile ? "auto" : "hidden", padding: isMobile ? "0 0.75rem 0.75rem" : "0 1.25rem 0.75rem" }}>
+          <div style={{ display: isMobile ? "flex" : "grid", flex: 1, flexDirection: isMobile ? "column" : undefined, gap: "4px", gridTemplateColumns: isMobile ? undefined : "repeat(7, 1fr)", overflow: isMobile ? "visible" : "hidden" }}>
             {weekEvents.map(({ date, events }) => {
               const isToday = date.getFullYear() === todayYear && date.getMonth() === todayMonth && date.getDate() === todayDay;
               return (
-                <div key={date.toISOString()} style={{ border: `1px solid ${isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "4px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                  <div style={{ background: isToday ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)", borderBottom: "1px solid var(--fm-hairline)", flexShrink: 0, padding: "0.35rem 0.5rem", textAlign: "center" }}>
+                <div key={date.toISOString()} style={{ border: `1px solid ${isToday ? "var(--fm-brass)" : "var(--fm-hairline)"}`, borderRadius: "4px", display: "flex", flexDirection: isMobile ? "row" : "column", overflow: "hidden" }}>
+                  <div style={{ alignItems: isMobile ? "center" : undefined, background: isToday ? "var(--fm-brass-bg)" : "var(--fm-bg-raised)", borderBottom: isMobile ? "none" : "1px solid var(--fm-hairline)", borderRight: isMobile ? "1px solid var(--fm-hairline)" : "none", display: isMobile ? "flex" : undefined, flexDirection: isMobile ? "column" : undefined, flexShrink: 0, justifyContent: isMobile ? "center" : undefined, padding: isMobile ? "0.5rem 0.75rem" : "0.35rem 0.5rem", textAlign: "center", width: isMobile ? "56px" : "auto" }}>
                     <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.58rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>{CAL_DOWS[date.getDay()]}</div>
                     <div style={{ color: isToday ? "var(--fm-brass)" : "var(--fm-ink-dim)", fontFamily: "var(--fm-serif)", fontSize: "1rem" }}>{date.getDate()}</div>
                   </div>
-                  <div style={{ flex: 1, overflowY: "auto", padding: "0.3rem" }}>
+                  <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+                  <div style={{ flex: 1, overflowY: isMobile ? "visible" : "auto", padding: isMobile ? "0.4rem 0.5rem" : "0.3rem" }}>
                     {events.length === 0 && <div style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.55rem", padding: "0.2rem 0.1rem" }}>—</div>}
                     {events.map((evt, idx) => {
                       if (evt.type === "renewal") {
@@ -858,6 +874,7 @@ export default function CalendarPage({ navigate }) {
                   <div style={{ borderTop: "1px solid var(--fm-hairline)", flexShrink: 0, padding: "0.25rem" }}>
                     <button onClick={() => setCreateDate(date)} style={{ background: "transparent", border: "none", color: "var(--fm-ink-mute)", cursor: "pointer", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", padding: "0.1rem 0.2rem", width: "100%" }} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-ink-mute)"}>+ chore</button>
                   </div>
+                  </div>
                 </div>
               );
             })}
@@ -867,7 +884,7 @@ export default function CalendarPage({ navigate }) {
 
       {/* ── AGENDA VIEW ────────────────────────────────────────────────────── */}
       {calView === "Agenda" && (
-        <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "1rem 0.9rem calc(1.5rem + env(safe-area-inset-bottom))" : "1.5rem 2rem" }}>
           <CategoryTabs special={["All"]} groups={[ ...(choreRooms.length > 0 ? [{ type: "room", label: "Rooms", tabs: choreRooms }] : []), ...(maintenanceCats.length > 0 ? [{ type: "maintenance", label: "Maintenance", tabs: maintenanceCats }] : []) ]} active={activeFilter} onSelect={setActiveFilter} />
           <div style={{ marginTop: "1.25rem" }}>
             {agendaEvents.length === 0 ? (
@@ -885,7 +902,7 @@ export default function CalendarPage({ navigate }) {
                     {events.map((evt, idx) => {
                       if (evt.type === "renewal") {
                         return (
-                          <div key={idx} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", padding: "0.35rem 0.3rem" }}>
+                          <div key={idx} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.6rem", marginLeft: isMobile ? "1.4rem" : "2.6rem", padding: "0.35rem 0.3rem" }}>
                             <span style={{ background: "var(--fm-brass-bg)", border: "1px solid var(--fm-brass)", borderRadius: "var(--fm-radius)", color: "var(--fm-brass)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>SVC</span>
                             <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem" }}>↻ {evt.service.name} renewal</span>
                             <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{evt.service.providerName || ""}</span>
@@ -894,7 +911,7 @@ export default function CalendarPage({ navigate }) {
                       }
                       if (evt.type === "warranty") {
                         return (
-                          <div key={idx} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", padding: "0.35rem 0.3rem" }}>
+                          <div key={idx} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", display: "flex", gap: "0.6rem", marginLeft: isMobile ? "1.4rem" : "2.6rem", padding: "0.35rem 0.3rem" }}>
                             <span style={{ background: "var(--fm-amber-bg, rgba(224,178,102,0.12))", border: "1px solid var(--fm-amber)", borderRadius: "var(--fm-radius)", color: "var(--fm-amber)", flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>WTY</span>
                             <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem" }}>⚠ {evt.item} warranty ends</span>
                             <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{evt.category}</span>
@@ -910,7 +927,7 @@ export default function CalendarPage({ navigate }) {
                         ? () => setCompletionEvent({ row: evt.row, key: evt.key, date, isCompleted: evt.isCompleted })
                         : () => setDetailEvent({ chore: evt.chore, date });
                       return (
-                        <div key={idx} onClick={agendaClick} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", display: "flex", gap: "0.6rem", marginLeft: "2.6rem", opacity: evt.isCompleted ? 0.45 : 1, padding: "0.35rem 0.3rem" }} onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <div key={idx} onClick={agendaClick} style={{ alignItems: "center", borderBottom: "1px solid var(--fm-hairline)", cursor: "pointer", display: "flex", gap: "0.6rem", marginLeft: isMobile ? "1.4rem" : "2.6rem", opacity: evt.isCompleted ? 0.45 : 1, padding: "0.35rem 0.3rem" }} onMouseEnter={e => e.currentTarget.style.background = "var(--fm-bg-raised)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                           <span style={{ background: "var(--fm-bg-sunk)", border: "1px solid var(--fm-hairline2)", borderRadius: "var(--fm-radius)", color: tagColor, flexShrink: 0, fontFamily: "var(--fm-mono)", fontSize: "0.52rem", letterSpacing: "0.05em", padding: "0.1rem 0.3rem" }}>{tag}</span>
                           <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-sans)", fontSize: "0.8rem", textDecoration: evt.isCompleted ? "line-through" : "none" }}>{label}</span>
                           <span style={{ color: "var(--fm-ink-mute)", fontFamily: "var(--fm-mono)", fontSize: "0.6rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{sub}</span>
@@ -927,13 +944,13 @@ export default function CalendarPage({ navigate }) {
 
       {/* ── YEAR VIEW ──────────────────────────────────────────────────────── */}
       {calView === "Year" && (
-        <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem 2rem" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "1rem 0.9rem calc(1.5rem + env(safe-area-inset-bottom))" : "1.5rem 2rem" }}>
           <div style={{ alignItems: "center", display: "flex", marginBottom: "1.5rem" }}>
             <button style={navBtnStyle(view.y <= CURRENT_YEAR)} onClick={() => setView(v => ({ ...v, y: v.y - 1 }))} onMouseEnter={e => { if (view.y > CURRENT_YEAR) e.currentTarget.style.color = "var(--fm-brass)"; }} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>‹</button>
             <span style={{ color: "var(--fm-ink)", fontFamily: "var(--fm-serif)", fontSize: "1.15rem", minWidth: "5rem", textAlign: "center" }}>{view.y}</span>
             <button style={navBtnStyle(false)} onClick={() => setView(v => ({ ...v, y: v.y + 1 }))} onMouseEnter={e => e.currentTarget.style.color = "var(--fm-brass)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fm-brass-dim)"}>›</button>
           </div>
-          <div style={{ display: "grid", gap: "1.5rem", gridTemplateColumns: "repeat(4, 1fr)" }}>
+          <div style={{ display: "grid", gap: isMobile ? "0.75rem" : "1.5rem", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)" }}>
             {Array.from({ length: 12 }, (_, m) => {
               const dim = new Date(view.y, m + 1, 0).getDate();
               const fdow = new Date(view.y, m, 1).getDay();
